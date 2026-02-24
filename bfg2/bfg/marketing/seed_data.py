@@ -290,27 +290,23 @@ def create_referral_programs(workspace, stdout=None, style=None):
 def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **context):
     """Create sample campaign displays: 3 slides, 8 category_entry, 3 featured (pickup).
 
-    Images are read from {MEDIA_ROOT}/seed_images/store/ (same layout as shop seed_media):
+    Images reference {MEDIA_ROOT}/seed_images/store/ directly (no copy to promo/display/):
     - Slides: slides/sample-1.webp, sample-2.webp, sample-3.webp
     - Category entry: categories/3-cp_categorylist.jpg … categories/14-cp_categorylist.jpg
     - Featured: featured/cms-banner1.webp, cms-banner2.webp, cms-banner3.webp
-
-    Uses context['categories'] (from shop seed_data) when available so CampaignDisplay.rules
-    get category_id; otherwise queries ProductCategory (requires shop to be seeded first).
+    CampaignDisplay.image stores path 'seed_images/store/{relative_path}'.
     """
     import os
     from django.conf import settings
-    from django.core.files import File
 
     seed_store = os.path.join(settings.MEDIA_ROOT, 'seed_images', 'store')
 
-    def set_display_image(disp, relative_path, default_name='image'):
-        """Set display.image from seed_images/store/{relative_path} if file exists."""
+    def set_display_image_path(disp, relative_path):
+        """Set display.image to seed_images/store path if file exists (no copy)."""
         src = os.path.join(seed_store, relative_path)
         if os.path.isfile(src):
-            name = os.path.basename(relative_path)
-            with open(src, 'rb') as f:
-                disp.image.save(name, File(f), save=True)
+            disp.image = os.path.join('seed_images', 'store', relative_path)
+            disp.save()
 
     # Prefer categories from context (set by shop seed_data); fallback to ProductCategory query
     categories = list(context.get('categories', []))[:8] if context.get('categories') else []
@@ -350,7 +346,7 @@ def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **co
             is_active=True,
         )
         if i < len(slide_images):
-            set_display_image(disp, slide_images[i])
+            set_display_image_path(disp, slide_images[i])
         displays.append(disp)
         if stdout:
             stdout.write(style.SUCCESS(f'✓ Created display: slide "{data["title"]}"'))
@@ -380,7 +376,7 @@ def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **co
             is_active=True,
         )
         if i < len(category_img_rel):
-            set_display_image(disp, category_img_rel[i])
+            set_display_image_path(disp, category_img_rel[i])
         displays.append(disp)
         if stdout:
             stdout.write(style.SUCCESS(f'✓ Created display: category_entry "{disp.title}"'))
@@ -407,7 +403,7 @@ def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **co
             is_active=True,
         )
         if i < len(featured_img_rel):
-            set_display_image(disp, featured_img_rel[i])
+            set_display_image_path(disp, featured_img_rel[i])
         displays.append(disp)
         if stdout:
             stdout.write(style.SUCCESS(f'✓ Created display: featured "{disp.title}"'))

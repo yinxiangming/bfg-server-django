@@ -726,41 +726,28 @@ def create_orders(workspace, customer_users, customers, addresses, store, produc
 
 
 def create_product_media(workspace, products, stdout=None, style=None):
-    """Create product media from seed_images directory.
+    """Create product media linking to seed_images (no file copy).
 
-    Image source (read): {MEDIA_ROOT}/seed_images/store/{image_path}
-    - image_path comes from product._image_paths (e.g. 'nike-men-s-air-force-1.jpg' or
-      'categories/3-cp_categorylist.jpg'). Files live under seed_images/store/ (flat for
-      products; categories in seed_images/store/categories/).
-    - Run `manage.py seed_data --copy-images` to copy bfg2/seed_media into media/seed_images
-      so these paths resolve. Set BFG_SEED_MEDIA_ROOT if bfg is installed outside the repo.
-
-    Image save (write): files are copied to {MEDIA_ROOT}/{workspace_id}/products/{filename},
-    and Media records store the relative path '{workspace_id}/products/{filename}' (same as
-    normal uploads). MediaLink links each Media to the Product.
+    Image path: {MEDIA_ROOT}/seed_images/store/{image_path}
+    - image_path from product._image_paths (e.g. 'nike-men-s-air-force-1.jpg', 'categories/3-cp_categorylist.jpg').
+    - Media.file stores relative path 'seed_images/store/{image_path}' so files are served from seed_images.
+    - Run `manage.py seed_data --copy-images` so seed_images exists. No copy to workspace/products/.
     """
     import os
-    import shutil
     from django.conf import settings
     from django.contrib.auth import get_user_model
     User = get_user_model()
     
-    # Get admin user for uploaded_by
     admin_user = User.objects.filter(is_superuser=True).first()
-    
-    # Base path for seed images
     seed_images_base = os.path.join(settings.MEDIA_ROOT, 'seed_images', 'store')
     
     for product in products:
-        # Get image paths from product (set in create_products)
         image_paths = getattr(product, '_image_paths', [])
-        
         if not image_paths:
             if stdout:
                 stdout.write(style.WARNING(f'⚠️  No image paths for product: {product.name}'))
             continue
         
-        # Delete existing media links for this product to avoid duplicates
         product_content_type = ContentType.objects.get_for_model(Product)
         MediaLink.objects.filter(
             content_type=product_content_type,
@@ -768,34 +755,15 @@ def create_product_media(workspace, products, stdout=None, style=None):
         ).delete()
         
         for position, image_path in enumerate(image_paths, start=1):
-            # Full path to image file
             full_image_path = os.path.join(seed_images_base, image_path)
-            
-            # Check if file exists
             if not os.path.exists(full_image_path):
                 if stdout:
                     stdout.write(style.WARNING(f'⚠️  Image not found: {full_image_path}, skipping'))
                 continue
             
-            # Copy file to media directory for workspace
-            # Use media_upload_to logic: media/{workspace_id}/products/{filename}
-            filename = os.path.basename(image_path)
-            workspace_media_dir = os.path.join(settings.MEDIA_ROOT, str(workspace.id), 'products')
-            os.makedirs(workspace_media_dir, exist_ok=True)
+            # Store path under seed_images/store/ (no copy)
+            relative_path = os.path.join('seed_images', 'store', image_path)
             
-            # Destination file path
-            dest_file_path = os.path.join(workspace_media_dir, filename)
-            
-            # Copy file if it doesn't exist or is different
-            if not os.path.exists(dest_file_path) or os.path.getsize(dest_file_path) != os.path.getsize(full_image_path):
-                shutil.copy2(full_image_path, dest_file_path)
-            
-            # Relative path for FileField (relative to MEDIA_ROOT)
-            # FileField automatically prepends MEDIA_ROOT, so we use: {workspace_id}/products/{filename}
-            relative_path = os.path.join(str(workspace.id), 'products', filename)
-            
-            # Create Media object with file field
-            # Use file path as unique identifier to avoid conflicts
             media_obj, media_created = Media.objects.get_or_create(
                 workspace=workspace,
                 file=relative_path,
@@ -803,28 +771,22 @@ def create_product_media(workspace, products, stdout=None, style=None):
                     'media_type': 'image',
                     'alt_text': f'{product.name} - Image {position}',
                     'uploaded_by': admin_user,
-                    'external_url': '',  # Clear external_url to use file field
+                    'external_url': '',
                 }
             )
-            
-            # Update alt_text and clear external_url if media already existed
             if not media_created:
                 if media_obj.alt_text != f'{product.name} - Image {position}':
                     media_obj.alt_text = f'{product.name} - Image {position}'
-                # Clear external_url to ensure file field is used
                 if media_obj.external_url:
                     media_obj.external_url = ''
                 media_obj.save()
             
-            # Create MediaLink referencing the Media object
-            # unique_together is (content_type, object_id, media), so check if this media is already linked
             try:
                 product_media = MediaLink.objects.get(
                     content_type=product_content_type,
                     object_id=product.id,
                     media=media_obj
                 )
-                # Update position if it changed
                 if product_media.position != position:
                     product_media.position = position
                     product_media.description = 'Product image' if position == 1 else ''
@@ -832,8 +794,7 @@ def create_product_media(workspace, products, stdout=None, style=None):
                     if stdout:
                         stdout.write(style.SUCCESS(f'↻ Updated product media for: {product.name} (position {position})'))
             except MediaLink.DoesNotExist:
-                # Create new MediaLink
-                product_media = MediaLink.objects.create(
+                MediaLink.objects.create(
                     content_type=product_content_type,
                     object_id=product.id,
                     media=media_obj,

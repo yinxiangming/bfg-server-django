@@ -290,11 +290,10 @@ def create_referral_programs(workspace, stdout=None, style=None):
 def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **context):
     """Create sample campaign displays: 3 slides, 8 category_entry, 3 featured (pickup).
 
-    Images are taken from {MEDIA_ROOT}/seed_images/store/modules/ and copied into
-    promo/display/ (CampaignDisplay.image). Paths used:
-    - Slides: cp_imageslider/views/images/sample-1.webp, sample-2.webp, sample-3.webp
-    - Category entry: cp_categorylist/views/img/3,6,9,10,11,12,13,14-cp_categorylist.jpg
-    - Featured: cp_cmsbanner1/views/img/cms-banner1.webp, cms-banner2.webp, cms-banner3.webp
+    Images are read from {MEDIA_ROOT}/seed_images/store/ (same layout as shop seed_media):
+    - Slides: slides/sample-1.webp, sample-2.webp, sample-3.webp
+    - Category entry: categories/3-cp_categorylist.jpg … categories/14-cp_categorylist.jpg
+    - Featured: featured/cms-banner1.webp, cms-banner2.webp, cms-banner3.webp
 
     Uses context['categories'] (from shop seed_data) when available so CampaignDisplay.rules
     get category_id; otherwise queries ProductCategory (requires shop to be seeded first).
@@ -303,11 +302,11 @@ def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **co
     from django.conf import settings
     from django.core.files import File
 
-    seed_modules = os.path.join(settings.MEDIA_ROOT, 'seed_images', 'store', 'modules')
+    seed_store = os.path.join(settings.MEDIA_ROOT, 'seed_images', 'store')
 
     def set_display_image(disp, relative_path, default_name='image'):
-        """Set display.image from seed_images/store/modules/{relative_path} if file exists."""
-        src = os.path.join(seed_modules, relative_path)
+        """Set display.image from seed_images/store/{relative_path} if file exists."""
+        src = os.path.join(seed_store, relative_path)
         if os.path.isfile(src):
             name = os.path.basename(relative_path)
             with open(src, 'rb') as f:
@@ -328,11 +327,11 @@ def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **co
     campaign = campaigns[0] if campaigns else None
     displays = []
 
-    # 3 slides – images from cp_imageslider
+    # 3 slides – images from store/slides/
     slide_images = [
-        'cp_imageslider/views/images/sample-1.webp',
-        'cp_imageslider/views/images/sample-2.webp',
-        'cp_imageslider/views/images/sample-3.webp',
+        'slides/sample-1.webp',
+        'slides/sample-2.webp',
+        'slides/sample-3.webp',
     ]
     slides_data = [
         {'order': 10, 'title': 'Welcome Sale', 'subtitle': 'Up to 30% off selected items', 'link_url': '/products'},
@@ -356,16 +355,16 @@ def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **co
         if stdout:
             stdout.write(style.SUCCESS(f'✓ Created display: slide "{data["title"]}"'))
 
-    # 8 category_entry – images from cp_categorylist (3,6,9,10,11,12,13,14)
+    # 8 category_entry – images from store/categories/
     category_img_rel = [
-        'cp_categorylist/views/img/3-cp_categorylist.jpg',
-        'cp_categorylist/views/img/6-cp_categorylist.jpg',
-        'cp_categorylist/views/img/9-cp_categorylist.jpg',
-        'cp_categorylist/views/img/10-cp_categorylist.jpg',
-        'cp_categorylist/views/img/11-cp_categorylist.jpg',
-        'cp_categorylist/views/img/12-cp_categorylist.jpg',
-        'cp_categorylist/views/img/13-cp_categorylist.jpg',
-        'cp_categorylist/views/img/14-cp_categorylist.jpg',
+        'categories/3-cp_categorylist.jpg',
+        'categories/6-cp_categorylist.jpg',
+        'categories/9-cp_categorylist.jpg',
+        'categories/10-cp_categorylist.jpg',
+        'categories/11-cp_categorylist.jpg',
+        'categories/12-cp_categorylist.jpg',
+        'categories/13-cp_categorylist.jpg',
+        'categories/14-cp_categorylist.jpg',
     ]
     for i in range(8):
         cat = categories[i] if i < len(categories) else None
@@ -386,11 +385,11 @@ def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **co
         if stdout:
             stdout.write(style.SUCCESS(f'✓ Created display: category_entry "{disp.title}"'))
 
-    # 3 featured (pickup) – images from cp_cmsbanner1
+    # 3 featured (pickup) – images from store/featured/
     featured_img_rel = [
-        'cp_cmsbanner1/views/img/cms-banner1.webp',
-        'cp_cmsbanner1/views/img/cms-banner2.webp',
-        'cp_cmsbanner1/views/img/cms-banner3.webp',
+        'featured/cms-banner1.webp',
+        'featured/cms-banner2.webp',
+        'featured/cms-banner3.webp',
     ]
     featured_cats = categories[5:8] if len(categories) >= 6 else (categories[:3] if categories else [None, None, None])
     for i in range(3):

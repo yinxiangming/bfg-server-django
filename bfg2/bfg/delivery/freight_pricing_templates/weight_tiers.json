@@ -1,0 +1,31 @@
+{
+  "id": "weight_tiers",
+  "label": "Weight tiers",
+  "label_zh": "重量阶梯价",
+  "description": "Price by weight bands: 0–5 kg = 10, 5–10 kg = 18, 10–20 kg = 25. Each tier has an upper limit (kg) and a fixed price for that band.",
+  "description_zh": "按重量区间定价：0–5kg=10元，5–10kg=18元，10–20kg=25元。每档填写上限重量(kg)和该档价格。",
+  "mode": "tier",
+  "form_schema": [
+    {
+      "field": "tiers",
+      "label": "Weight tiers",
+      "label_zh": "重量阶梯",
+      "type": "array",
+      "required": true,
+      "defaultValue": [{"max_kg": 5, "price": 10}, {"max_kg": 10, "price": 18}, {"max_kg": 20, "price": 25}],
+      "itemSchema": {"max_kg": "number", "price": "number"},
+      "helperText": "Each row: upper weight limit (kg) and price for that band. Sorted by max_kg ascending.",
+      "example": "e.g. 5kg→10, 10kg→18, 20kg→25"
+    },
+    {
+      "field": "currency",
+      "label": "Currency (optional)",
+      "label_zh": "货币（可选）",
+      "type": "string",
+      "required": false,
+      "defaultValue": "",
+      "helperText": "Currency code.",
+      "example": "NZD"
+    }
+  ]
+}

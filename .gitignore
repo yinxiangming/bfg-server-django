@@ -1,0 +1,13 @@
+*.log
+*.pot
+*.pyc
+.idea/
+*.DS_Store
+db/
+venv/
+.venv/
+.env*
+media/
+celerybeat-schedule*
+__pycache__/
+.pytest_cache/

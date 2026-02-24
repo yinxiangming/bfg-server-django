@@ -1,0 +1,50 @@
+{
+  "id": "free_over_weight",
+  "label": "Free over weight",
+  "label_zh": "满重免邮",
+  "description": "Free shipping when total weight ≥ X kg; otherwise charge by a fallback rule (e.g. flat rate or base + per kg).",
+  "description_zh": "重量≥X kg 免运费，否则按指定规则收费。",
+  "mode": "conditional",
+  "form_schema": [
+    {
+      "field": "threshold_kg",
+      "label": "Minimum weight (kg) for free shipping",
+      "label_zh": "免邮门槛重量(kg)",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Total weight must be >= this to get free shipping.",
+      "example": "10"
+    },
+    {
+      "field": "fallback_base",
+      "label": "Otherwise: base fee",
+      "label_zh": "否则：基础费",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Base fee when weight is below threshold.",
+      "example": "5"
+    },
+    {
+      "field": "fallback_per_kg",
+      "label": "Otherwise: price per kg",
+      "label_zh": "否则：每公斤单价",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Per-kg charge when below threshold.",
+      "example": "2"
+    },
+    {
+      "field": "currency",
+      "label": "Currency (optional)",
+      "label_zh": "货币（可选）",
+      "type": "string",
+      "required": false,
+      "defaultValue": "",
+      "helperText": "Currency code.",
+      "example": "NZD"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "id": "first_cbm_then_per_cbm",
+  "label": "First CBM + additional CBM",
+  "label_zh": "首立方 + 续立方（大货）",
+  "description": "Charge by volume (CBM): first X m³ at a fixed price, then Y per m³. If weight exceeds max weight, chargeable volume = max(actual CBM, actual weight / volumetric factor). Used for sea/large freight.",
+  "description_zh": "按体积(CBM)计费：首 X 立方一口价，超出按 Y 元/立方。若实际重量超过设定最大重量，则计费体积 = max(实际体积, 实重/体积重系数)。适用于海运/大件。",
+  "mode": "linear",
+  "form_schema": [
+    {
+      "field": "first_cbm",
+      "label": "First volume (m³)",
+      "label_zh": "首立方(m³)",
+      "type": "number",
+      "required": true,
+      "defaultValue": 1,
+      "helperText": "First CBM included in the first-tier price.",
+      "example": "1"
+    },
+    {
+      "field": "first_cbm_price",
+      "label": "First CBM price",
+      "label_zh": "首立方价",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Fixed price for the first CBM.",
+      "example": "50"
+    },
+    {
+      "field": "additional_cbm_price",
+      "label": "Additional price per m³",
+      "label_zh": "续立方单价",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Price per additional cubic metre.",
+      "example": "25"
+    },
+    {
+      "field": "max_weight_kg",
+      "label": "Max weight (kg) before volume-weight rule",
+      "label_zh": "最大重量(kg)，超过则按体积重计",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Above this weight, chargeable volume = max(actual CBM, weight / volumetric factor).",
+      "example": "500"
+    },
+    {
+      "field": "volumetric_factor",
+      "label": "Volumetric factor (optional)",
+      "label_zh": "体积重系数（可选）",
+      "type": "number",
+      "required": false,
+      "defaultValue": 5000,
+      "helperText": "Divisor for volume weight: weight_kg / factor = volume equivalent (e.g. 5000).",
+      "example": "5000"
+    },
+    {
+      "field": "currency",
+      "label": "Currency (optional)",
+      "label_zh": "货币（可选）",
+      "type": "string",
+      "required": false,
+      "defaultValue": "",
+      "helperText": "Currency code.",
+      "example": "NZD"
+    }
+  ]
+}

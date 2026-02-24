@@ -1,0 +1,60 @@
+{
+  "id": "first_kg_then_per_kg",
+  "label": "First weight + additional",
+  "label_zh": "首重 + 续重",
+  "description": "First X kg at a fixed price, then Y per kg for the rest. Example: First 5 kg = 20, then 1/kg → 3 kg = 20, 6 kg = 21.",
+  "description_zh": "首 X kg 一口价，超出部分按续重单价计。示例：首 5kg=20 元、续 1 元/kg → 3kg=20 元、6kg=21 元。",
+  "mode": "step",
+  "form_schema": [
+    {
+      "field": "first_weight",
+      "label": "First weight (kg)",
+      "label_zh": "首重(kg)",
+      "type": "number",
+      "required": true,
+      "defaultValue": 1,
+      "helperText": "Weight included in the first-tier price.",
+      "example": "5"
+    },
+    {
+      "field": "first_price",
+      "label": "First-tier price",
+      "label_zh": "首重价",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Fixed price for the first weight.",
+      "example": "20"
+    },
+    {
+      "field": "additional_weight",
+      "label": "Additional unit (kg)",
+      "label_zh": "续重单位(kg)",
+      "type": "number",
+      "required": true,
+      "defaultValue": 1,
+      "helperText": "Weight unit for additional charge (e.g. 1 = per kg).",
+      "example": "1"
+    },
+    {
+      "field": "additional_price",
+      "label": "Additional unit price",
+      "label_zh": "续重单价",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Price per additional unit.",
+      "example": "1"
+    },
+    {
+      "field": "currency",
+      "label": "Currency (optional)",
+      "label_zh": "货币（可选）",
+      "type": "string",
+      "required": false,
+      "defaultValue": "",
+      "helperText": "Currency code.",
+      "example": "NZD"
+    }
+  ]
+}

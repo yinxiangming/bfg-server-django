@@ -1,0 +1,30 @@
+{
+  "id": "flat_rate",
+  "label": "Flat rate",
+  "label_zh": "一口价",
+  "description": "Fixed shipping fee regardless of weight. Example: Always charge 15 → every order pays 15.",
+  "description_zh": "固定运费，与重量无关。示例：统一收费 15 元 → 每单均为 15 元。",
+  "mode": "linear",
+  "form_schema": [
+    {
+      "field": "amount",
+      "label": "Shipping amount",
+      "label_zh": "运费金额",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Fixed amount charged for shipping.",
+      "example": "15"
+    },
+    {
+      "field": "currency",
+      "label": "Currency (optional)",
+      "label_zh": "货币（可选）",
+      "type": "string",
+      "required": false,
+      "defaultValue": "",
+      "helperText": "Currency code for display, e.g. NZD, USD.",
+      "example": "NZD"
+    }
+  ]
+}

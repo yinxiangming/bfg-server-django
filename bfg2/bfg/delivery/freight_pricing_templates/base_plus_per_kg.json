@@ -1,0 +1,40 @@
+{
+  "id": "base_plus_per_kg",
+  "label": "Base + per kg",
+  "label_zh": "基础费 + 按公斤",
+  "description": "Shipping = base fee + (total weight × price per kg). Example: Base 10, 2 per kg → 3 kg = 16.",
+  "description_zh": "运费 = 基础费 + 整单重量×每公斤单价。示例：基础费 10 元、2 元/kg → 3kg = 16 元。",
+  "mode": "linear",
+  "form_schema": [
+    {
+      "field": "base",
+      "label": "Base fee",
+      "label_zh": "基础费",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Fixed base amount.",
+      "example": "10"
+    },
+    {
+      "field": "per_kg",
+      "label": "Price per kg",
+      "label_zh": "每公斤单价",
+      "type": "number",
+      "required": true,
+      "defaultValue": 0,
+      "helperText": "Charge per kilogram for total weight.",
+      "example": "2"
+    },
+    {
+      "field": "currency",
+      "label": "Currency (optional)",
+      "label_zh": "货币（可选）",
+      "type": "string",
+      "required": false,
+      "defaultValue": "",
+      "helperText": "Currency code, e.g. NZD.",
+      "example": "NZD"
+    }
+  ]
+}

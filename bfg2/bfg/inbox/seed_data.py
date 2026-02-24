@@ -141,7 +141,7 @@ def create_messages(workspace, admin_user, customers, stdout=None, style=None):
         },
         {
             'subject': 'Welcome to BFG',
-            'message': 'Thank you for joining PackGo. We are excited to have you!',
+            'message': 'Thank you for joining BFG. We are excited to have you!',
             'message_type': 'announcement',
         },
     ]
@@ -212,7 +212,7 @@ def create_sms_messages(workspace, customers, stdout=None, style=None):
     
     sms_messages = []
     sms_data = [
-        {'message': 'Your order has been shipped. Track: https://packgo.com/track/TRK001'},
+        {'message': 'Your order has been shipped. Track: https://xmart.com/track/TRK001'},
         {'message': 'Payment of $109.99 received. Thank you!'},
         {'message': 'Your support ticket has been updated. Check your account.'},
     ]

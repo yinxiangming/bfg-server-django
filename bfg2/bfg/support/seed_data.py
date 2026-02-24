@@ -412,13 +412,13 @@ def create_user_feedback(workspace, customers, feedback_categories, stdout=None,
             'feedback_type': 'bug',
             'title': 'Login button not working',
             'message': 'The login button on the homepage does not respond when clicked.',
-            'page_url': 'https://demo.packgo.com/login',
+            'page_url': 'https://demo.xmart.com/login',
         },
         {
             'feedback_type': 'suggestion',
             'title': 'Add dark mode',
             'message': 'It would be great to have a dark mode option for the website.',
-            'page_url': 'https://demo.packgo.com/settings',
+            'page_url': 'https://demo.xmart.com/settings',
         },
     ]
     
@@ -572,7 +572,7 @@ def create_knowledge_articles(workspace, categories, stdout=None, style=None):
         {
             'title': 'How to Create an Account',
             'slug': 'how-to-create-account',
-            'content': '<h2>Creating Your Account</h2><p>Follow these simple steps to create your PackGo account:</p><ol><li>Visit the registration page</li><li>Fill in your details</li><li>Verify your email</li><li>Start shipping!</li></ol>',
+            'content': '<h2>Creating Your Account</h2><p>Follow these simple steps to create your XMart account:</p><ol><li>Visit the registration page</li><li>Fill in your details</li><li>Verify your email</li><li>Start shipping!</li></ol>',
             'keywords': 'account, registration, signup',
             'category_slug': 'getting-started',
         },
@@ -639,31 +639,31 @@ def create_ticket_templates(workspace, categories, stdout=None, style=None):
         {
             'name': 'Welcome Response',
             'subject': 'Thank you for contacting us',
-            'content': 'Dear Customer,\n\nThank you for reaching out to PackGo support. We have received your inquiry and will respond within 24 hours.\n\nBest regards,\nPackGo Support Team',
+            'content': 'Dear Customer,\n\nThank you for reaching out to XMart support. We have received your inquiry and will respond within 24 hours.\n\nBest regards,\nXMart Support Team',
             'category_name': None,
         },
         {
             'name': 'Shipping Delay',
             'subject': 'Regarding your shipment delay',
-            'content': 'Dear Customer,\n\nWe apologize for the delay in your shipment. We are working to resolve this issue and will keep you updated.\n\nThank you for your patience.\n\nBest regards,\nPackGo Support Team',
+            'content': 'Dear Customer,\n\nWe apologize for the delay in your shipment. We are working to resolve this issue and will keep you updated.\n\nThank you for your patience.\n\nBest regards,\nXMart Support Team',
             'category_name': 'Shipping',
         },
         {
             'name': 'Refund Request',
             'subject': 'Your refund request',
-            'content': 'Dear Customer,\n\nWe have received your refund request. Our team will review it and process within 5-7 business days.\n\nBest regards,\nPackGo Support Team',
+            'content': 'Dear Customer,\n\nWe have received your refund request. Our team will review it and process within 5-7 business days.\n\nBest regards,\nXMart Support Team',
             'category_name': 'Billing',
         },
         {
             'name': 'Account Issue Resolution',
             'subject': 'Your account issue has been resolved',
-            'content': 'Dear Customer,\n\nWe are pleased to inform you that your account issue has been resolved. You should now be able to access all features.\n\nIf you continue to experience any problems, please let us know.\n\nBest regards,\nPackGo Support Team',
+            'content': 'Dear Customer,\n\nWe are pleased to inform you that your account issue has been resolved. You should now be able to access all features.\n\nIf you continue to experience any problems, please let us know.\n\nBest regards,\nXMart Support Team',
             'category_name': 'Account',
         },
         {
             'name': 'Technical Support Follow-up',
             'subject': 'Following up on your technical issue',
-            'content': 'Dear Customer,\n\nWe wanted to follow up on the technical issue you reported. Have you had a chance to try the solution we suggested?\n\nPlease let us know if you need any further assistance.\n\nBest regards,\nPackGo Technical Support',
+            'content': 'Dear Customer,\n\nWe wanted to follow up on the technical issue you reported. Have you had a chance to try the solution we suggested?\n\nPlease let us know if you need any further assistance.\n\nBest regards,\nXMart Technical Support',
             'category_name': 'Technical Support',
         },
     ]

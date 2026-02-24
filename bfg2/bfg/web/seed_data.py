@@ -117,7 +117,7 @@ def create_themes(workspace, stdout=None, style=None):
         {
             'name': 'Default Theme',
             'code': 'default',
-            'description': 'Default theme for PackGo',
+            'description': 'Default theme for XMart',
             'template_path': 'themes/default',
             'primary_color': '#007bff',
             'secondary_color': '#6c757d',
@@ -195,22 +195,30 @@ def create_languages(workspace, stdout=None, style=None):
 
 
 def create_site(workspace, theme=None, stdout=None, style=None):
-    """Create site"""
-    site, created = Site.objects.get_or_create(
+    """Create or update default site. Default site name: XMart."""
+    site = Site.objects.filter(workspace=workspace, is_default=True).first()
+    if site:
+        if site.name != 'XMart' or site.site_title != 'XMart' or site.site_description != 'XMart demo website':
+            site.name = 'XMart'
+            site.site_title = 'XMart'
+            site.site_description = 'XMart demo website'
+            site.save(update_fields=['name', 'site_title', 'site_description'])
+            if stdout:
+                stdout.write(style.SUCCESS(f'✓ Updated site: {site.name}'))
+        return site
+    site = Site.objects.create(
         workspace=workspace,
-        domain='demo.packgo.com',
-        defaults={
-            'name': 'PackGo Demo Site',
-            'theme': theme,
-            'is_default': True,
-            'is_active': True,
-            'default_language': 'en',
-            'languages': ['en'],
-            'site_title': 'PackGo Demo',
-            'site_description': 'PackGo Demo Website',
-        }
+        domain='demo.xmart.com',
+        name='XMart',
+        theme=theme,
+        is_default=True,
+        is_active=True,
+        default_language='en',
+        languages=['en'],
+        site_title='XMart',
+        site_description='XMart demo website',
     )
-    if created and stdout:
+    if stdout:
         stdout.write(style.SUCCESS(f'✓ Created site: {site.name}'))
     return site
 
@@ -308,7 +316,7 @@ def create_pages(workspace, admin_user, stdout=None, style=None):
 
     pages_data = [
         {'title': 'Home', 'slug': 'home', 'content': '', 'status': 'published', 'blocks': _home_page_blocks()},
-        {'title': 'About', 'slug': 'about', 'content': '<h1>About Us</h1><p>Learn more about PackGo.</p>', 'status': 'published'},
+        {'title': 'About', 'slug': 'about', 'content': '<h1>About Us</h1><p>Learn more about XMart.</p>', 'status': 'published'},
         {'title': 'Contact', 'slug': 'contact', 'content': '<h1>Contact Us</h1><p>Get in touch with us.</p>', 'status': 'published'},
         # Footer pages (linked from footer menu)
         {
@@ -691,17 +699,17 @@ def create_posts(workspace, admin_user, categories, tags, stdout=None, style=Non
     
     posts_data = [
         {
-            'title': 'Welcome to BFG Blog',
-            'slug': 'welcome-to-packgo-blog',
-            'excerpt': 'Learn about our new freight forwarding platform',
-            'content': '<h1>Welcome to BFG Blog</h1><p>We are excited to launch our new blog where we will share updates, tips, and insights about freight forwarding.</p>',
+            'title': 'Welcome to XMart Blog',
+            'slug': 'welcome-to-xmart-blog',
+            'excerpt': 'Learn about our new platform',
+            'content': '<h1>Welcome to XMart Blog</h1><p>We are excited to launch our new blog where we will share updates, tips, and insights.</p>',
             'status': 'published',
         },
         {
             'title': 'How to Track Your Shipment',
             'slug': 'how-to-track-your-shipment',
             'excerpt': 'A step-by-step guide to tracking your packages',
-            'content': '<h1>How to Track Your Shipment</h1><p>Tracking your shipment is easy with PackGo. Here is a comprehensive guide.</p>',
+            'content': '<h1>How to Track Your Shipment</h1><p>Tracking your shipment is easy with XMart. Here is a comprehensive guide.</p>',
             'status': 'published',
         },
         {

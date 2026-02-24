@@ -8,7 +8,7 @@ from decimal import Decimal
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from .models import (
-    Workspace, Customer, CustomerSegment, CustomerTag, Address, StaffRole, StaffMember, EmailConfig
+    Workspace, Customer, CustomerSegment, CustomerTag, Address, StaffRole, StaffMember, EmailConfig, Settings
 )
 from .utils import get_smtp_config_from_env
 
@@ -76,6 +76,9 @@ def seed_data(workspace, stdout=None, style=None, **context):
     # Create default email config from local env (EMAIL_HOST, etc.)
     email_config = create_email_config(workspace, stdout, style)
     
+    # Set workspace site name and description (default: XMart)
+    create_workspace_settings(workspace, stdout, style)
+    
     summary = [
         {'label': 'Users', 'count': User.objects.count()},
         {'label': 'Customers', 'count': Customer.objects.count()},
@@ -108,7 +111,7 @@ def create_admin_user(workspace, stdout=None, style=None):
     user, created = User.objects.get_or_create(
         username='admin',
         defaults={
-            'email': 'admin@packgo.com',
+            'email': 'admin@xmart.com',
             'first_name': 'Admin',
             'last_name': 'User',
             'phone': '+1-555-0001',
@@ -151,9 +154,9 @@ def create_admin_user(workspace, stdout=None, style=None):
 def create_staff_users(workspace, stdout=None, style=None):
     """Create staff users"""
     staff_data = [
-        {'username': 'warehouse_manager', 'first_name': 'John', 'last_name': 'Smith', 'email': 'john@packgo.com'},
-        {'username': 'customer_service', 'first_name': 'Jane', 'last_name': 'Doe', 'email': 'jane@packgo.com'},
-        {'username': 'logistics_coord', 'first_name': 'Bob', 'last_name': 'Wilson', 'email': 'bob@packgo.com'},
+        {'username': 'warehouse_manager', 'first_name': 'John', 'last_name': 'Smith', 'email': 'john@xmart.com'},
+        {'username': 'customer_service', 'first_name': 'Jane', 'last_name': 'Doe', 'email': 'jane@xmart.com'},
+        {'username': 'logistics_coord', 'first_name': 'Bob', 'last_name': 'Wilson', 'email': 'bob@xmart.com'},
     ]
     users = []
     for data in staff_data:
@@ -418,6 +421,27 @@ def create_email_config(workspace, stdout=None, style=None):
     if created and stdout:
         stdout.write(style.SUCCESS(f'✓ Created email config: {obj.name}'))
     return obj
+
+
+def create_workspace_settings(workspace, stdout=None, style=None):
+    """Create or update Settings for workspace with default site name and description (XMart)."""
+    settings_obj, created = Settings.objects.get_or_create(
+        workspace=workspace,
+        defaults={
+            'site_name': 'XMart',
+            'site_description': 'XMart demo website',
+            'default_language': 'en',
+            'default_currency': 'NZD',
+        }
+    )
+    if not created:
+        if settings_obj.site_name != 'XMart' or settings_obj.site_description != 'XMart demo website':
+            settings_obj.site_name = 'XMart'
+            settings_obj.site_description = 'XMart demo website'
+            settings_obj.save(update_fields=['site_name', 'site_description'])
+    if created and stdout:
+        stdout.write(style.SUCCESS('✓ Created workspace settings (site name: XMart)'))
+    return settings_obj
 
 
 def create_customer_segments(workspace, stdout=None, style=None):

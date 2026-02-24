@@ -19,7 +19,12 @@ from bfg.common.models import Address
 def clear_data():
     """Clear delivery module data. Process: (1) collect cache keys if any, (2) delete in dependency order, (3) invalidate caches if any."""
     # 1. Collect cache keys before delete (this module has no cache)
-    # 2. Delete in dependency order
+    # 2. Delete in dependency order (drop FKs that reference delivery models first)
+    try:
+        from apps.transport.models import LoadingManifest
+        LoadingManifest.objects.all().delete()
+    except ImportError:
+        pass
     TrackingEvent.objects.all().delete()
     Package.objects.all().delete()
     Consignment.objects.all().delete()

@@ -1,12 +1,13 @@
-.PHONY: help test-bfg2-e2e test-bfg2-all test-bfg install-bfg2 install
+.PHONY: help test-bfg2-e2e test-bfg2-all test-bfg install-bfg2 install reset-migrations
 
 help:
 	@echo "Available commands:"
-	@echo "  make test-bfg2-e2e    - Run BFG2 end-to-end tests"
-	@echo "  make test-bfg2-all    - Run all BFG2 tests"
-	@echo "  make test-bfg         - Run BFG tests"
-	@echo "  make install-bfg2     - Install BFG2 dependencies"
-	@echo "  make install          - Install all project dependencies"
+	@echo "  make test-bfg2-e2e     - Run BFG2 end-to-end tests"
+	@echo "  make test-bfg2-all     - Run all BFG2 tests"
+	@echo "  make test-bfg          - Run BFG tests"
+	@echo "  make install-bfg2      - Install BFG2 dependencies"
+	@echo "  make install           - Install all project dependencies"
+	@echo "  make reset-migrations  - Remove bfg migrations, reset DB, makemigrations, migrate"
 
 # BFG2 E2E Tests
 test-bfg2-e2e:
@@ -32,4 +33,16 @@ install-bfg2:
 install:
 	@echo "Installing project dependencies..."
 	pip install -r requirements.txt
+
+# Reset migrations: clear bfg migration files, drop tables, regenerate and migrate
+reset-migrations:
+	@echo "Removing bfg migration files (keeping __init__.py)..."
+	@find bfg2/bfg/*/migrations -name '*.py' ! -name '__init__.py' -delete
+	@echo "Running makemigrations..."
+	python manage.py makemigrations
+	@echo "Dropping all tables..."
+	python manage.py reset_db --no-input
+	@echo "Running migrate..."
+	python manage.py migrate
+	@echo "Done. Run 'python manage.py init' to create workspace and superadmin."
 

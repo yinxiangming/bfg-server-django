@@ -35,6 +35,12 @@ class Command(BaseCommand):
             type=str,
             help='Seed specific module(s). Can be a single module name or comma-separated list (e.g., "common,delivery"). If not specified, all available modules will be seeded.',
         )
+        parser.add_argument(
+            '--workspace',
+            type=str,
+            default=None,
+            help='Use existing workspace by slug or id instead of creating "demo". Used when called from init.',
+        )
 
     def handle(self, *args, **options):
         self.stdout.write(self.style.SUCCESS('Starting database seeding...'))
@@ -51,8 +57,8 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING('seed_images not found, copying automatically...'))
             self.copy_sample_images()
 
-        # Create workspace first (required by all modules)
-        workspace = self.create_workspace()
+        # Use existing workspace or create demo (required by all modules)
+        workspace = self.get_workspace(options.get('workspace'))
         
         # Get module list
         modules = self.get_modules_to_seed(options.get('module'))
@@ -247,8 +253,19 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f'✓ Copied seed_media/{name} → seed_images/{name}'))
         self.stdout.write(self.style.SUCCESS(f'Seed images ready at {target_dir}'))
 
+    def get_workspace(self, workspace_arg=None):
+        """Use existing workspace by slug/id or create demo workspace."""
+        if workspace_arg:
+            try:
+                workspace = Workspace.objects.get(id=int(workspace_arg)) if workspace_arg.isdigit() else Workspace.objects.get(slug=workspace_arg)
+                self.stdout.write(self.style.SUCCESS(f'Using workspace: {workspace.name} (slug={workspace.slug})'))
+                return workspace
+            except Workspace.DoesNotExist:
+                self.stdout.write(self.style.WARNING(f'Workspace {workspace_arg} not found, creating demo workspace.'))
+        return self.create_workspace()
+
     def create_workspace(self):
-        """Create main workspace"""
+        """Create main workspace (demo)."""
         workspace, created = Workspace.objects.get_or_create(
             slug='demo',
             defaults={

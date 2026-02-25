@@ -38,12 +38,11 @@ def ensure_workspace_roles(workspace):
 
 
 def get_default_site_config_path():
-    """Resolve default path: project_root/web/design/site-config-xmart.json (server's parent = project root)."""
+    """Default path: bfg2/seed_media/site-config-xmart.json (source tree)."""
     base = Path(__file__).resolve().parent
-    for _ in range(5):
+    for _ in range(4):
         base = base.parent
-    project_root = base.parent
-    return project_root / 'web' / 'design' / 'site-config-xmart.json'
+    return base / 'seed_media' / 'site-config-xmart.json'
 
 
 class Command(BaseCommand):
@@ -72,7 +71,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--seed-data',
             action='store_true',
-            help='Import seed_data and load site config (web/design/site-config-xmart.json)',
+            help='Import seed_data and load site config (bfg2/seed_media/site-config-xmart.json)',
         )
         parser.add_argument(
             '--no-seed-data',
@@ -88,7 +87,7 @@ class Command(BaseCommand):
             '--site-config',
             type=str,
             default=None,
-            help='Path to site-config JSON (default: web/design/site-config-xmart.json relative to project root)',
+            help='Path to site-config JSON (default: bfg2/seed_media/site-config-xmart.json)',
         )
 
     def handle(self, *args, **options):
@@ -174,14 +173,14 @@ class Command(BaseCommand):
         do_seed = options['seed_data']
         if not do_seed and not options['no_seed_data']:
             try:
-                answer = input('Import seed_data and load site config (e.g. web/design/site-config-xmart.json)? [y/N]: ').strip().lower()
+                answer = input('Import seed_data and load site config (bfg2/seed_media/site-config-xmart.json)? [y/N]: ').strip().lower()
                 do_seed = answer in ('y', 'yes')
             except (EOFError, KeyboardInterrupt):
                 do_seed = False
 
         if do_seed:
             self.stdout.write(self.style.SUCCESS('Running seed_data...'))
-            call_command('seed_data', stdout=self.stdout)
+            call_command('seed_data', workspace=workspace_slug, stdout=self.stdout)
             # Load site config for storefront (Site, Pages, Menus)
             config_path = options.get('site_config')
             if not config_path:
@@ -199,7 +198,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS('Loaded site config (Site, Pages, Menus).'))
             else:
                 self.stdout.write(
-                    self.style.WARNING('Site config not found (expected web/design/site-config-xmart.json).')
+                    self.style.WARNING('Site config not found (expected bfg2/seed_media/site-config-xmart.json).')
                 )
 
         self.stdout.write('')

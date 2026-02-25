@@ -101,7 +101,7 @@ class Command(BaseCommand):
         if not options['no_load_site']:
             config_path = options.get('config')
             if not config_path:
-                # Default: project root is server's parent (e.g. packgo_v2), web/design is sibling of server
+                # Default: project root is server's parent (e.g. bfg_v2), web/design is sibling of server
                 base = Path(__file__).resolve().parent
                 for _ in range(5):
                     base = base.parent

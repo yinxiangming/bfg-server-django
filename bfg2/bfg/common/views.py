@@ -960,7 +960,7 @@ class EmailConfigViewSet(viewsets.ModelViewSet):
         try:
             backend.send(
                 to_list=[to_email],
-                subject='Test email from PackGo',
+                subject='Test email from BFG',
                 body_plain='This is a test email. If you received this, your email config is working.',
                 body_html=None,
                 from_email=config.config.get('from_email'),

@@ -9,7 +9,8 @@ import sys
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-SECRET_KEY = 'test-secret-key-for-bfg2-tests'
+# Test-only; never use in production. Override via env in CI if required.
+SECRET_KEY = os.environ.get('SECRET_KEY', 'test-insecure-do-not-use-in-production')
 
 DEBUG = True
 

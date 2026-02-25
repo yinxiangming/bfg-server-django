@@ -111,7 +111,7 @@ The command provides detailed output for each test step:
 
 ```
 Testing ParcelPort Carrier Plugin
-Workspace: PackGo Demo Workspace
+Workspace: Demo Workspace
 Carrier Type: parcelport
 Test Mode: False
 Account: surlex
@@ -122,7 +122,7 @@ Base URL: https://api.parcelport.co.nz
 
 Testing authentication...
 ✓ Authentication successful
-  Token: XvAmaaD5hhli8BeuGMEJ...
+  Token: ***
 
 Testing shipping options...
 ✓ Shipping options retrieved: 2 options

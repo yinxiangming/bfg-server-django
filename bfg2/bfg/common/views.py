@@ -36,6 +36,17 @@ from bfg.common.serializers import (
 from bfg.common.services import WorkspaceService, CustomerService, AddressService
 from bfg.common.utils import get_required_workspace
 
+# Strip known footer menu name prefixes (e.g. "footer-", localized equivalents)
+FOOTER_MENU_NAME_PREFIXES = ('footer-')
+
+
+def _strip_footer_menu_name_prefix(name: str) -> str:
+    for prefix in FOOTER_MENU_NAME_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return name.title()
+
 
 class WorkspaceViewSet(viewsets.ModelViewSet):
     """
@@ -717,7 +728,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
                         if add_footer_groups:
                             payload['footer_menu_groups'].append({
                                 'slug': menu.slug,
-                                'name': menu.name.replace('页脚-', '').replace('footer-', '').title(),
+                                'name': _strip_footer_menu_name_prefix(menu.name),
                                 'items': items,
                             })
 

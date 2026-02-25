@@ -452,7 +452,7 @@ class Language(models.Model):
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='languages')
     
     code = models.CharField(_("Code"), max_length=10)  # 'en', 'zh-hans', 'zh-hant'
-    name = models.CharField(_("Name"), max_length=100)  # 'English', '简体中文'
+    name = models.CharField(_("Name"), max_length=100)  # e.g. 'English'
     native_name = models.CharField(_("Native Name"), max_length=100)  # 'English', '简体中文'
     
     is_default = models.BooleanField(_("Default"), default=False)

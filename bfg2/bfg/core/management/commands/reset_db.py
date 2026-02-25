@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-Drop all tables in the default database. Use before re-running migrate after
-clearing and regenerating migrations.
+Drop all tables in the default database. Only allowed in non-prod environment.
+Use before re-running migrate after clearing and regenerating migrations.
 Usage: python manage.py reset_db
 """
 
+import os
 from django.core.management.base import BaseCommand
 from django.db import connection
 
 
 class Command(BaseCommand):
-    help = 'Drop all tables in the default database (for migration reset flow)'
+    help = 'Drop all tables in the default database (non-prod only; for migration reset flow)'
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -20,6 +21,10 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        env = os.environ.get('ENV', 'dev').lower().strip()
+        if env == 'prod':
+            self.stdout.write(self.style.ERROR('reset_db is not allowed in prod environment.'))
+            return
         if not options['no_input']:
             confirm = input('Drop all tables in the database? Type "yes" to continue: ')
             if confirm != 'yes':

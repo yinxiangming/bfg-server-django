@@ -44,5 +44,5 @@ reset-migrations:
 	python manage.py reset_db --no-input
 	@echo "Running migrate..."
 	python manage.py migrate
-	@echo "Done. Run 'python manage.py init' to create workspace and superadmin."
+	@echo "Done. Run 'python manage.py init' to create workspace and admin."
 

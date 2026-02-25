@@ -208,7 +208,7 @@ def create_site(workspace, theme=None, stdout=None, style=None):
         return site
     site = Site.objects.create(
         workspace=workspace,
-        domain='demo.xmart.com',
+        domain='localhost',
         name='XMart',
         theme=theme,
         is_default=True,

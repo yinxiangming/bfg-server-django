@@ -235,7 +235,7 @@ class InvoicePDFGenerator(PDFGenerator):
         if self.backend == 'weasyprint':
             try:
                 return self.generate_from_template(
-                    'invoice/invoice_pdf.html',
+                    'shop/invoice/invoice_pdf.html',
                     context
                 )
             except ImportError:

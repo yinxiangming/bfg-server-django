@@ -3,6 +3,7 @@ BFG Framework URL Configuration (core only; no apps.* routes).
 """
 import os
 from django.urls import re_path, include, path
+from config.local_apps import get_local_apps
 from django.contrib import admin
 from django.conf.urls.static import static
 from django.conf import settings
@@ -35,6 +36,7 @@ urlpatterns = [
         path('', include('bfg.support.urls')),
         path('inbox/', include('bfg.inbox.urls')),
         path('', include('bfg.finance.urls')),
+        *[path(f'{app}/', include(f'apps.{app}.urls')) for app in get_local_apps()],
     ])),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + static(
     '/images/', document_root=os.path.join(settings.MEDIA_ROOT, 'images')

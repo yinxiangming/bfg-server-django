@@ -3,11 +3,11 @@ import os
 import sys
 from pathlib import Path
 
-# Add bfg2 to Python path
+# Add project paths for apps.* and bfg2
 BASE_DIR = Path(__file__).resolve().parent
-bfg2_path = BASE_DIR / 'bfg2'
-if str(bfg2_path) not in sys.path:
-    sys.path.insert(0, str(bfg2_path))
+for p in (str(BASE_DIR), str(BASE_DIR / 'bfg2')):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 def main():
     """Run administrative tasks."""

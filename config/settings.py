@@ -10,6 +10,8 @@ from datetime import timedelta
 from dotenv import load_dotenv
 import dj_database_url
 
+from config.local_apps import get_local_app_dotted_names
+
 # Load environment variables
 ENV = os.environ.get('ENV', 'dev').lower().strip()
 if ENV == 'local' or ENV == 'dev':
@@ -51,6 +53,8 @@ INSTALLED_APPS = [
     'bfg.finance',
     'bfg.support',
     'bfg.inbox',
+    # Local apps (from env LOCAL_APPS or auto-discovered from apps dir)
+    *get_local_app_dotted_names(),
 ]
 
 MIDDLEWARE = [

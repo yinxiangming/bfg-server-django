@@ -101,7 +101,7 @@ class Command(BaseCommand):
             call_command('migrate', stdout=self.stdout)
             self.stdout.write(self.style.SUCCESS('Migrate done.'))
 
-        # Prompt for password (no default, no env)
+        # Prompt for password (manual input only)
         try:
             admin_password = self.get_password(admin_username)
         except (EOFError, KeyboardInterrupt):

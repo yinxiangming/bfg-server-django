@@ -10,7 +10,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from bfg.core.schema_convert import validation_error_to_message
 from bfg.common.models import Media
-from bfg.common.serializers import MediaLinkSerializer as BaseMediaLinkSerializer
+from bfg.common.serializers import MediaLinkSerializer as BaseMediaLinkSerializer, media_file_url_for_serializer
 from bfg.shop.models import (
     ProductCategory, ProductTag, Product, ProductVariant, VariantInventory,
     Cart, CartItem, Order, OrderItem, ProductReview, Store,
@@ -74,13 +74,9 @@ class MediaSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_file(self, obj):
-        """Get full file URL"""
-        if obj.file:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.file.url)
-            return obj.file.url
-        return None
+        """Get full file URL from stored path (so seed_images/store/... is correct)."""
+        request = self.context.get('request')
+        return media_file_url_for_serializer(obj, request)
 
 
 # Note: ProductMediaSerializer has been removed, use MediaLinkSerializer from bfg.common.serializers instead
@@ -188,13 +184,11 @@ class ProductListSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
     
     def get_primary_image(self, obj):
-        """Get primary product image URL"""
+        """Get primary product image URL (from stored path so seed_images/store/... is correct)."""
         primary = obj.primary_image
-        if primary and primary.media and primary.media.file:
+        if primary and primary.media:
             request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(primary.media.file.url)
-            return primary.media.file.url
+            return media_file_url_for_serializer(primary.media, request)
         return None
     
     def get_category_names(self, obj):

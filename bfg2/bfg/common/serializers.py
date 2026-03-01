@@ -9,7 +9,7 @@ from bfg.common.models import (
     Workspace, Customer, Address, User, StaffRole, StaffMember, Settings,
     CustomerSegment, CustomerTag, UserPreferences, Media, MediaLink, EmailConfig
 )
-
+from django.conf import settings    
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -432,6 +432,20 @@ class UserPreferencesSerializer(serializers.ModelSerializer):
         read_only_fields = []
 
 
+def media_file_url_for_serializer(media_obj, request=None):
+    """
+    Build media file URL from stored file.name so it matches DB path.
+    Using file.url can yield upload-style paths (e.g. 1/products/xxx) when
+    the DB stores seed path (seed_images/store/xxx); building from name avoids that.
+    """
+    if not media_obj or not media_obj.file or not media_obj.file.name:
+        return None
+    base = (settings.MEDIA_URL + media_obj.file.name).replace('//', '/')
+    if request:
+        return request.build_absolute_uri(base)
+    return base
+
+
 class MediaSerializer(serializers.ModelSerializer):
     """Media serializer"""
     file = serializers.SerializerMethodField()
@@ -442,13 +456,9 @@ class MediaSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_file(self, obj):
-        """Get full file URL"""
-        if obj.file:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.file.url)
-            return obj.file.url
-        return None
+        """Get full file URL from stored path (so seed_images/store/... stays correct)."""
+        request = self.context.get('request')
+        return media_file_url_for_serializer(obj, request)
 
 
 class MediaLinkSerializer(serializers.ModelSerializer):
@@ -478,12 +488,10 @@ class MediaLinkSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_file(self, obj):
-        """Get full file URL"""
-        if obj.media and obj.media.file:
+        """Get full file URL from stored path (so seed_images/store/... stays correct)."""
+        if obj.media:
             request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.media.file.url)
-            return obj.media.file.url
+            return media_file_url_for_serializer(obj.media, request)
         return None
     
     def get_external_url(self, obj):

@@ -38,11 +38,11 @@ def ensure_workspace_roles(workspace):
 
 
 def get_default_site_config_path():
-    """Default path: bfg2/seed_media/site-config-xmart.json (source tree)."""
+    """Default path: bfg2/seed_media/site-config-store.json (source tree)."""
     base = Path(__file__).resolve().parent
     for _ in range(4):
         base = base.parent
-    return base / 'seed_media' / 'site-config-xmart.json'
+    return base / 'seed_media' / 'site-config-store.json'
 
 
 class Command(BaseCommand):
@@ -71,7 +71,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--seed-data',
             action='store_true',
-            help='Import seed_data and load site config (bfg2/seed_media/site-config-xmart.json)',
+            help='Import seed_data and load site config (bfg2/seed_media/site-config-store.json)',
         )
         parser.add_argument(
             '--no-seed-data',
@@ -87,7 +87,7 @@ class Command(BaseCommand):
             '--site-config',
             type=str,
             default=None,
-            help='Path to site-config JSON (default: bfg2/seed_media/site-config-xmart.json)',
+            help='Path to site-config JSON (default: bfg2/seed_media/site-config-store.json)',
         )
 
     def handle(self, *args, **options):
@@ -173,7 +173,7 @@ class Command(BaseCommand):
         do_seed = options['seed_data']
         if not do_seed and not options['no_seed_data']:
             try:
-                answer = input('Import seed_data and load site config (bfg2/seed_media/site-config-xmart.json)? [y/N]: ').strip().lower()
+                answer = input('Import seed_data and load site config (bfg2/seed_media/site-config-store.json)? [y/N]: ').strip().lower()
                 do_seed = answer in ('y', 'yes')
             except (EOFError, KeyboardInterrupt):
                 do_seed = False
@@ -198,7 +198,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS('Loaded site config (Site, Pages, Menus).'))
             else:
                 self.stdout.write(
-                    self.style.WARNING('Site config not found (expected bfg2/seed_media/site-config-xmart.json).')
+                    self.style.WARNING('Site config not found (expected bfg2/seed_media/site-config-store.json).')
                 )
 
         self.stdout.write('')

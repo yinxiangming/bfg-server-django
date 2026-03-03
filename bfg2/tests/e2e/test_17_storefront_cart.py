@@ -47,14 +47,14 @@ class TestStorefrontCart:
         
         # Test: Anonymous user can get/create cart
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        cart_res = anonymous_client.get('/api/store/cart/current/')
+        cart_res = anonymous_client.get('/api/v1/store/cart/current/')
         assert cart_res.status_code == 200
         assert 'id' in cart_res.data
         assert 'items' in cart_res.data
         assert 'total' in cart_res.data
         
         # Test: Add item to cart
-        add_res = anonymous_client.post('/api/store/cart/add_item/', {
+        add_res = anonymous_client.post('/api/v1/store/cart/add_item/', {
             "product": prod_id,
             "quantity": 2
         })
@@ -66,7 +66,7 @@ class TestStorefrontCart:
         item_id = add_res.data['items'][0]['item_id']
         
         # Test: Update item quantity
-        update_res = anonymous_client.post('/api/store/cart/update_item/', {
+        update_res = anonymous_client.post('/api/v1/store/cart/update_item/', {
             "item_id": item_id,
             "quantity": 3
         })
@@ -74,7 +74,7 @@ class TestStorefrontCart:
         assert Decimal(str(update_res.data['total'])) == Decimal("89.97")  # 3 * 29.99
         
         # Test: Remove item
-        remove_res = anonymous_client.post('/api/store/cart/remove_item/', {
+        remove_res = anonymous_client.post('/api/v1/store/cart/remove_item/', {
             "item_id": item_id
         })
         assert remove_res.status_code == 200
@@ -83,11 +83,11 @@ class TestStorefrontCart:
         
         # Test: Clear cart
         # Add item again first
-        anonymous_client.post('/api/store/cart/add_item/', {
+        anonymous_client.post('/api/v1/store/cart/add_item/', {
             "product": prod_id,
             "quantity": 1
         })
-        clear_res = anonymous_client.post('/api/store/cart/clear/')
+        clear_res = anonymous_client.post('/api/v1/store/cart/clear/')
         assert clear_res.status_code == 200
         assert len(clear_res.data['items']) == 0
     
@@ -119,9 +119,9 @@ class TestStorefrontCart:
         
         # Step 1: Anonymous user adds to cart
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        anonymous_client.get('/api/store/cart/current/')  # Create session
+        anonymous_client.get('/api/v1/store/cart/current/')  # Create session
         
-        add_res = anonymous_client.post('/api/store/cart/add_item/', {
+        add_res = anonymous_client.post('/api/v1/store/cart/add_item/', {
             "product": prod_id,
             "quantity": 2
         })
@@ -140,7 +140,7 @@ class TestStorefrontCart:
         authenticated_client.force_authenticate(user=customer_user)
         
         # Authenticated user can add to cart
-        auth_add_res = authenticated_client.post('/api/store/cart/add_item/', {
+        auth_add_res = authenticated_client.post('/api/v1/store/cart/add_item/', {
             "product": prod_id,
             "quantity": 1
         })
@@ -193,7 +193,7 @@ class TestStorefrontCart:
         
         # Test: Add to cart and check enhanced fields
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        add_res = anonymous_client.post('/api/store/cart/add_item/', {
+        add_res = anonymous_client.post('/api/v1/store/cart/add_item/', {
             "product": prod_id,
             "variant": var_id,
             "quantity": 1

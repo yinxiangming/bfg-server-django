@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Storefront promo API: GET /api/store/promo/?context=home
+Storefront promo API: GET /api/v1/store/promo/?context=home
 Returns types_present + available (slides, featured_categories, flash_sales, group_buys).
 """
 from django.utils import timezone

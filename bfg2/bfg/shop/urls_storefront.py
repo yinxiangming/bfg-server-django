@@ -1,7 +1,7 @@
 """
 Storefront API URL Configuration
 
-Customer-facing API routes prefixed with /api/store/
+Customer-facing API routes prefixed with /api/v1/store/
 """
 from django.urls import path, include, re_path
 from rest_framework.routers import DefaultRouter

@@ -32,7 +32,7 @@ The `bfg.marketing` module provides campaign management, coupons, discount rules
 ### API (Current / Planned)
 
 - **Join campaign**: `POST /api/.../campaigns/{id}/join/` → creates CampaignParticipation, optionally issues Coupon (boost_id set). Service: `join_campaign(customer, campaign)`.
-- **Campaign displays**: `GET /api/storefront/promo/` or `campaigns/{id}/displays/` → CampaignDisplay by display_type (slide, featured_category, featured_post).
+- **Campaign displays**: `GET /api/v1/store/promo/` or `campaigns/{id}/displays/` → CampaignDisplay by display_type (slide, featured_category, featured_post).
 - **Coupons / DiscountRule**: Existing endpoints; order calculation unchanged.
 
 ---

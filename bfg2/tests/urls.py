@@ -5,9 +5,6 @@ from django.urls import path, include
 from django.contrib import admin
 
 urlpatterns = [
-    # Storefront API (customer-facing, no version prefix)
-    path('api/store/', include('bfg.shop.urls_storefront')),
-    
     # BFG2 API v1 endpoints (matching main server structure)
     path('api/v1/', include([
         # Common module (workspaces, customers, addresses)
@@ -18,6 +15,9 @@ urlpatterns = [
         
         # Shop module (products, stores, orders, categories, variants, carts)
         path('shop/', include('bfg.shop.urls')),
+        
+        # Storefront API (customer-facing)
+        path('store/', include('bfg.shop.urls_storefront')),
         
         # Delivery module (warehouses, carriers, manifests, consignments, packages)
         path('delivery/', include('bfg.delivery.urls')),

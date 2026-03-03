@@ -216,7 +216,7 @@ class TestStorefrontMe:
         assert put_res.data['custom_preferences']['preferred_currency'] == "USD"
     
     def test_me_orders(self, authenticated_client, workspace, user):
-        """Test /api/v1/me/orders/ API (alias for /api/store/orders/)"""
+        """Test /api/v1/me/orders/ API (alias for /api/v1/store/orders/)"""
         # Setup: Create order via checkout (similar to test_checkout_flow)
         from bfg.delivery.models import Warehouse
         from bfg.shop.models import Store
@@ -251,7 +251,7 @@ class TestStorefrontMe:
         prod_id = prod_res.data['id']
         
         # Add to cart
-        add_res = authenticated_client.post('/api/store/cart/add_item/', {
+        add_res = authenticated_client.post('/api/v1/store/cart/add_item/', {
             "product": prod_id,
             "quantity": 1
         })
@@ -272,7 +272,7 @@ class TestStorefrontMe:
         address_id = addr_res.data['id']
         
         # Checkout
-        checkout_res = authenticated_client.post('/api/store/cart/checkout/', {
+        checkout_res = authenticated_client.post('/api/v1/store/cart/checkout/', {
             "store": store.id,
             "shipping_address": address_id
         })

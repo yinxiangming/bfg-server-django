@@ -1258,7 +1258,7 @@ class MeSettingsViewSet(viewsets.GenericViewSet,
 
 class MeOrdersViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    Me Orders ViewSet - alias for /api/store/orders/
+    Me Orders ViewSet - alias for /api/v1/store/orders/
     
     GET /api/v1/me/orders/ - List current user's orders
     GET /api/v1/me/orders/{id}/ - Get order details

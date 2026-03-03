@@ -52,11 +52,11 @@ class TestStorefrontCategories:
         
         # Test: List categories
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        list_res = anonymous_client.get('/api/store/categories/')
+        list_res = anonymous_client.get('/api/v1/store/categories/')
         assert list_res.status_code == 200
         
         # Test: Get tree structure
-        tree_res = anonymous_client.get('/api/store/categories/?tree=true')
+        tree_res = anonymous_client.get('/api/v1/store/categories/?tree=true')
         assert tree_res.status_code == 200
     
     def test_category_enhanced_fields(self, workspace):
@@ -95,7 +95,7 @@ class TestStorefrontCategories:
         
         # Test: Category contains enhanced fields
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        category_res = anonymous_client.get(f'/api/store/categories/{cat_id}/')
+        category_res = anonymous_client.get(f'/api/v1/store/categories/{cat_id}/')
         assert category_res.status_code == 200
         
         category = category_res.data
@@ -105,7 +105,7 @@ class TestStorefrontCategories:
         assert category['product_count'] >= 0
         
         # Test: Category list also contains enhanced fields
-        list_res = anonymous_client.get('/api/store/categories/')
+        list_res = anonymous_client.get('/api/v1/store/categories/')
         assert list_res.status_code == 200
         categories = list_res.data if isinstance(list_res.data, list) else list_res.data.get('results', [])
         enhanced_cat = next((c for c in categories if c['id'] == cat_id), None)

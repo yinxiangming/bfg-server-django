@@ -263,8 +263,8 @@ class TestMarketing:
     # --- Storefront promo API (slides, featured_categories, flash_sales, group_buys) ---
 
     def test_storefront_promo_returns_structure(self, authenticated_client, workspace):
-        """GET /api/store/promo/ returns context, available, types_present."""
-        response = authenticated_client.get("/api/store/promo/?context=home")
+        """GET /api/v1/store/promo/ returns context, available, types_present."""
+        response = authenticated_client.get("/api/v1/store/promo/?context=home")
         assert response.status_code == 200
         assert "context" in response.data
         assert "available" in response.data
@@ -302,7 +302,7 @@ class TestMarketing:
         )
         assert display_res.status_code == 201
 
-        promo_res = authenticated_client.get("/api/store/promo/?context=home")
+        promo_res = authenticated_client.get("/api/v1/store/promo/?context=home")
         assert promo_res.status_code == 200
         assert "slides" in promo_res.data.get("types_present", [])
         assert "slides" in promo_res.data.get("available", {})
@@ -328,7 +328,7 @@ class TestMarketing:
         )
         assert campaign_res.status_code == 201
 
-        promo_res = authenticated_client.get("/api/store/promo/?context=home")
+        promo_res = authenticated_client.get("/api/v1/store/promo/?context=home")
         assert promo_res.status_code == 200
         assert "group_buys" in promo_res.data.get("types_present", [])
         group_buys = promo_res.data.get("available", {}).get("group_buys", [])
@@ -376,7 +376,7 @@ class TestMarketing:
         )
         assert coupon_res.status_code == 201
 
-        promo_res = authenticated_client.get("/api/store/promo/?context=home")
+        promo_res = authenticated_client.get("/api/v1/store/promo/?context=home")
         assert promo_res.status_code == 200
         assert "flash_sales" in promo_res.data.get("types_present", [])
         flash_sales = promo_res.data.get("available", {}).get("flash_sales", [])

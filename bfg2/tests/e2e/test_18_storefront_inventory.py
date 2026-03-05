@@ -120,7 +120,7 @@ class TestStorefrontInventory:
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
         
         # Get product detail
-        detail_res = anonymous_client.get(f'/api/store/products/{prod_id}/')
+        detail_res = anonymous_client.get(f'/api/v1/store/products/{prod_id}/')
         assert detail_res.status_code == 200
         
         # Check variant has stock information
@@ -206,7 +206,7 @@ class TestStorefrontInventory:
         
         # Test: Get initial stock
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        detail_res = anonymous_client.get(f'/api/store/products/{prod_id}/')
+        detail_res = anonymous_client.get(f'/api/v1/store/products/{prod_id}/')
         assert detail_res.status_code == 200
         
         variants = detail_res.data.get('variants', [])
@@ -225,7 +225,7 @@ class TestStorefrontInventory:
         variant.save()
         
         # Test: Get updated stock
-        detail_res2 = anonymous_client.get(f'/api/store/products/{prod_id}/')
+        detail_res2 = anonymous_client.get(f'/api/v1/store/products/{prod_id}/')
         assert detail_res2.status_code == 200
         
         variants2 = detail_res2.data.get('variants', [])
@@ -247,7 +247,7 @@ class TestStorefrontInventory:
         variant.save()
         
         # Test: Get final stock
-        detail_res3 = anonymous_client.get(f'/api/store/products/{prod_id}/')
+        detail_res3 = anonymous_client.get(f'/api/v1/store/products/{prod_id}/')
         assert detail_res3.status_code == 200
         
         variants3 = detail_res3.data.get('variants', [])
@@ -341,7 +341,7 @@ class TestStorefrontInventory:
         
         # Test: Get product and verify multi-warehouse breakdown
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        detail_res = anonymous_client.get(f'/api/store/products/{prod_id}/')
+        detail_res = anonymous_client.get(f'/api/v1/store/products/{prod_id}/')
         assert detail_res.status_code == 200
         
         variants = detail_res.data.get('variants', [])

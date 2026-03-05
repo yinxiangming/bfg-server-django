@@ -54,7 +54,7 @@ class TestStorefrontOrders:
         prod_id = prod_res.data['id']
         
         # Add to cart
-        add_res = authenticated_client.post('/api/store/cart/add_item/', {
+        add_res = authenticated_client.post('/api/v1/store/cart/add_item/', {
             "product": prod_id,
             "quantity": 2
         })
@@ -75,7 +75,7 @@ class TestStorefrontOrders:
         address_id = addr_res.data['id']
         
         # Checkout
-        checkout_res = authenticated_client.post('/api/store/cart/checkout/', {
+        checkout_res = authenticated_client.post('/api/v1/store/cart/checkout/', {
             "store": store_id,
             "shipping_address": address_id,
             "billing_address": address_id,
@@ -164,7 +164,7 @@ class TestStorefrontOrders:
         assert package_res.status_code == 201
         
         # Test: List orders
-        list_res = authenticated_client.get('/api/store/orders/')
+        list_res = authenticated_client.get('/api/v1/store/orders/')
         assert list_res.status_code == 200
         # Handle both paginated and non-paginated responses
         if isinstance(list_res.data, list):
@@ -174,11 +174,11 @@ class TestStorefrontOrders:
         assert len(orders) >= 1
         
         # Test: Filter by status
-        filtered_res = authenticated_client.get('/api/store/orders/?status=pending')
+        filtered_res = authenticated_client.get('/api/v1/store/orders/?status=pending')
         assert filtered_res.status_code == 200
         
         # Test: Get order detail (should include packages)
-        detail_res = authenticated_client.get(f'/api/store/orders/{order_id}/')
+        detail_res = authenticated_client.get(f'/api/v1/store/orders/{order_id}/')
         assert detail_res.status_code == 200
         assert detail_res.data['id'] == order_id
         assert 'order_number' in detail_res.data
@@ -235,7 +235,7 @@ class TestStorefrontOrders:
         order_id = checkout_res.data['id']
         
         # Test: Cancel order
-        cancel_res = authenticated_client.post(f'/api/store/orders/{order_id}/cancel/', {
+        cancel_res = authenticated_client.post(f'/api/v1/store/orders/{order_id}/cancel/', {
             "reason": "Changed my mind"
         })
         assert cancel_res.status_code == 200

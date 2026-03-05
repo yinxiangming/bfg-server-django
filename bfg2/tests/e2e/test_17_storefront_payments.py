@@ -83,7 +83,7 @@ class TestStorefrontPayments:
         )
         
         # Test: Create payment intent
-        intent_res = authenticated_client.post('/api/store/payments/intent/', {
+        intent_res = authenticated_client.post('/api/v1/store/payments/intent/', {
             "order_id": order.id,
             "gateway_id": gateway.id
         })
@@ -172,7 +172,7 @@ class TestStorefrontPayments:
         )
         
         # Test: Process payment
-        process_res = authenticated_client.post(f'/api/store/payments/{payment.id}/process/')
+        process_res = authenticated_client.post(f'/api/v1/store/payments/{payment.id}/process/')
         # Payment processing may succeed or fail depending on gateway implementation
         # Just verify the endpoint is accessible and returns appropriate status
         assert process_res.status_code in [200, 400], "Payment process should return 200 or 400"
@@ -180,7 +180,7 @@ class TestStorefrontPayments:
         
         # Test: Cannot process non-existent payment
         fake_id = 99999
-        fake_process_res = authenticated_client.post(f'/api/store/payments/{fake_id}/process/')
+        fake_process_res = authenticated_client.post(f'/api/v1/store/payments/{fake_id}/process/')
         assert fake_process_res.status_code == 404, "Should return 404 for non-existent payment"
         
         # Test: Cannot process payment belonging to another customer
@@ -191,7 +191,7 @@ class TestStorefrontPayments:
         )
         other_client = WorkspaceAPIClient(workspace=workspace)
         other_client.force_authenticate(user=other_user)
-        unauthorized_res = other_client.post(f'/api/store/payments/{payment.id}/process/')
+        unauthorized_res = other_client.post(f'/api/v1/store/payments/{payment.id}/process/')
         assert unauthorized_res.status_code == 403, "Should return 403 for unauthorized access"
     
     def test_payment_callback(self, workspace):
@@ -219,12 +219,12 @@ class TestStorefrontPayments:
         # Test: Callback endpoint is accessible (anonymous)
         # Note: Callback endpoint uses gateway_type to lookup PaymentGateway
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        callback_res = anonymous_client.post('/api/store/payments/callback/custom/')
+        callback_res = anonymous_client.post('/api/v1/store/payments/callback/custom/')
         # Callback should return 200 (received) for valid gateway
         assert callback_res.status_code == 200, "Callback should return 200 for valid gateway"
         assert 'status' in callback_res.data, "Response should contain status"
         
         # Test: Callback with non-existent gateway
-        fake_gateway_res = anonymous_client.post('/api/store/payments/callback/non-existent/')
+        fake_gateway_res = anonymous_client.post('/api/v1/store/payments/callback/non-existent/')
         assert fake_gateway_res.status_code == 404, "Should return 404 for non-existent gateway"
 

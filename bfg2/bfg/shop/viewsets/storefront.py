@@ -2,7 +2,7 @@
 Storefront API ViewSets
 
 Customer-facing API endpoints for storefront functionality
-Routes are prefixed with /api/store/
+Routes are prefixed with /api/v1/store/
 """
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -265,7 +265,7 @@ class StorefrontProductViewSet(viewsets.ReadOnlyModelViewSet):
 
 class StorefrontAddressViewSet(viewsets.ModelViewSet):
     """
-    Storefront Address ViewSet - /api/store/addresses/
+    Storefront Address ViewSet - /api/v1/store/addresses/
 
     Mirrors MeAddressViewSet logic without importing it to avoid circular deps.
     """
@@ -408,7 +408,7 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         """
         Get default active store for checkout
         Public endpoint - no authentication required
-        GET /api/store/cart/default_store/
+        GET /api/v1/store/cart/default_store/
         
         Workspace is determined by:
         1. request.workspace (set by WorkspaceMiddleware)

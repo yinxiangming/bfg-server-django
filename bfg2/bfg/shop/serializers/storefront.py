@@ -11,7 +11,7 @@ from bfg.shop.models import (
     Product, ProductVariant, ProductCategory, ProductTag,
     Cart, CartItem, Order, OrderItem, ProductReview
 )
-from bfg.common.serializers import MediaLinkSerializer
+from bfg.common.serializers import MediaLinkSerializer, media_file_url_for_serializer
 from bfg.finance.models import Payment, PaymentGateway
 
 
@@ -117,16 +117,13 @@ class StorefrontProductSerializer(serializers.ModelSerializer):
                 for tag in obj.tags.all()]
     
     def get_primary_image(self, obj):
-        """Get primary product image URL"""
+        """Get primary product image URL (from stored path so seed_images/store/... is correct)."""
         primary_media = obj.primary_image
         if primary_media and primary_media.media:
             request = self.context.get('request')
             if primary_media.media.external_url:
                 return primary_media.media.external_url
-            elif primary_media.media.file and request:
-                return request.build_absolute_uri(primary_media.media.file.url)
-            elif primary_media.media.file:
-                return primary_media.media.file.url
+            return media_file_url_for_serializer(primary_media.media, request)
         return None
     
     def get_images(self, obj):
@@ -137,11 +134,10 @@ class StorefrontProductSerializer(serializers.ModelSerializer):
             if ml.media:
                 if ml.media.external_url:
                     images.append(ml.media.external_url)
-                elif ml.media.file:
-                    if request:
-                        images.append(request.build_absolute_uri(ml.media.file.url))
-                    else:
-                        images.append(ml.media.file.url)
+                else:
+                    url = media_file_url_for_serializer(ml.media, request)
+                    if url:
+                        images.append(url)
         return images
     
     def get_discount_percentage(self, obj):
@@ -232,16 +228,13 @@ class StorefrontCartItemSerializer(serializers.ModelSerializer):
                            'variant_name', 'price', 'subtotal', 'image_url', 'variant_options']
     
     def get_image_url(self, obj):
-        """Get product image URL"""
+        """Get product image URL (from stored path so seed_images/store/... is correct)."""
         primary_media = obj.product.primary_image
         if primary_media and primary_media.media:
             request = self.context.get('request')
             if primary_media.media.external_url:
                 return primary_media.media.external_url
-            elif primary_media.media.file:
-                if request:
-                    return request.build_absolute_uri(primary_media.media.file.url)
-                return primary_media.media.file.url
+            return media_file_url_for_serializer(primary_media.media, request)
         return None
     
     def get_variant_options(self, obj):
@@ -306,7 +299,7 @@ class StorefrontOrderItemSerializer(serializers.ModelSerializer):
         read_only_fields = ['product_name', 'variant_name', 'sku', 'price', 'subtotal', 'image_url']
 
     def get_image_url(self, obj):
-        """Product primary image URL for order item"""
+        """Product primary image URL for order item (from stored path so seed_images/store/... is correct)."""
         primary_media = obj.product.primary_image if obj.product_id else None
         if not primary_media or not getattr(primary_media, 'media', None):
             return None
@@ -314,11 +307,7 @@ class StorefrontOrderItemSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if media.external_url:
             return media.external_url
-        if media.file:
-            if request:
-                return request.build_absolute_uri(media.file.url)
-            return media.file.url
-        return None
+        return media_file_url_for_serializer(media, request)
 
 
 class StorefrontOrderSerializer(serializers.ModelSerializer):

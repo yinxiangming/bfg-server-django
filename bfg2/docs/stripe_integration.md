@@ -156,7 +156,7 @@ function PaymentMethodForm() {
 
 ### 5.1 API 调用
 
-**POST /api/store/payments/intent/**
+**POST /api/v1/store/payments/intent/**
 
 ```json
 {
@@ -240,7 +240,7 @@ if (result.error) {
 在 Stripe Dashboard 中配置 webhook endpoint:
 
 ```
-https://yourdomain.com/api/store/payments/callback/stripe
+https://yourdomain.com/api/v1/store/payments/callback/stripe
 ```
 
 需要监听的事件：
@@ -269,7 +269,7 @@ Webhook 会自动更新支付状态：
 const order = await createOrder(orderData);
 
 // 2. 创建支付意图
-const intentResponse = await fetch('/api/store/payments/intent/', {
+const intentResponse = await fetch('/api/v1/store/payments/intent/', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -314,7 +314,7 @@ if (error) {
 const paymentMethods = await fetch('/api/v1/me/payment-methods/').then(r => r.json());
 
 // 2. 创建支付意图，指定 payment_method_id
-const intentResponse = await fetch('/api/store/payments/intent/', {
+const intentResponse = await fetch('/api/v1/store/payments/intent/', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',

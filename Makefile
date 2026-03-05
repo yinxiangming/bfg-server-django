@@ -1,7 +1,8 @@
-.PHONY: help test-bfg2-e2e test-bfg2-all test-bfg install-bfg2 install reset-migrations
+.PHONY: help test-bfg2-e2e test-bfg2-all test-bfg install-bfg2 install reset-migrations db-create init
 
 help:
 	@echo "Available commands:"
+	@echo "  make init              - migrate + init --seed-data (prompts for admin password)"
 	@echo "  make test-bfg2-e2e     - Run BFG2 end-to-end tests"
 	@echo "  make test-bfg2-all     - Run all BFG2 tests"
 	@echo "  make test-bfg          - Run BFG tests"
@@ -34,6 +35,15 @@ install:
 	@echo "Installing project dependencies..."
 	pip install -r requirements.txt
 
+# Create MySQL database from DATABASE_URL (e.g. mysql://user:pass@127.0.0.1:3306/resale)
+db-create:
+	python manage.py create_db
+
+# Migrate + init workspace and admin, seed_data (sample images + site config). Uses ADMIN_PASSWORD from .env if set.
+init:
+	python manage.py migrate
+	python manage.py init --seed-data
+
 # Reset migrations: clear bfg migration files, drop tables, regenerate and migrate
 reset-migrations:
 	@echo "Removing bfg migration files (keeping __init__.py)..."
@@ -44,5 +54,5 @@ reset-migrations:
 	python manage.py reset_db --no-input
 	@echo "Running migrate..."
 	python manage.py migrate
-	@echo "Done. Run 'python manage.py init' to create workspace and admin."
+	@echo "Done. Run 'make init' to create workspace, admin and seed data."
 

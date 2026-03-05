@@ -136,9 +136,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         if tag_id:
             queryset = queryset.filter(tags__id=tag_id)
         
-        # Filter by language
-        language = self.request.query_params.get('lang', 'en')
-        queryset = queryset.filter(language=language)
+        # Filter by language only when lang is explicitly provided (admin list shows all languages when omitted)
+        lang_param = self.request.query_params.get('lang')
+        if lang_param is not None:
+            queryset = queryset.filter(language=lang_param)
         
         # Filter by featured
         featured = self.request.query_params.get('featured')

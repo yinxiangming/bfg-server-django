@@ -64,7 +64,7 @@
 
 ### 创建支付
 
-1. **前端**: 调用 `/api/store/payments/intent/` 创建支付意图
+1. **前端**: 调用 `/api/v1/store/payments/intent/` 创建支付意图
 2. **后端**: StripeService 创建 Stripe PaymentIntent
 3. **后端**: 返回 `client_secret` 给前端
 4. **前端**: 使用 `stripe.confirmCardPayment()` 确认支付
@@ -88,7 +88,7 @@ POST /api/v1/me/payment-methods/
 ### 2. 创建支付意图
 
 ```
-POST /api/store/payments/intent/
+POST /api/v1/store/payments/intent/
 {
   "order_id": <order_id>,
   "gateway_id": <gateway_id>,
@@ -99,7 +99,7 @@ POST /api/store/payments/intent/
 ### 3. Webhook
 
 ```
-POST /api/store/payments/callback/stripe
+POST /api/v1/store/payments/callback/stripe
 ```
 
 ## 配置要求

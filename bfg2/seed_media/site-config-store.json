@@ -1,0 +1,364 @@
+{
+  "version": "1.0",
+  "site": {
+    "name": "XMart Store",
+    "domain": "localhost",
+    "site_title": "XMart - Fashion & Lifestyle Store",
+    "site_description": "Discover the latest trends in fashion. Shop clothing, shoes, bags, watches and accessories.",
+    "footer_copyright": "© 2025 XMart Store. All rights reserved.",
+    "default_language": "en",
+    "languages": [
+      "en",
+      "zh-hans"
+    ]
+  },
+  "theme": {
+    "code": "store",
+    "name": "XMart Store Theme",
+    "template_path": "themes/store",
+    "primary_color": "#007bff",
+    "secondary_color": "#6c757d"
+  },
+  "pages": [
+    {
+      "slug": "home",
+      "title": "Home",
+      "language": "en",
+      "status": "published",
+      "template": "default",
+      "order": 10,
+      "meta_title": "XMart - Fashion & Lifestyle Store",
+      "meta_description": "Discover the latest trends in fashion. Shop clothing, shoes, bags, watches and accessories.",
+      "blocks": [
+        {
+          "id": "hero-carousel",
+          "type": "hero_carousel_v1",
+          "settings": {
+            "autoPlay": true,
+            "interval": 5000,
+            "showArrows": true,
+            "showDots": true,
+            "height": "500px"
+          },
+          "data": {
+            "source": "promo",
+            "slides": []
+          }
+        },
+        {
+          "id": "content-section",
+          "type": "section_v1",
+          "settings": {},
+          "data": {
+            "width": "container",
+            "children": [
+              {
+                "id": "category-grid",
+                "type": "category_grid_v1",
+                "settings": {
+                  "columns": 4,
+                  "limit": 8,
+                  "showCount": true,
+                  "imageHeight": "180px"
+                },
+                "data": {
+                  "source": "promo"
+                }
+              },
+              {
+                "id": "banner-grid",
+                "type": "banner_grid_v1",
+                "settings": {
+                  "columns": 3,
+                  "imageHeight": "240px",
+                  "showOverlay": true
+                },
+                "data": {
+                  "source": "promo",
+                  "banners": []
+                }
+              },
+              {
+                "id": "featured-products",
+                "type": "product_grid_v1",
+                "settings": {
+                  "columns": 4,
+                  "limit": 8,
+                  "showTitle": true,
+                  "altBackground": true
+                },
+                "data": {
+                  "source": "auto",
+                  "productType": "featured",
+                  "title": {
+                    "en": "Featured Products",
+                    "zh-hans": "精选商品"
+                  },
+                  "emptyMessage": {
+                    "en": "No featured products yet.",
+                    "zh-hans": "暂无精选商品。"
+                  }
+                }
+              },
+              {
+                "id": "new-products",
+                "type": "product_grid_v1",
+                "settings": {
+                  "columns": 4,
+                  "limit": 4,
+                  "showTitle": true,
+                  "altBackground": false
+                },
+                "data": {
+                  "source": "auto",
+                  "productType": "new",
+                  "title": {
+                    "en": "New Arrivals",
+                    "zh-hans": "新品上架"
+                  },
+                  "emptyMessage": {
+                    "en": "No new products yet.",
+                    "zh-hans": "暂无新品。"
+                  }
+                }
+              },
+              {
+                "id": "bestseller-products",
+                "type": "product_grid_v1",
+                "settings": {
+                  "columns": 4,
+                  "limit": 4,
+                  "showTitle": true,
+                  "altBackground": true
+                },
+                "data": {
+                  "source": "auto",
+                  "productType": "bestseller",
+                  "title": {
+                    "en": "Bestsellers",
+                    "zh-hans": "畅销榜"
+                  },
+                  "emptyMessage": {
+                    "en": "No bestsellers yet.",
+                    "zh-hans": "暂无畅销商品。"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "slug": "about",
+      "title": "About Us",
+      "language": "en",
+      "status": "published",
+      "order": 20,
+      "meta_title": "About Us - XMart Store",
+      "meta_description": "Learn more about XMart fashion store.",
+      "blocks": [
+        {
+          "id": "about-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>About Us</h1><p>Welcome to XMart Store, your destination for the latest fashion trends. We offer a curated selection of clothing, shoes, bags, watches and accessories for men and women.</p><p>Our mission is to make fashion accessible and enjoyable for everyone. We source quality products from trusted suppliers around the world.</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "contact",
+      "title": "Contact Us",
+      "language": "en",
+      "status": "published",
+      "order": 21,
+      "meta_title": "Contact Us - XMart Store",
+      "meta_description": "Get in touch with the XMart Store team.",
+      "blocks": [
+        {
+          "id": "contact-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Contact Us</h1><p>Have questions? We'd love to hear from you. Send us a message and we'll respond as soon as possible.</p><p>Email: support@XMart.com</p><p>Phone: +1 (555) 000-0000</p><p>Hours: Monday – Friday, 9am – 6pm EST</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "delivery",
+      "title": "Delivery",
+      "language": "en",
+      "status": "published",
+      "order": 30,
+      "meta_title": "Delivery Information - XMart Store",
+      "meta_description": "Learn about our delivery options and shipping times.",
+      "blocks": [
+        {
+          "id": "delivery-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Delivery</h1><p>We offer reliable delivery options across the globe.</p><ul><li><strong>Standard Shipping:</strong> 3–5 business days</li><li><strong>Express Shipping:</strong> 1–2 business days</li><li><strong>Free shipping</strong> on orders over $75</li></ul><p>Orders placed before 2pm EST ship the same day. You will receive a tracking number by email once your order ships.</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "legal-notice",
+      "title": "Legal Notice",
+      "language": "en",
+      "status": "published",
+      "order": 31,
+      "blocks": [
+        {
+          "id": "legal-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Legal Notice</h1><p>This is the legal notice and imprint for XMart Store. Please contact us for any legal inquiries at legal@XMart.com.</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "terms",
+      "title": "Terms and Conditions",
+      "language": "en",
+      "status": "published",
+      "order": 32,
+      "blocks": [
+        {
+          "id": "terms-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Terms and Conditions</h1><p>By using this site you agree to our terms of use. Please read them carefully before placing an order.</p><p>XMart Store reserves the right to modify these terms at any time. Continued use of the site constitutes acceptance of the updated terms.</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "secure-payment",
+      "title": "Secure Payment",
+      "language": "en",
+      "status": "published",
+      "order": 33,
+      "blocks": [
+        {
+          "id": "payment-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Secure Payment</h1><p>All payments are processed securely using industry-standard encryption. We accept Visa, Mastercard, American Express, PayPal and Apple Pay.</p><p>We do not store your card details. All transactions are protected by SSL encryption.</p>"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "menus": [
+    {
+      "slug": "main-menu",
+      "name": "Main Menu",
+      "location": "header",
+      "language": "en",
+      "items": [
+        {
+          "title": "Clothes",
+          "url": "/category/clothes",
+          "order": 1
+        },
+        {
+          "title": "Shoes",
+          "url": "/category/shoes",
+          "order": 2
+        },
+        {
+          "title": "Bags",
+          "url": "/category/bag",
+          "order": 3
+        },
+        {
+          "title": "Watches",
+          "url": "/category/watch",
+          "order": 4
+        },
+        {
+          "title": "Accessories",
+          "url": "/category/cap",
+          "order": 5
+        },
+        {
+          "title": "Contact",
+          "page_slug": "contact",
+          "order": 6
+        }
+      ]
+    },
+    {
+      "slug": "footer-menu",
+      "name": "Our Company",
+      "location": "footer",
+      "language": "en",
+      "items": [
+        {
+          "title": "Delivery",
+          "page_slug": "delivery",
+          "order": 1
+        },
+        {
+          "title": "Legal Notice",
+          "page_slug": "legal-notice",
+          "order": 2
+        },
+        {
+          "title": "Terms",
+          "page_slug": "terms",
+          "order": 3
+        },
+        {
+          "title": "About Us",
+          "page_slug": "about",
+          "order": 4
+        },
+        {
+          "title": "Secure Payment",
+          "page_slug": "secure-payment",
+          "order": 5
+        }
+      ]
+    }
+  ]
+}

@@ -17,7 +17,6 @@ urlpatterns = [
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
-    path('api/store/', include('bfg.shop.urls_storefront')),
     path('api/v1/', include([
         path('auth/', include([
             path('register/', register, name='register'),
@@ -36,6 +35,7 @@ urlpatterns = [
         path('', include('bfg.support.urls')),
         path('inbox/', include('bfg.inbox.urls')),
         path('', include('bfg.finance.urls')),
+        path('store/', include('bfg.shop.urls_storefront')),
         *[path(f'{app}/', include(f'apps.{app}.urls')) for app in get_local_apps()],
     ])),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + static(

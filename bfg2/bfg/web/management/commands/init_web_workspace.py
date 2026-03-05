@@ -39,13 +39,13 @@ class Command(BaseCommand):
         parser.add_argument(
             '--no-load-site',
             action='store_true',
-            help='Skip loading site-config-xmart.json',
+            help='Skip loading site-config-store.json',
         )
         parser.add_argument(
             '--config',
             type=str,
             default=None,
-            help='Path to site config JSON (default: web/design/site-config-xmart.json relative to project)',
+            help='Path to site config JSON (default: web/design/site-config-store.json relative to project)',
         )
 
     def handle(self, *args, **options):
@@ -106,7 +106,7 @@ class Command(BaseCommand):
                 for _ in range(5):
                     base = base.parent
                 project_root = base.parent
-                candidate = project_root / 'web' / 'design' / 'site-config-xmart.json'
+                candidate = project_root / 'web' / 'design' / 'site-config-store.json'
                 if candidate.exists():
                     config_path = str(candidate)
             if config_path and Path(config_path).exists():
@@ -116,7 +116,7 @@ class Command(BaseCommand):
                 service.load_from_config(config, created_by_user=user, mode='merge')
                 self.stdout.write(self.style.SUCCESS('Loaded site config (Site, Pages, Menus)'))
             else:
-                self.stdout.write(self.style.WARNING('Site config not found (expected web/design/site-config-xmart.json); skip with --no-load-site'))
+                self.stdout.write(self.style.WARNING('Site config not found (expected web/design/site-config-store.json); skip with --no-load-site'))
 
         self.stdout.write('')
         self.stdout.write(self.style.SUCCESS(f'Workspace id: {workspace.id}'))

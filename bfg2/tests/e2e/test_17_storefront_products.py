@@ -74,7 +74,7 @@ class TestStorefrontProducts:
         
         # Test: Anonymous user can browse products
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        browse_res = anonymous_client.get('/api/store/products/')
+        browse_res = anonymous_client.get('/api/v1/store/products/')
         assert browse_res.status_code == 200
         
         # Handle both paginated and non-paginated responses
@@ -95,15 +95,15 @@ class TestStorefrontProducts:
         assert 'variants' in our_product
         
         # Test: Filter by category
-        filter_res = anonymous_client.get('/api/store/products/?category=electronics')
+        filter_res = anonymous_client.get('/api/v1/store/products/?category=electronics')
         assert filter_res.status_code == 200
         
         # Test: Search
-        search_res = anonymous_client.get('/api/store/products/?q=headphones')
+        search_res = anonymous_client.get('/api/v1/store/products/?q=headphones')
         assert search_res.status_code == 200
         
         # Test: Get product by slug
-        detail_res = anonymous_client.get(f'/api/store/products/wireless-headphones/')
+        detail_res = anonymous_client.get(f'/api/v1/store/products/wireless-headphones/')
         assert detail_res.status_code == 200
         assert detail_res.data['name'] == "Wireless Headphones"
         assert len(detail_res.data['variants']) > 0
@@ -141,7 +141,7 @@ class TestStorefrontProducts:
         
         # Test: Product detail contains enhanced fields
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        detail_res = anonymous_client.get(f'/api/store/products/test-product/')
+        detail_res = anonymous_client.get(f'/api/v1/store/products/test-product/')
         assert detail_res.status_code == 200
         
         product = detail_res.data
@@ -202,25 +202,25 @@ class TestStorefrontProducts:
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
         
         # Test: Filter by featured
-        featured_list = anonymous_client.get('/api/store/products/?featured=true')
+        featured_list = anonymous_client.get('/api/v1/store/products/?featured=true')
         assert featured_list.status_code == 200
         products = featured_list.data if isinstance(featured_list.data, list) else featured_list.data.get('results', [])
         featured_products = [p for p in products if p['id'] == featured_id]
         assert len(featured_products) > 0
         
         # Test: Filter by is_new
-        new_list = anonymous_client.get('/api/store/products/?is_new=true')
+        new_list = anonymous_client.get('/api/v1/store/products/?is_new=true')
         assert new_list.status_code == 200
         products = new_list.data if isinstance(new_list.data, list) else new_list.data.get('results', [])
         # Both products should be new (created recently)
         assert len(products) >= 2
         
         # Test: Bestseller filter (requires orders, will be empty initially)
-        bestseller_list = anonymous_client.get('/api/store/products/?bestseller=true')
+        bestseller_list = anonymous_client.get('/api/v1/store/products/?bestseller=true')
         assert bestseller_list.status_code == 200
         
         # Test: Limit parameter
-        limited_list = anonymous_client.get('/api/store/products/?limit=1')
+        limited_list = anonymous_client.get('/api/v1/store/products/?limit=1')
         assert limited_list.status_code == 200
         products = limited_list.data if isinstance(limited_list.data, list) else limited_list.data.get('results', [])
         assert len(products) <= 1
@@ -281,7 +281,7 @@ class TestStorefrontProducts:
         
         # Test: GET reviews (anonymous) - use slug since lookup_field is slug
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        reviews_res = anonymous_client.get('/api/store/products/reviewable-product/reviews/')
+        reviews_res = anonymous_client.get('/api/v1/store/products/reviewable-product/reviews/')
         assert reviews_res.status_code == 200
         assert isinstance(reviews_res.data, list)
         assert len(reviews_res.data) == 1
@@ -294,7 +294,7 @@ class TestStorefrontProducts:
         assert isinstance(reviews_res.data[0]['images'], list)
         
         # Test: Filter reviews by rating
-        filtered_reviews = anonymous_client.get('/api/store/products/reviewable-product/reviews/?rating=5')
+        filtered_reviews = anonymous_client.get('/api/v1/store/products/reviewable-product/reviews/?rating=5')
         assert filtered_reviews.status_code == 200
         assert len(filtered_reviews.data) == 1
         
@@ -317,7 +317,7 @@ class TestStorefrontProducts:
         customer_client2 = WorkspaceAPIClient(workspace=workspace)
         customer_client2.force_authenticate(user=customer_user2)
         
-        create_review_res = customer_client2.post('/api/store/products/reviewable-product/reviews/', {
+        create_review_res = customer_client2.post('/api/v1/store/products/reviewable-product/reviews/', {
             "rating": 4,
             "title": "Good product",
             "comment": "Pretty good, but could be better",
@@ -331,7 +331,7 @@ class TestStorefrontProducts:
         # Note: images field should be saved but may be processed differently
         
         # Test: Cannot create duplicate review
-        duplicate_res = customer_client2.post('/api/store/products/reviewable-product/reviews/', {
+        duplicate_res = customer_client2.post('/api/v1/store/products/reviewable-product/reviews/', {
             "rating": 5,
             "title": "Duplicate",
             "comment": "Should fail"
@@ -340,7 +340,7 @@ class TestStorefrontProducts:
         
         # Test: Product rating and reviews_count updated
         # Note: New reviews require approval, so only the first approved review counts
-        detail_res = anonymous_client.get('/api/store/products/reviewable-product/')
+        detail_res = anonymous_client.get('/api/v1/store/products/reviewable-product/')
         assert detail_res.status_code == 200
         # Only approved reviews are counted (first review was approved, second needs approval)
         assert detail_res.data['reviews_count'] == 1
@@ -358,12 +358,12 @@ class TestStorefrontProducts:
             new_review.save()
             
             # Check again - should now have 2 reviews
-            detail_res2 = anonymous_client.get('/api/store/products/reviewable-product/')
+            detail_res2 = anonymous_client.get('/api/v1/store/products/reviewable-product/')
             assert detail_res2.data['reviews_count'] == 2
             assert detail_res2.data['rating'] == 4.5  # (5 + 4) / 2 = 4.5
         
         # Test: Unauthenticated cannot create review
-        unauth_res = anonymous_client.post('/api/store/products/reviewable-product/reviews/', {
+        unauth_res = anonymous_client.post('/api/v1/store/products/reviewable-product/reviews/', {
             "rating": 3,
             "title": "Should fail",
             "comment": "Not authenticated"
@@ -412,7 +412,7 @@ class TestStorefrontProducts:
         
         # Test: Variant options in storefront API
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
-        detail_res = anonymous_client.get(f'/api/store/products/variant-product/')
+        detail_res = anonymous_client.get(f'/api/v1/store/products/variant-product/')
         assert detail_res.status_code == 200
         
         variants = detail_res.data['variants']
@@ -463,7 +463,7 @@ class TestStorefrontProducts:
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
         
         # Test: Sort by price ascending
-        price_asc_res = anonymous_client.get('/api/store/products/?sort=price_asc')
+        price_asc_res = anonymous_client.get('/api/v1/store/products/?sort=price_asc')
         assert price_asc_res.status_code == 200
         products = price_asc_res.data if isinstance(price_asc_res.data, list) else price_asc_res.data.get('results', [])
         prices = [Decimal(str(p['price'])) for p in products if p.get('price')]
@@ -471,7 +471,7 @@ class TestStorefrontProducts:
             assert prices == sorted(prices), "Products should be sorted by price ascending"
         
         # Test: Sort by price descending
-        price_desc_res = anonymous_client.get('/api/store/products/?sort=price_desc')
+        price_desc_res = anonymous_client.get('/api/v1/store/products/?sort=price_desc')
         assert price_desc_res.status_code == 200
         products = price_desc_res.data if isinstance(price_desc_res.data, list) else price_desc_res.data.get('results', [])
         prices = [Decimal(str(p['price'])) for p in products if p.get('price')]
@@ -479,7 +479,7 @@ class TestStorefrontProducts:
             assert prices == sorted(prices, reverse=True), "Products should be sorted by price descending"
         
         # Test: Sort by name
-        name_res = anonymous_client.get('/api/store/products/?sort=name')
+        name_res = anonymous_client.get('/api/v1/store/products/?sort=name')
         assert name_res.status_code == 200
         products = name_res.data if isinstance(name_res.data, list) else name_res.data.get('results', [])
         names = [p['name'] for p in products if p.get('name')]
@@ -487,7 +487,7 @@ class TestStorefrontProducts:
             assert names == sorted(names), "Products should be sorted by name"
         
         # Test: Sort by sales (bestseller)
-        sales_res = anonymous_client.get('/api/store/products/?sort=sales')
+        sales_res = anonymous_client.get('/api/v1/store/products/?sort=sales')
         assert sales_res.status_code == 200
         # Sales sort should not raise errors even if no orders exist
     
@@ -554,14 +554,14 @@ class TestStorefrontProducts:
         anonymous_client = WorkspaceAPIClient(workspace=workspace)
         
         # Test: Filter by tag
-        tag_filter_res = anonymous_client.get('/api/store/products/?tag=premium')
+        tag_filter_res = anonymous_client.get('/api/v1/store/products/?tag=premium')
         assert tag_filter_res.status_code == 200
         products = tag_filter_res.data if isinstance(tag_filter_res.data, list) else tag_filter_res.data.get('results', [])
         premium_product = next((p for p in products if p['slug'] == 'premium-product'), None)
         assert premium_product is not None, "Should find premium product"
         
         # Test: Filter by min_price
-        min_price_res = anonymous_client.get('/api/store/products/?min_price=50')
+        min_price_res = anonymous_client.get('/api/v1/store/products/?min_price=50')
         assert min_price_res.status_code == 200
         products = min_price_res.data if isinstance(min_price_res.data, list) else min_price_res.data.get('results', [])
         for product in products:
@@ -569,7 +569,7 @@ class TestStorefrontProducts:
                 assert Decimal(str(product['price'])) >= Decimal('50.00'), "All products should be >= min_price"
         
         # Test: Filter by max_price
-        max_price_res = anonymous_client.get('/api/store/products/?max_price=100')
+        max_price_res = anonymous_client.get('/api/v1/store/products/?max_price=100')
         assert max_price_res.status_code == 200
         products = max_price_res.data if isinstance(max_price_res.data, list) else max_price_res.data.get('results', [])
         for product in products:
@@ -577,7 +577,7 @@ class TestStorefrontProducts:
                 assert Decimal(str(product['price'])) <= Decimal('100.00'), "All products should be <= max_price"
         
         # Test: Filter by price range
-        range_res = anonymous_client.get('/api/store/products/?min_price=50&max_price=100')
+        range_res = anonymous_client.get('/api/v1/store/products/?min_price=50&max_price=100')
         assert range_res.status_code == 200
         products = range_res.data if isinstance(range_res.data, list) else range_res.data.get('results', [])
         for product in products:
@@ -586,7 +586,7 @@ class TestStorefrontProducts:
                 assert Decimal('50.00') <= price <= Decimal('100.00'), "All products should be in price range"
         
         # Test: Combined filters (tag + price)
-        combined_res = anonymous_client.get('/api/store/products/?tag=premium&min_price=50&max_price=100')
+        combined_res = anonymous_client.get('/api/v1/store/products/?tag=premium&min_price=50&max_price=100')
         assert combined_res.status_code == 200
         products = combined_res.data if isinstance(combined_res.data, list) else combined_res.data.get('results', [])
         premium_product = next((p for p in products if p['slug'] == 'premium-product'), None)

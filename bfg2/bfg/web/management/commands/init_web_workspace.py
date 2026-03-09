@@ -5,12 +5,12 @@ Usage: python manage.py init_web_workspace [--no-load-site]
 Outputs workspace id for use with client: PORT=3001 NEXT_PUBLIC_WORKSPACE_ID=<id> npm run dev
 """
 
-import os
 import json
 from pathlib import Path
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
 from bfg.common.models import Workspace, StaffRole, StaffMember
+from bfg.common.utils import get_admin_password_from_env
 from bfg.core.events import global_dispatcher
 from bfg.web.services import SiteConfigService
 
@@ -67,7 +67,9 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING('Added admin role to existing web workspace'))
 
         # 2. Get or create webadmin user
-        admin_password = os.getenv('ADMIN_PASSWORD', 'admin123')
+        admin_password = get_admin_password_from_env()
+        if not admin_password:
+            raise ValueError('ADMIN_PASSWORD is required')
         user, user_created = User.objects.get_or_create(
             username='webadmin',
             defaults={
@@ -122,4 +124,4 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f'Workspace id: {workspace.id}'))
         self.stdout.write('Start client on port 3001 with this workspace:')
         self.stdout.write(f'  cd client && PORT=3001 NEXT_PUBLIC_WORKSPACE_ID={workspace.id} npm run dev')
-        self.stdout.write('Login: webadmin / ' + admin_password)
+        self.stdout.write('Login: webadmin / (from ADMIN_PASSWORD env)')

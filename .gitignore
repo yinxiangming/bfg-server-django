@@ -12,5 +12,6 @@ celerybeat-schedule*
 __pycache__/
 .pytest_cache/
 
-# Local apps (submodules)
-apps/*/
+# Extension apps (submodules or symlinks)
+apps/*
+!apps/__init__.py

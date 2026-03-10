@@ -184,6 +184,12 @@ def get_required_workspace(request, allow_fallback_in_debug=True):
     )
 
 
+def get_admin_password_from_env():
+    """Return ADMIN_PASSWORD from environment; no default. Single place for this env var."""
+    import os
+    return os.environ.get('ADMIN_PASSWORD', '')
+
+
 def get_smtp_config_from_env():
     """
     Build SMTP config dict for EmailConfig from env (EMAIL_HOST, EMAIL_PORT, etc.).

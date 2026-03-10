@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from .models import (
     Workspace, Customer, CustomerSegment, CustomerTag, Address, StaffRole, StaffMember, EmailConfig, Settings
 )
-from .utils import get_smtp_config_from_env
+from .utils import get_smtp_config_from_env, get_admin_password_from_env
 
 # Minimal country list for seed and options API
 COUNTRY_LIST = [
@@ -104,9 +104,10 @@ def seed_data(workspace, stdout=None, style=None, **context):
 
 
 def create_admin_user(workspace, stdout=None, style=None):
-    """Create admin user with password from environment variable and ensure it's workspace admin"""
-    # Get admin password from environment variable, default to admin123
-    admin_password = os.getenv('ADMIN_PASSWORD', 'admin123')
+    """Create admin user with password from ADMIN_PASSWORD env and ensure it's workspace admin."""
+    admin_password = get_admin_password_from_env()
+    if not admin_password:
+        raise ValueError('ADMIN_PASSWORD is required for seeding admin user')
     
     user, created = User.objects.get_or_create(
         username='admin',

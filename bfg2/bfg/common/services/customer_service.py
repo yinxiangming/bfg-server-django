@@ -162,18 +162,28 @@ class CustomerService(BaseService):
                 'currency': 'NZD'
             }
         
-        # Get or create wallet for customer
+        # Get or create wallet for customer in this workspace
+        workspace = getattr(self, 'workspace', None) or getattr(customer, 'workspace', None)
+        if not workspace:
+            return {
+                'balance': float(customer.balance or 0),
+                'credit_limit': float(customer.credit_limit or 0),
+                'currency': 'NZD'
+            }
         wallet, _ = Wallet.objects.get_or_create(
+            workspace=workspace,
             customer=customer,
             defaults={
-                'balance': customer.balance or Decimal('0'),
+                'cash_balance': customer.balance or Decimal('0'),
+                'credit_balance': Decimal('0'),
                 'credit_limit': customer.credit_limit or Decimal('0'),
                 'currency': Currency.objects.filter(code='NZD').first() or Currency.objects.first()
             }
         )
-        
         return {
             'balance': float(wallet.balance),
+            'cash_balance': float(wallet.cash_balance),
+            'credit_balance': float(wallet.credit_balance),
             'credit_limit': float(wallet.credit_limit),
             'currency': wallet.currency.code if wallet.currency else 'NZD'
         }
@@ -225,19 +235,28 @@ class CustomerService(BaseService):
                 'currency': 'NZD'
             }
         
-        # Get or create wallet
+        # Get or create wallet in this workspace
+        workspace = getattr(self, 'workspace', None) or getattr(customer, 'workspace', None)
+        if not workspace:
+            customer.balance = (customer.balance or Decimal('0')) + amount_decimal
+            customer.save(update_fields=['balance'])
+            return {
+                'balance': float(customer.balance),
+                'credit_limit': float(customer.credit_limit or 0),
+                'currency': 'NZD'
+            }
         wallet, created = Wallet.objects.get_or_create(
+            workspace=workspace,
             customer=customer,
             defaults={
-                'balance': customer.balance or Decimal('0'),
+                'cash_balance': customer.balance or Decimal('0'),
+                'credit_balance': Decimal('0'),
                 'credit_limit': customer.credit_limit or Decimal('0'),
                 'currency': Currency.objects.filter(code='NZD').first() or Currency.objects.first()
             }
         )
-        
-        # Update wallet balance
-        wallet.balance += amount_decimal
-        wallet.save()
+        wallet.cash_balance += amount_decimal
+        wallet.save(update_fields=['cash_balance', 'updated_at'])
         
         # Create transaction record
         try:
@@ -268,6 +287,8 @@ class CustomerService(BaseService):
         
         return {
             'balance': float(wallet.balance),
+            'cash_balance': float(wallet.cash_balance),
+            'credit_balance': float(wallet.credit_balance),
             'credit_limit': float(wallet.credit_limit),
             'currency': wallet.currency.code if wallet.currency else 'NZD'
         }

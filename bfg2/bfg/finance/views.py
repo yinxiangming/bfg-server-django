@@ -9,20 +9,23 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.http import HttpResponse
+from django.utils import timezone
 
 from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, CanManagePayments, CanManageInvoices
 from bfg.finance.models import (
     Currency, PaymentGateway, PaymentMethod, Brand, FinancialCode,
-    Invoice, Payment, Refund, TaxRate, Transaction
+    Invoice, Payment, Refund, TaxRate, Transaction, Wallet, WithdrawalRequest,
 )
 from bfg.finance.serializers import (
     CurrencySerializer, PaymentGatewaySerializer, PaymentMethodSerializer,
     BrandSerializer, FinancialCodeSerializer,
     InvoiceListSerializer, InvoiceDetailSerializer, InvoiceCreateSerializer,
     PaymentSerializer, RefundSerializer, TaxRateSerializer,
-    TransactionSerializer
+    TransactionSerializer, WalletSerializer, WithdrawalRequestSerializer,
+    WithdrawalRequestCreateSerializer,
 )
-from bfg.finance.services import PaymentService, InvoiceService, TaxService
+from bfg.finance.exceptions import InsufficientFunds
+from bfg.finance.services import PaymentService, InvoiceService, TaxService, WalletService
 
 
 class CurrencyViewSet(viewsets.ModelViewSet):
@@ -824,3 +827,146 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
         return Transaction.objects.filter(
             workspace=self.request.workspace
         ).select_related('customer', 'currency').order_by('-created_at')
+
+
+def _get_workspace(request):
+    workspace = getattr(request, 'workspace', None)
+    if not workspace:
+        from rest_framework.exceptions import NotFound
+        raise NotFound("No workspace available. Ensure X-Workspace-ID header is set.")
+    return workspace
+
+
+def _get_customer_for_user(request):
+    """Return Customer for request.user in request.workspace, or None."""
+    from bfg.common.models import Customer
+    workspace = _get_workspace(request)
+    return Customer.objects.filter(workspace=workspace, user=request.user).first()
+
+
+def _is_workspace_staff(request):
+    """True if request.user is staff (or superuser) for request.workspace."""
+    if not request.user or not request.user.is_authenticated:
+        return False
+    if getattr(request.user, 'is_superuser', False):
+        return True
+    from bfg.common.models import StaffMember
+    workspace = getattr(request, 'workspace', None)
+    if not workspace:
+        return False
+    return StaffMember.objects.filter(
+        workspace=workspace, user=request.user, is_active=True
+    ).exists()
+
+
+class WalletViewSet(viewsets.ReadOnlyModelViewSet):
+    """Wallet list/retrieve; customers see only own wallet, staff see workspace wallets."""
+    serializer_class = WalletSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        workspace = _get_workspace(self.request)
+        qs = Wallet.objects.filter(workspace=workspace).select_related('customer', 'currency')
+        if not _is_workspace_staff(self.request):
+            customer = _get_customer_for_user(self.request)
+            if not customer:
+                return Wallet.objects.none()
+            return qs.filter(customer=customer)
+        return qs
+
+    @action(detail=True, methods=['post'], url_path='withdraw')
+    def withdraw(self, request, pk=None):
+        """Create a withdrawal request (customer). Balance is deducted only after staff approval."""
+        wallet = self.get_object()
+        customer = _get_customer_for_user(request)
+        if not customer or wallet.customer_id != customer.id:
+            return Response({'detail': 'You can only withdraw from your own wallet.'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = WithdrawalRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        amount = serializer.validated_data['amount']
+        if wallet.cash_balance < amount:
+            return Response(
+                {'detail': f'Insufficient cash balance. Available: {wallet.cash_balance}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        req = WithdrawalRequest.objects.create(
+            wallet=wallet,
+            amount=amount,
+            status='pending',
+            payout_method=serializer.validated_data.get('payout_method', ''),
+            payout_details=serializer.validated_data.get('payout_details', {}),
+            notes=serializer.validated_data.get('notes', ''),
+            requested_by=request.user,
+        )
+        return Response(WithdrawalRequestSerializer(req).data, status=status.HTTP_201_CREATED)
+
+
+class WithdrawalRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    """Withdrawal requests; staff can approve/reject."""
+    serializer_class = WithdrawalRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        workspace = _get_workspace(self.request)
+        qs = WithdrawalRequest.objects.filter(wallet__workspace=workspace).select_related(
+            'wallet', 'wallet__customer', 'requested_by', 'approved_by'
+        )
+        if not _is_workspace_staff(self.request):
+            customer = _get_customer_for_user(self.request)
+            if not customer:
+                return WithdrawalRequest.objects.none()
+            return qs.filter(wallet__customer=customer)
+        return qs
+
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        """Staff: approve withdrawal, deduct cash_balance and create Transaction via WalletService."""
+        from django.db import transaction as db_transaction
+        if not _is_workspace_staff(request):
+            return Response({'detail': 'Only staff can approve withdrawals.'}, status=status.HTTP_403_FORBIDDEN)
+        wr = self.get_object()
+        if wr.status != 'pending':
+            return Response({'detail': f'Request is not pending (status={wr.status}).'}, status=status.HTTP_400_BAD_REQUEST)
+        if wr.wallet.cash_balance < wr.amount:
+            return Response({'detail': 'Insufficient wallet cash balance.'}, status=status.HTTP_400_BAD_REQUEST)
+        wallet_svc = WalletService(workspace=wr.wallet.workspace, user=request.user)
+        try:
+            with db_transaction.atomic():
+                t = wallet_svc.record_wallet_transaction(
+                    wr.wallet,
+                    -wr.amount,
+                    'cash',
+                    'withdrawal',
+                    source_type='withdrawal_request',
+                    source_id=wr.id,
+                    description=f'Withdrawal #{wr.id}',
+                    created_by=request.user,
+                )
+                wr.transaction = t
+                wr.status = 'completed'
+                wr.approved_by = request.user
+                wr.approved_at = timezone.now()
+                wr.completed_at = timezone.now()
+                wr.save(update_fields=['transaction', 'status', 'approved_by', 'approved_at', 'completed_at'])
+        except InsufficientFunds as e:
+            return Response(
+                {'detail': str(e.message), 'code': getattr(e, 'code', 'insufficient_funds')},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(WithdrawalRequestSerializer(wr).data)
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        """Staff: reject withdrawal."""
+        if not _is_workspace_staff(request):
+            return Response({'detail': 'Only staff can reject withdrawals.'}, status=status.HTTP_403_FORBIDDEN)
+        wr = self.get_object()
+        if wr.status != 'pending':
+            return Response({'detail': f'Request is not pending (status={wr.status}).'}, status=status.HTTP_400_BAD_REQUEST)
+        rejection_reason = (request.data.get('rejection_reason') or '').strip()
+        wr.status = 'rejected'
+        wr.rejection_reason = rejection_reason
+        wr.approved_by = request.user
+        wr.approved_at = timezone.now()
+        wr.save(update_fields=['status', 'rejection_reason', 'approved_by', 'approved_at'])
+        return Response(WithdrawalRequestSerializer(wr).data)

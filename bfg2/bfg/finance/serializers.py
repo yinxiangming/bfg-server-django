@@ -7,7 +7,8 @@ Serializers for finance module models
 from rest_framework import serializers
 from bfg.finance.models import (
     Currency, PaymentGateway, PaymentMethod, Brand, FinancialCode,
-    Invoice, InvoiceItem, Payment, Refund, TaxRate, Transaction
+    Invoice, InvoiceItem, Payment, Refund, TaxRate, Transaction,
+    Wallet, WithdrawalRequest,
 )
 
 
@@ -711,6 +712,7 @@ class TransactionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'transaction_type', 'customer', 'customer_name',
             'amount', 'currency', 'currency_code',
+            'wallet', 'balance_type', 'tx_status', 'source_type', 'source_id',
             'payment', 'invoice', 'description', 'notes',
             'created_at', 'created_by', 'created_by_name'
         ]
@@ -723,3 +725,34 @@ class TransactionSerializer(serializers.ModelSerializer):
                 return obj.created_by.get_full_name()
             return obj.created_by.username
         return None
+
+
+class WalletSerializer(serializers.ModelSerializer):
+    balance = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    currency_code = serializers.CharField(source='currency.code', read_only=True)
+
+    class Meta:
+        model = Wallet
+        fields = [
+            'id', 'workspace', 'customer', 'cash_balance', 'credit_balance',
+            'balance', 'currency', 'currency_code', 'credit_limit', 'updated_at',
+        ]
+        read_only_fields = ['id', 'workspace', 'customer', 'cash_balance', 'credit_balance', 'updated_at']
+
+
+class WithdrawalRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WithdrawalRequest
+        fields = [
+            'id', 'wallet', 'amount', 'status', 'payout_method', 'payout_details',
+            'notes', 'rejection_reason', 'requested_at', 'requested_by',
+            'approved_by', 'approved_at', 'completed_at',
+        ]
+        read_only_fields = ['id', 'requested_at', 'approved_by', 'approved_at', 'completed_at']
+
+
+class WithdrawalRequestCreateSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0.01)
+    payout_method = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    payout_details = serializers.JSONField(required=False, default=dict)
+    notes = serializers.CharField(required=False, allow_blank=True)

@@ -447,10 +447,15 @@ def create_wallets(customers, currencies, stdout=None, style=None):
     wallets = []
     currency = currencies[0]
     for customer in customers:
+        workspace = getattr(customer, 'workspace', None)
+        if not workspace:
+            continue
         wallet, created = Wallet.objects.get_or_create(
+            workspace=workspace,
             customer=customer,
             defaults={
-                'balance': Decimal(f'{100.00 + customer.id * 10}'),
+                'cash_balance': Decimal(f'{100.00 + customer.id * 10}'),
+                'credit_balance': Decimal('0'),
                 'currency': currency,
                 'credit_limit': Decimal('500.00'),
             }

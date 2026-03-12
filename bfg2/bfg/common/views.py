@@ -35,6 +35,7 @@ from bfg.common.serializers import (
 )
 from bfg.common.services import WorkspaceService, CustomerService, AddressService
 from bfg.common.utils import get_required_workspace
+from bfg.common.constants import get_default_currency_for_workspace, DEFAULT_CURRENCY_CODE
 
 # Strip known footer menu name prefixes (e.g. "footer-", localized equivalents)
 FOOTER_MENU_NAME_PREFIXES = ('footer-')
@@ -692,7 +693,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'facebook_url': settings_obj.facebook_url or '',
             'twitter_url': settings_obj.twitter_url or '',
             'instagram_url': settings_obj.instagram_url or '',
-            'default_currency': settings_obj.default_currency or 'NZD',
+            'default_currency': settings_obj.default_currency or DEFAULT_CURRENCY_CODE,
             'top_bar_announcement': general_custom.get('top_bar_announcement', ''),
             'footer_copyright': general_custom.get('footer_copyright', ''),
             'site_announcement': general_custom.get('site_announcement', ''),
@@ -1337,6 +1338,89 @@ class MeOrdersViewSet(viewsets.ReadOnlyModelViewSet):
         order = service.cancel_order(order, reason)
         serializer = self.get_serializer(order)
         return Response(serializer.data)
+
+
+class MeDashboardStatsView(APIView):
+    """
+    GET /api/v1/me/dashboard-stats/ - Stats for account dashboard:
+    wallet_balance, order_counts by status, unread_messages_count, resale (listings, sold).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import Count
+        from bfg.shop.models import Order
+
+        workspace = get_required_workspace(request)
+        customer, _ = Customer.objects.get_or_create(
+            user=request.user,
+            workspace=workspace,
+            defaults={'is_active': True},
+        )
+
+        workspace_default_currency = get_default_currency_for_workspace(workspace)
+
+        # Wallet: first wallet for customer (cash_balance + currency)
+        wallet_balance = None
+        wallet_currency = None
+        try:
+            from bfg.finance.models import Wallet
+            wallet = Wallet.objects.filter(
+                workspace=workspace, customer=customer
+            ).select_related('currency').first()
+            if wallet:
+                wallet_balance = float(wallet.cash_balance)
+                wallet_currency = wallet.currency.code if wallet.currency_id else None
+        except Exception:
+            pass
+        if wallet_currency is None:
+            wallet_currency = workspace_default_currency
+
+        # Order counts by status
+        order_counts = {}
+        try:
+            status_counts = Order.objects.filter(
+                workspace=customer.workspace, customer=customer
+            ).values('status').annotate(count=Count('id'))
+            order_counts = {row['status']: row['count'] for row in status_counts}
+        except Exception:
+            pass
+
+        # Unread messages count
+        unread_messages_count = 0
+        try:
+            from bfg.inbox.services import MessageService
+            service = MessageService(workspace=workspace, user=request.user)
+            unread_messages_count = service.get_unread_count(customer)
+        except Exception:
+            pass
+
+        # Resale: listings (active + pending) and sold count (optional app)
+        resale_listings_count = 0
+        resale_sold_count = 0
+        try:
+            from apps.resale.models import ResaleProduct
+            resale_qs = ResaleProduct.objects.filter(
+                workspace=workspace, customer=customer
+            )
+            resale_listings_count = resale_qs.filter(
+                status__in=('pending', 'active')
+            ).count()
+            resale_sold_count = resale_qs.filter(status='sold').count()
+        except Exception:
+            pass
+
+        return Response({
+            'wallet_balance': wallet_balance,
+            'wallet_currency': wallet_currency,
+            'default_currency': workspace_default_currency,
+            'order_counts': order_counts,
+            'unread_messages_count': unread_messages_count,
+            'resale': {
+                'listings_count': resale_listings_count,
+                'sold_count': resale_sold_count,
+            },
+        })
 
 
 class MePaymentMethodViewSet(viewsets.ModelViewSet):

@@ -167,8 +167,10 @@ class WorkspaceMiddleware(MiddlewareMixin):
             workspace = _get_workspace_by_id(workspace_id)
 
         if not workspace:
-            # 2. Try workspace by domain (with cache)
-            hostname = request.get_host().split(':')[0]
+            # 2. Try workspace by domain (with cache). Use X-Forwarded-Host when set (e.g. from Next.js auth/storefront so domain matches the site the user is visiting).
+            forwarded_host = request.META.get('HTTP_X_FORWARDED_HOST')
+            host = (forwarded_host or request.get_host()).split(':')[0]
+            hostname = host.strip()
             workspace = _get_workspace_by_domain(hostname)
 
         if not workspace:

@@ -96,26 +96,14 @@ def generate_unique_code(prefix='', length=8):
     return f"{prefix}{random_part}" if prefix else random_part
 
 
-def format_currency(amount, currency='NZD'):
+def format_currency(amount, currency=None):
     """
     Format amount as currency string.
-    
-    Args:
-        amount: Decimal amount
-        currency: Currency code
-        
-    Returns:
-        Formatted currency string
+    Uses CURRENCY_SYMBOLS from common.constants.
     """
-    currency_symbols = {
-        'NZD': 'NZ$',
-        'USD': 'US$',
-        'CNY': '¥',
-        'EUR': '€',
-        'GBP': '£',
-    }
-    
-    symbol = currency_symbols.get(currency, currency)
+    from bfg.common.constants import DEFAULT_CURRENCY_CODE, CURRENCY_SYMBOLS
+    code = currency or DEFAULT_CURRENCY_CODE
+    symbol = CURRENCY_SYMBOLS.get(code, code)
     return f"{symbol}{amount:,.2f}"
 
 

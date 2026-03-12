@@ -41,9 +41,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # Must be first so OPTIONS gets CORS headers
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -53,6 +53,18 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'tests.urls'
+
+# CORS: allow Next.js frontend (dev). When using tests.settings for runserver.
+# Use allow-all in dev to avoid origin/header mismatches; restrict in production.
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
+# Extend default headers with custom ones (x-forwarded-host, x-workspace-id)
+from corsheaders.defaults import default_headers
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'accept-language',
+    'x-forwarded-host',
+    'x-workspace-id',
+]
 
 TEMPLATES = [
     {

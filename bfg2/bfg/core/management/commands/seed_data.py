@@ -97,31 +97,15 @@ class Command(BaseCommand):
                     except (ImportError, AttributeError, ModuleNotFoundError):
                         pass
             
-            # Also check apps directory for new modules
-            try:
-                import apps
-                apps_path = os.path.dirname(apps.__file__)
-                for finder, name, ispkg in pkgutil.iter_modules([apps_path]):
-                    if ispkg:
-                        try:
-                            module = importlib.import_module(f'apps.{name}.seed_data')
-                            if hasattr(module, 'seed_data') and callable(module.seed_data):
-                                modules.append(f'apps.{name}')
-                        except (ImportError, AttributeError, ModuleNotFoundError):
-                            pass
-            except ImportError:
-                # apps package is optional
-                self.stdout.write(self.style.WARNING(
-                    'apps package not found. Skipping apps modules.'
-                ))
+            # apps.* seed_data is not auto-loaded or cleared here; run manually from app layer if needed
         except Exception as e:
             # Fallback to manual list if discovery fails
             self.stdout.write(self.style.WARNING(
                 f'Module discovery failed: {e}. Using fallback list.'
             ))
             modules = ['common', 'delivery', 'web', 'shop', 'marketing', 'support', 'finance', 'inbox']
-        
-        # Prefer order: shop before marketing so CampaignDisplay rules get ProductCategory
+
+        # Prefer order: shop before marketing so CampaignDisplay rules get ProductCategory; resale after bfg modules
         seed_order = ['common', 'delivery', 'web', 'shop', 'marketing', 'support', 'finance', 'inbox']
         order_index = {m: i for i, m in enumerate(seed_order)}
         return sorted(modules, key=lambda m: (order_index.get(m, len(seed_order)), m))
@@ -133,46 +117,43 @@ class Command(BaseCommand):
         return sorted(modules, key=lambda m: (order_index.get(m, len(clear_order)), m))
 
     def get_modules_to_seed(self, module_filter=None):
-        """Get list of modules to seed"""
-        # Discover all available modules
+        """Get list of modules to seed. Module name can be bfg short name (e.g. common) or dotted path (e.g. apps.resale)."""
         all_modules = self.discover_modules()
-        
+
         if not module_filter:
             return all_modules
-        
-        # Support comma-separated module names
+
         requested_modules = [m.strip() for m in module_filter.split(',')]
-        
-        # Validate requested modules
         valid_modules = []
         invalid_modules = []
         for module_name in requested_modules:
             if module_name in all_modules:
                 valid_modules.append(module_name)
+            elif '.' in module_name:
+                # Dotted path (e.g. apps.resale): accept and seed by name, no auto-discovery
+                valid_modules.append(module_name)
             else:
                 invalid_modules.append(module_name)
-        
+
         if invalid_modules:
             self.stdout.write(self.style.ERROR(
                 f'Unknown module(s): {", ".join(invalid_modules)}'
             ))
             self.stdout.write(self.style.WARNING(
-                f'Available modules: {", ".join(all_modules)}'
+                f'Available bfg modules: {", ".join(all_modules)}. Or use dotted path (e.g. apps.resale).'
             ))
-        
         return valid_modules
 
     def seed_module(self, module_name, context):
-        """Seed data for a specific module"""
+        """Seed data for a specific module. module_name: bfg short name (common) or dotted path (apps.resale)."""
         self.stdout.write(self.style.SUCCESS(f'\n📦 Seeding {module_name} module...'))
-        
+
         try:
-            # Import module's seed_data - handle both bfg.* and apps.* modules
-            if module_name.startswith('apps.'):
-                module = __import__(f'{module_name}.seed_data', fromlist=['seed_data'])
+            if '.' in module_name:
+                module = importlib.import_module(f'{module_name}.seed_data')
             else:
                 module = __import__(f'bfg.{module_name}.seed_data', fromlist=['seed_data'])
-            
+
             # Prepare kwargs - workspace is already in context, so pass context directly
             kwargs = {
                 'stdout': self.stdout,
@@ -198,12 +179,10 @@ class Command(BaseCommand):
         modules = self.get_modules_to_seed(module_filter)
         for module_name in self.get_clear_order(modules):
             try:
-                # Handle both bfg.* and apps.* modules
-                if module_name.startswith('apps.'):
-                    module = __import__(f'{module_name}.seed_data', fromlist=['clear_data'])
+                if '.' in module_name:
+                    module = importlib.import_module(f'{module_name}.seed_data')
                 else:
                     module = __import__(f'bfg.{module_name}.seed_data', fromlist=['clear_data'])
-                    
                 if hasattr(module, 'clear_data'):
                     self.stdout.write(self.style.WARNING(f'Clearing {module_name} data...'))
                     module.clear_data()

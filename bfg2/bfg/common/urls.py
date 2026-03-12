@@ -7,6 +7,7 @@ from .views import (
     CustomerSegmentViewSet, CustomerTagViewSet,
     StaffRoleViewSet,
     MeViewSet, MeAddressViewSet, MeSettingsViewSet, MeOrdersViewSet,
+    MeDashboardStatsView,
     MePaymentMethodViewSet, MePaymentViewSet, MeInvoiceViewSet,
     countries_list
 )
@@ -32,6 +33,7 @@ router.register(r'me/invoices', MeInvoiceViewSet, basename='me-invoice')
 
 urlpatterns = [
     # Me API - specific action routes must come before router.urls
+    path('me/dashboard-stats/', MeDashboardStatsView.as_view(), name='me-dashboard-stats'),
     path('me/change-password/', MeViewSet.as_view({'post': 'change_password'}), name='me-change-password'),
     path('me/reset-password/', MeViewSet.as_view({'post': 'reset_password'}), name='me-reset-password'),
     path('me/avatar/', MeViewSet.as_view({'post': 'avatar_upload'}), name='me-avatar'),

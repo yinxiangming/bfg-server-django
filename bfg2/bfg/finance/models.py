@@ -596,32 +596,58 @@ class TaxRate(models.Model):
 
 
 class Transaction(models.Model):
-    """Financial transaction record."""
+    """Financial transaction record. Wallet-linked rows drive cash/credit balance changes."""
     TRANSACTION_TYPE_CHOICES = (
         ('payment', _('Payment')),
         ('refund', _('Refund')),
         ('credit', _('Credit')),
         ('debit', _('Debit')),
         ('adjustment', _('Adjustment')),
+        ('topup', _('Top-up')),
+        ('withdrawal', _('Withdrawal')),
+        ('reward', _('Reward')),
     )
-    
+    BALANCE_TYPE_CHOICES = (
+        ('', _('N/A')),
+        ('cash', _('Cash (Gold)')),
+        ('credit', _('Credit (Silver)')),
+    )
+    TX_STATUS_CHOICES = (
+        ('completed', _('Completed')),
+        ('pending', _('Pending')),
+        ('reversed', _('Reversed')),
+    )
+
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='transactions')
     customer = models.ForeignKey('common.Customer', on_delete=models.PROTECT, related_name='transactions')
-    
     transaction_type = models.CharField(_("Type"), max_length=20, choices=TRANSACTION_TYPE_CHOICES)
     amount = models.DecimalField(_("Amount"), max_digits=10, decimal_places=2)
     currency = models.ForeignKey(Currency, on_delete=models.PROTECT)
-    
+
+    # Wallet: when set, this transaction affects wallet balance (cash or credit)
+    wallet = models.ForeignKey(
+        'finance.Wallet', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='wallet_transactions'
+    )
+    balance_type = models.CharField(
+        _("Balance Type"), max_length=10, choices=BALANCE_TYPE_CHOICES, blank=True
+    )
+    tx_status = models.CharField(
+        _("Status"), max_length=20, choices=TX_STATUS_CHOICES, default='completed'
+    )
+    source_type = models.CharField(_("Source Type"), max_length=50, blank=True)
+    source_id = models.PositiveIntegerField(null=True, blank=True)
+
     # Reference
     payment = models.ForeignKey(Payment, on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     invoice = models.ForeignKey(Invoice, on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
-    
+
     description = models.CharField(_("Description"), max_length=255)
     notes = models.TextField(_("Notes"), blank=True)
-    
+
     created_at = models.DateTimeField(_("Created At"), default=timezone.now)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='transactions_created')
-    
+
     class Meta:
         verbose_name = _("Transaction")
         verbose_name_plural = _("Transactions")
@@ -629,35 +655,108 @@ class Transaction(models.Model):
         indexes = [
             models.Index(fields=['workspace', '-created_at']),
             models.Index(fields=['customer', '-created_at']),
+            models.Index(fields=['wallet', '-created_at']),
+            models.Index(fields=['source_type', 'source_id']),
         ]
-    
+
     def __str__(self):
         return f"{self.get_transaction_type_display()} - {self.amount} {self.currency.code}"
 
 
 class Wallet(models.Model):
-    """Customer wallet/credit balance."""
-    customer = models.OneToOneField('common.Customer', on_delete=models.CASCADE, related_name='wallet')
-    
-    balance = models.DecimalField(_("Balance"), max_digits=10, decimal_places=2, default=Decimal('0'))
+    """
+    Customer wallet per workspace. Cash (gold) = withdrawable; credit (silver) = in-store only.
+    """
+    workspace = models.ForeignKey(
+        'common.Workspace', on_delete=models.CASCADE, related_name='wallets', null=True, blank=True
+    )
+    customer = models.ForeignKey(
+        'common.Customer', on_delete=models.CASCADE, related_name='wallets'
+    )
+    # Gold: withdrawable, can be used in store
+    cash_balance = models.DecimalField(
+        _("Cash Balance"), max_digits=12, decimal_places=2, default=Decimal('0')
+    )
+    # Silver: in-store only, non-withdrawable (e.g. rewards)
+    credit_balance = models.DecimalField(
+        _("Credit Balance"), max_digits=12, decimal_places=2, default=Decimal('0')
+    )
     currency = models.ForeignKey(Currency, on_delete=models.PROTECT)
-    
-    # Limits
-    credit_limit = models.DecimalField(_("Credit Limit"), max_digits=10, decimal_places=2, default=Decimal('0'))
-    
+    credit_limit = models.DecimalField(
+        _("Credit Limit"), max_digits=10, decimal_places=2, default=Decimal('0')
+    )
     updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
-    
+
     class Meta:
         verbose_name = _("Wallet")
         verbose_name_plural = _("Wallets")
-    
+        constraints = [
+            models.UniqueConstraint(fields=['workspace', 'customer'], name='finance_wallet_workspace_customer_uniq'),
+        ]
+        indexes = [
+            models.Index(fields=['workspace', 'customer']),
+        ]
+
     def __str__(self):
-        return f"{self.customer} - {self.balance} {self.currency.code}"
-    
+        return f"{self.customer} (ws={self.workspace_id}) - {self.balance} {self.currency.code}"
+
+    @property
+    def balance(self):
+        """Total balance (backward compat)."""
+        return (self.cash_balance or Decimal('0')) + (self.credit_balance or Decimal('0'))
+
     @property
     def available_balance(self):
-        """Available balance including credit."""
-        return self.balance + self.credit_limit
+        """Available balance including credit limit."""
+        return self.balance + (self.credit_limit or Decimal('0'))
+
+
+class WithdrawalRequest(models.Model):
+    """Customer withdrawal request; balance deducted only after staff approval."""
+    STATUS_CHOICES = (
+        ('pending', _('Pending')),
+        ('approved', _('Approved')),
+        ('rejected', _('Rejected')),
+        ('processing', _('Processing')),
+        ('completed', _('Completed')),
+        ('cancelled', _('Cancelled')),
+    )
+
+    wallet = models.ForeignKey(
+        Wallet, on_delete=models.CASCADE, related_name='withdrawal_requests'
+    )
+    transaction = models.OneToOneField(
+        'finance.Transaction', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='withdrawal_request'
+    )
+    amount = models.DecimalField(_("Amount"), max_digits=12, decimal_places=2)
+    status = models.CharField(_("Status"), max_length=20, choices=STATUS_CHOICES, default='pending')
+    payout_method = models.CharField(_("Payout Method"), max_length=100, blank=True)
+    payout_details = models.JSONField(_("Payout Details"), default=dict, blank=True)
+    notes = models.TextField(_("Notes"), blank=True)
+    rejection_reason = models.TextField(_("Rejection Reason"), blank=True)
+    requested_at = models.DateTimeField(_("Requested At"), default=timezone.now)
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name='withdrawal_requests_made'
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='withdrawal_requests_approved'
+    )
+    approved_at = models.DateTimeField(_("Approved At"), null=True, blank=True)
+    completed_at = models.DateTimeField(_("Completed At"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("Withdrawal Request")
+        verbose_name_plural = _("Withdrawal Requests")
+        ordering = ['-requested_at']
+        indexes = [
+            models.Index(fields=['wallet', 'status']),
+        ]
+
+    def __str__(self):
+        return f"WithdrawalRequest(wallet={self.wallet_id}, amount={self.amount}, status={self.status})"
 
 
 class BillingCycle(models.Model):

@@ -434,9 +434,8 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                     {'detail': 'No active store found'},
                     status=status.HTTP_404_NOT_FOUND
                 )
-            default_currency_code = 'USD'
-            if hasattr(workspace, 'workspace_settings') and workspace.workspace_settings:
-                default_currency_code = workspace.workspace_settings.default_currency or 'USD'
+            from bfg.common.constants import get_default_currency_for_workspace
+            default_currency_code = get_default_currency_for_workspace(workspace)
             currency = None
             try:
                 currency = Currency.objects.get(code=default_currency_code, is_active=True)
@@ -1170,10 +1169,8 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
-        # Get currency from workspace settings or default
-        default_currency_code = 'USD'  # Default fallback
-        if hasattr(request.workspace, 'workspace_settings') and request.workspace.workspace_settings:
-            default_currency_code = request.workspace.workspace_settings.default_currency or 'USD'
+        from bfg.common.constants import get_default_currency_for_workspace
+        default_currency_code = get_default_currency_for_workspace(request.workspace)
         
         # Get currency by code
         try:

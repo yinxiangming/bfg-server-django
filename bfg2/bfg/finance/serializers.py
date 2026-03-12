@@ -376,10 +376,8 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
         
         # Get or set default currency if not provided
         if 'currency' not in validated_data or not validated_data['currency']:
-            # Try to get default currency from workspace settings
-            default_currency_code = 'USD'  # Default fallback
-            if hasattr(workspace, 'workspace_settings') and workspace.workspace_settings:
-                default_currency_code = workspace.workspace_settings.default_currency or 'USD'
+            from bfg.common.constants import get_default_currency_for_workspace
+            default_currency_code = get_default_currency_for_workspace(workspace)
             
             # Get currency by code
             try:

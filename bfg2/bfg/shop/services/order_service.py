@@ -633,16 +633,17 @@ class OrderService(BaseService):
             from bfg.finance.models import Currency
             from bfg.finance.services.invoice_service import InvoiceService
             
-            # Get default currency (USD) or first active currency
-            currency = Currency.objects.filter(code='USD', is_active=True).first()
+            from bfg.common.constants import get_default_currency_for_workspace, CURRENCY_SYMBOLS, CURRENCY_NAMES
+            default_code = get_default_currency_for_workspace(self.workspace)
+            currency = Currency.objects.filter(code=default_code, is_active=True).first()
             if not currency:
                 currency = Currency.objects.filter(is_active=True).first()
-            
             if not currency:
-                # Create default USD currency if not exists
+                symbol = CURRENCY_SYMBOLS.get(default_code, default_code)
+                name = CURRENCY_NAMES.get(default_code, default_code)
                 currency, _ = Currency.objects.get_or_create(
-                    code='USD',
-                    defaults={'name': 'US Dollar', 'symbol': '$', 'is_active': True}
+                    code=default_code,
+                    defaults={'name': name, 'symbol': symbol, 'is_active': True}
                 )
             
             invoice_service = InvoiceService(
@@ -674,15 +675,17 @@ class OrderService(BaseService):
             from bfg.finance.models import Currency, PaymentGateway, Payment
             from bfg.finance.services.payment_service import PaymentService
             
-            # Get default currency
-            currency = Currency.objects.filter(code='USD', is_active=True).first()
+            from bfg.common.constants import get_default_currency_for_workspace, CURRENCY_SYMBOLS, CURRENCY_NAMES
+            default_code = get_default_currency_for_workspace(self.workspace)
+            currency = Currency.objects.filter(code=default_code, is_active=True).first()
             if not currency:
                 currency = Currency.objects.filter(is_active=True).first()
-            
             if not currency:
+                symbol = CURRENCY_SYMBOLS.get(default_code, default_code)
+                name = CURRENCY_NAMES.get(default_code, default_code)
                 currency, _ = Currency.objects.get_or_create(
-                    code='USD',
-                    defaults={'name': 'US Dollar', 'symbol': '$', 'is_active': True}
+                    code=default_code,
+                    defaults={'name': name, 'symbol': symbol, 'is_active': True}
                 )
             
             # Get first active payment gateway

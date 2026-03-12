@@ -152,24 +152,27 @@ class CustomerService(BaseService):
         self.validate_workspace_access(customer)
         
         # Check if finance module is available
+        from bfg.common.constants import get_default_currency_for_workspace
         try:
             from bfg.finance.models import Wallet, Currency
         except ImportError:
-            # Fallback to customer balance if finance module not available
+            workspace = getattr(self, 'workspace', None) or getattr(customer, 'workspace', None)
+            code = get_default_currency_for_workspace(workspace)
             return {
                 'balance': float(customer.balance or 0),
                 'credit_limit': float(customer.credit_limit or 0),
-                'currency': 'NZD'
+                'currency': code
             }
         
-        # Get or create wallet for customer in this workspace
         workspace = getattr(self, 'workspace', None) or getattr(customer, 'workspace', None)
+        default_code = get_default_currency_for_workspace(workspace)
         if not workspace:
             return {
                 'balance': float(customer.balance or 0),
                 'credit_limit': float(customer.credit_limit or 0),
-                'currency': 'NZD'
+                'currency': default_code
             }
+        default_currency = Currency.objects.filter(code=default_code).first() or Currency.objects.first()
         wallet, _ = Wallet.objects.get_or_create(
             workspace=workspace,
             customer=customer,
@@ -177,7 +180,7 @@ class CustomerService(BaseService):
                 'cash_balance': customer.balance or Decimal('0'),
                 'credit_balance': Decimal('0'),
                 'credit_limit': customer.credit_limit or Decimal('0'),
-                'currency': Currency.objects.filter(code='NZD').first() or Currency.objects.first()
+                'currency': default_currency
             }
         )
         return {
@@ -185,7 +188,7 @@ class CustomerService(BaseService):
             'cash_balance': float(wallet.cash_balance),
             'credit_balance': float(wallet.credit_balance),
             'credit_limit': float(wallet.credit_limit),
-            'currency': wallet.currency.code if wallet.currency else 'NZD'
+            'currency': wallet.currency.code if wallet.currency else default_code
         }
     
     @transaction.atomic
@@ -223,28 +226,30 @@ class CustomerService(BaseService):
             raise ValueError('Amount must be greater than 0')
         
         # Check if finance module is available
+        from bfg.common.constants import get_default_currency_for_workspace
         try:
             from bfg.finance.models import Wallet, Currency, Transaction
         except ImportError:
-            # Fallback: update customer balance directly
             customer.balance = (customer.balance or Decimal('0')) + amount_decimal
             customer.save(update_fields=['balance'])
+            workspace = getattr(self, 'workspace', None) or getattr(customer, 'workspace', None)
             return {
                 'balance': float(customer.balance),
                 'credit_limit': float(customer.credit_limit or 0),
-                'currency': 'NZD'
+                'currency': get_default_currency_for_workspace(workspace)
             }
         
-        # Get or create wallet in this workspace
         workspace = getattr(self, 'workspace', None) or getattr(customer, 'workspace', None)
+        default_code = get_default_currency_for_workspace(workspace)
         if not workspace:
             customer.balance = (customer.balance or Decimal('0')) + amount_decimal
             customer.save(update_fields=['balance'])
             return {
                 'balance': float(customer.balance),
                 'credit_limit': float(customer.credit_limit or 0),
-                'currency': 'NZD'
+                'currency': default_code
             }
+        default_currency = Currency.objects.filter(code=default_code).first() or Currency.objects.first()
         wallet, created = Wallet.objects.get_or_create(
             workspace=workspace,
             customer=customer,
@@ -252,7 +257,7 @@ class CustomerService(BaseService):
                 'cash_balance': customer.balance or Decimal('0'),
                 'credit_balance': Decimal('0'),
                 'credit_limit': customer.credit_limit or Decimal('0'),
-                'currency': Currency.objects.filter(code='NZD').first() or Currency.objects.first()
+                'currency': default_currency
             }
         )
         wallet.cash_balance += amount_decimal
@@ -290,5 +295,5 @@ class CustomerService(BaseService):
             'cash_balance': float(wallet.cash_balance),
             'credit_balance': float(wallet.credit_balance),
             'credit_limit': float(wallet.credit_limit),
-            'currency': wallet.currency.code if wallet.currency else 'NZD'
+            'currency': wallet.currency.code if wallet.currency else default_code
         }

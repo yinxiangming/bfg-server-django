@@ -663,10 +663,8 @@ class PaymentViewSet(viewsets.ModelViewSet):
             if not gateway:
                 return Response({'detail': 'No active payment gateway found'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Currency (match storefront behavior)
-        default_currency_code = 'USD'
-        if hasattr(request.workspace, 'workspace_settings') and request.workspace.workspace_settings:
-            default_currency_code = request.workspace.workspace_settings.default_currency or 'USD'
+        from bfg.common.constants import get_default_currency_for_workspace
+        default_currency_code = get_default_currency_for_workspace(request.workspace)
         try:
             currency = Currency.objects.get(code=default_currency_code, is_active=True)
         except Currency.DoesNotExist:

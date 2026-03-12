@@ -27,12 +27,14 @@ class WalletService(BaseService):
     ) -> Wallet:
         """
         Get or create Wallet for (workspace, customer).
-        Default currency: NZD or first available.
+        Default currency from workspace Settings, else DEFAULT_CURRENCY_CODE, then first available.
         """
         self.validate_workspace_access(customer)
         if currency is None:
+            from bfg.common.constants import get_default_currency_for_workspace
+            default_code = get_default_currency_for_workspace(self.workspace)
             currency = (
-                Currency.objects.filter(code='NZD').first()
+                Currency.objects.filter(code=default_code).first()
                 or Currency.objects.first()
             )
         if not currency:

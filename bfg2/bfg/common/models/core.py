@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+
+from bfg.common.constants import DEFAULT_CURRENCY_CODE
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.utils.translation import gettext_lazy as _
@@ -155,7 +157,7 @@ class Settings(models.Model):
     # Localization
     default_language = models.CharField(_("Default Language"), max_length=10, default='en')
     supported_languages = models.JSONField(_("Supported Languages"), default=list)  # ['en', 'zh-hans']
-    default_currency = models.CharField(_("Default Currency"), max_length=3, default='NZD')
+    default_currency = models.CharField(_("Default Currency"), max_length=3, default=DEFAULT_CURRENCY_CODE)
     default_timezone = models.CharField(_("Default Timezone"), max_length=50, default='UTC')
     
     # Contact

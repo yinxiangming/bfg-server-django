@@ -86,6 +86,11 @@ class StorefrontProductViewSet(viewsets.ReadOnlyModelViewSet):
             thirty_days_ago = timezone.now() - timedelta(days=30)
             queryset = queryset.filter(created_at__gte=thirty_days_ago)
         
+        # Condition filter (e.g. ?condition=good)
+        condition = self.request.query_params.get('condition')
+        if condition:
+            queryset = queryset.filter(condition=condition)
+
         # Price filtering
         min_price = self.request.query_params.get('min_price')
         if min_price:
@@ -346,26 +351,31 @@ class StorefrontCategoryViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class StorefrontCategoryViewSet(viewsets.ReadOnlyModelViewSet):
-    """Storefront category ViewSet"""
+    """Storefront category ViewSet. Fallback to English when requested language has no categories."""
     serializer_class = StorefrontCategorySerializer
     permission_classes = [AllowAny]
     authentication_classes = []
     
     def get_queryset(self):
-        """Get active categories"""
+        """Get active categories; fallback to en when current language has none."""
         workspace = self.request.workspace
         language = self.request.query_params.get('lang', 'en')
-        
+        tree = self.request.query_params.get('tree', '').lower() == 'true'
         queryset = ProductCategory.objects.filter(
             workspace=workspace,
             is_active=True,
             language=language
         ).select_related('parent').prefetch_related('children')
-        
-        # If tree=true, return only root categories
-        if self.request.query_params.get('tree', '').lower() == 'true':
+        if tree:
             queryset = queryset.filter(parent__isnull=True)
-        
+        if language != 'en' and not queryset.exists():
+            queryset = ProductCategory.objects.filter(
+                workspace=workspace,
+                is_active=True,
+                language='en'
+            ).select_related('parent').prefetch_related('children')
+            if tree:
+                queryset = queryset.filter(parent__isnull=True)
         return queryset.order_by('order', 'name')
 
 

@@ -176,7 +176,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'slug', 'sku', 'product_type',
+            'id', 'name', 'slug', 'sku', 'product_type', 'condition',
             'short_description', 'price', 'compare_price',
             'primary_image', 'category_names', 'finance_code', 'finance_code_name',
             'is_active', 'is_featured', 'stock_quantity', 'language'
@@ -226,7 +226,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'slug', 'sku', 'barcode', 'product_type', 'description',
+            'id', 'name', 'slug', 'sku', 'barcode', 'product_type', 'condition', 'description',
             'short_description', 'price', 'compare_price', 'cost',
             'is_subscription', 'subscription_plan', 'categories', 'category_ids',
             'tags', 'tag_ids', 'tag_names', 'finance_code', 'finance_code_id',

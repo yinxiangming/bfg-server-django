@@ -58,6 +58,23 @@ class Product(models.Model):
     is_subscription = models.BooleanField(_("Is Subscription"), default=False)
     subscription_plan = models.ForeignKey('shop.SubscriptionPlan', null=True, blank=True, on_delete=models.SET_NULL, related_name='products')
     
+    # Condition (for resale products)
+    CONDITION_CHOICES = [
+        ('new', 'New'),
+        ('like_new', 'Like New'),
+        ('good', 'Good'),
+        ('fair', 'Fair'),
+        ('poor', 'Poor'),
+    ]
+    condition = models.CharField(
+        _("Condition"),
+        max_length=20,
+        choices=CONDITION_CHOICES,
+        blank=True,
+        default='',
+        db_index=True,
+    )
+
     # Organization
     categories = models.ManyToManyField('shop.ProductCategory', blank=True, related_name='products')
     tags = models.ManyToManyField(ProductTag, blank=True, related_name='products')

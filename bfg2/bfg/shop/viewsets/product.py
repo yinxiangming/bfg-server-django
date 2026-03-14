@@ -28,7 +28,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     
     def get_queryset(self):
-        """Get categories for current workspace"""
+        """Get categories for current workspace. Fallback to English when requested language has no categories (for list)."""
         workspace = getattr(self.request, 'workspace', None)
         if not workspace:
             from rest_framework.exceptions import NotFound
@@ -41,12 +41,16 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
         ).select_related('parent').prefetch_related('children').order_by('order', 'name')
         
         # Filter active by default only for list actions
-        # For retrieve/update/delete, show all to allow management of inactive categories
         if self.action == 'list':
             queryset = queryset.filter(is_active=True)
+            # If current language has no categories, fallback to English so selectors always have options
+            if language != 'en' and not queryset.exists():
+                queryset = ProductCategory.objects.filter(
+                    workspace=workspace,
+                    language='en'
+                ).select_related('parent').prefetch_related('children').filter(is_active=True).order_by('order', 'name')
         
         # If tree=true, return only root categories (categories without parent)
-        # The serializer will recursively include children
         if self.request.query_params.get('tree', '').lower() == 'true':
             queryset = queryset.filter(parent__isnull=True)
         
@@ -145,6 +149,11 @@ class ProductViewSet(viewsets.ModelViewSet):
         featured = self.request.query_params.get('featured')
         if featured == 'true':
             queryset = queryset.filter(is_featured=True)
+
+        # Filter by condition (e.g. ?condition=good)
+        condition = self.request.query_params.get('condition')
+        if condition:
+            queryset = queryset.filter(condition=condition)
         
         # Search by name or SKU
         search = self.request.query_params.get('search')

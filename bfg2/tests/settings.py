@@ -7,7 +7,9 @@ from pathlib import Path
 
 import sys
 BASE_DIR = Path(__file__).resolve().parent.parent
+SERVER_DIR = BASE_DIR.parent
 sys.path.insert(0, str(BASE_DIR))
+sys.path.insert(0, str(SERVER_DIR))
 
 # Test-only; never use in production. Override via env in CI if required.
 SECRET_KEY = os.environ.get('SECRET_KEY', 'test-insecure-do-not-use-in-production')
@@ -16,6 +18,12 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
+def _extension_apps():
+    """Extension apps from env BFG_EXTENSION_APPS (comma-separated, e.g. BFG_EXTENSION_APPS=apps.resale)."""
+    raw = os.environ.get('BFG_EXTENSION_APPS', '')
+    return [s.strip() for s in raw.split(',') if s.strip()]
+
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -23,11 +31,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
     # Third party
     'rest_framework',
     'corsheaders',
-    
     # BFG Modules
     'bfg.common',
     'bfg.core',
@@ -37,8 +43,8 @@ INSTALLED_APPS = [
     'bfg.finance',
     'bfg.support',
     'bfg.inbox',
-    'bfg.marketing',  # Added marketing app
-]
+    'bfg.marketing',
+] + _extension_apps()
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # Must be first so OPTIONS gets CORS headers

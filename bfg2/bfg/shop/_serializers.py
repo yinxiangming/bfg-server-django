@@ -515,6 +515,9 @@ class OrderListSerializer(serializers.ModelSerializer):
     store_name = serializers.CharField(source='store.name', read_only=True)
     sales_channel_name = serializers.CharField(source='sales_channel.name', read_only=True, allow_null=True)
     item_count = serializers.SerializerMethodField()
+    items = serializers.SerializerMethodField()
+    customer_note = serializers.CharField(read_only=True, allow_blank=True)
+    packages_count = serializers.SerializerMethodField()
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
     
     class Meta:
@@ -523,13 +526,26 @@ class OrderListSerializer(serializers.ModelSerializer):
             'id', 'order_number', 'customer', 'customer_name',
             'store', 'store_name', 'sales_channel', 'sales_channel_name',
             'status', 'payment_status',
-            'total', 'item_count', 'created_at'
+            'total', 'item_count', 'items', 'customer_note', 'packages_count', 'created_at'
         ]
         read_only_fields = ['id', 'order_number', 'created_at']
     
     def get_item_count(self, obj):
         """Get order item count"""
         return obj.items.count()
+    
+    def get_packages_count(self, obj):
+        """Get order packages count for logistics column"""
+        if hasattr(obj, 'packages'):
+            return obj.packages.count()
+        return 0
+    
+    def get_items(self, obj):
+        """Brief item summary for list: product_name, quantity"""
+        return [
+            {'product_name': item.product_name, 'quantity': item.quantity}
+            for item in obj.items.all()[:20]
+        ]
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
@@ -660,7 +676,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         ]
     
     def get_activities(self, obj):
-        """Get order activity history from AuditLog"""
+        """Get order activity history from AuditLog with actor (who did it)"""
         from django.contrib.contenttypes.models import ContentType
         from bfg.common.models import AuditLog
         
@@ -669,16 +685,23 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             workspace=obj.workspace,
             content_type=content_type,
             object_id=obj.id
-        ).order_by('created_at')
+        ).select_related('user').order_by('created_at')
         
         activities = []
         for log in audit_logs:
+            # Actor display: user full name or email, or "System"
+            actor_display = ''
+            if log.user:
+                name = (getattr(log.user, 'get_full_name', lambda: None)() or '').strip()
+                actor_display = name or getattr(log.user, 'email', None) or getattr(log.user, 'username', None) or str(log.user)
+            if not actor_display:
+                actor_display = 'System'
+            
             # Determine color based on action and status changes
             color = 'primary'
             if log.action == 'create':
                 color = 'primary'
             elif log.action == 'update':
-                # Check if status changed to delivered
                 if log.changes and 'status' in log.changes:
                     new_status = log.changes['status'].get('new', '')
                     if new_status == 'delivered':
@@ -695,6 +718,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
                 'time': log.created_at.isoformat(),
                 'action': log.action,
                 'color': color,
+                'actor': actor_display,
             })
         
         return activities

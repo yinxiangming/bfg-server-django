@@ -367,7 +367,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         ).prefetch_related(
             'items', 'items__product', 'items__variant',
             'invoices', 'invoices__items', 'invoices__currency',
-            'payments', 'payments__gateway', 'payments__currency'
+            'payments', 'payments__gateway', 'payments__currency',
+            'packages'
         )
         
         if not user.is_authenticated:
@@ -577,11 +578,13 @@ class OrderViewSet(viewsets.ModelViewSet):
         
         order = self.get_object()
         
-        # Save old address info before any updates
+        # Save old values for audit (address + status)
         old_shipping_address = order.shipping_address
         old_billing_address = order.billing_address
         old_shipping_address_id = order.shipping_address_id
         old_billing_address_id = order.billing_address_id
+        old_status = order.status
+        old_payment_status = order.payment_status
         
         # Check permissions - only staff can update orders
         from bfg.common.models import StaffMember
@@ -697,28 +700,35 @@ class OrderViewSet(viewsets.ModelViewSet):
         # Refresh to get updated data
         order.refresh_from_db()
         
-        # Create audit log if addresses were changed
+        # Track status/payment_status changes for audit
+        if old_status != order.status:
+            changes['status'] = {'old': old_status, 'new': order.status}
+        if old_payment_status != order.payment_status:
+            changes['payment_status'] = {'old': old_payment_status, 'new': order.payment_status}
+        
+        # Create audit log if anything changed (address, status, payment_status)
         if changes:
             audit = AuditService(workspace=request.workspace, user=request.user)
-            address_changes = []
-            
-            # Build detailed description with street information
             descriptions = []
             if 'shipping_address' in changes:
                 change = changes['shipping_address']
                 old_street = change['old'].get('street', 'N/A')
                 new_street = change['new'].get('street', 'N/A')
                 descriptions.append(f"Shipping address: {old_street} → {new_street}")
-                address_changes.append('shipping address')
-            
             if 'billing_address' in changes:
                 change = changes['billing_address']
                 old_street = change['old'].get('street', 'N/A')
                 new_street = change['new'].get('street', 'N/A')
                 descriptions.append(f"Billing address: {old_street} → {new_street}")
-                address_changes.append('billing address')
-            
-            description = f"Updated {', '.join(address_changes)} for order #{order.order_number}. " + " | ".join(descriptions)
+            if 'status' in changes:
+                descriptions.append(
+                    f"Order status: {changes['status']['old']} → {changes['status']['new']}"
+                )
+            if 'payment_status' in changes:
+                descriptions.append(
+                    f"Payment status: {changes['payment_status']['old']} → {changes['payment_status']['new']}"
+                )
+            description = f"Updated order #{order.order_number}. " + " | ".join(descriptions)
             audit.log_update(
                 order,
                 changes=changes,

@@ -26,6 +26,7 @@ from bfg.finance.serializers import (
 )
 from bfg.finance.exceptions import InsufficientFunds
 from bfg.finance.services import PaymentService, InvoiceService, TaxService, WalletService
+from bfg.common.constants import get_default_currency_for_workspace
 
 
 class CurrencyViewSet(viewsets.ModelViewSet):
@@ -33,6 +34,13 @@ class CurrencyViewSet(viewsets.ModelViewSet):
     serializer_class = CurrencySerializer
     permission_classes = [IsAuthenticated]
     queryset = Currency.objects.filter(is_active=True)
+
+    @action(detail=False, methods=['get'], url_path='default-code')
+    def default_code(self, request):
+        """Return workspace default currency code for pre-filling forms."""
+        workspace = getattr(request, 'workspace', None)
+        code = get_default_currency_for_workspace(workspace)
+        return Response({'code': code})
 
 
 class BrandViewSet(viewsets.ModelViewSet):

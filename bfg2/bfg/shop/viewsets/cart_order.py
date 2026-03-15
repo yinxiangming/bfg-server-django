@@ -779,64 +779,76 @@ class OrderViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def update_items(self, request, pk=None):
-        """Update order items"""
+        """Update order items. Syncs to requested items; does not delete items that are
+        protected by other FKs (e.g. ResalePayoutItem)."""
         from decimal import Decimal
         from django.db import transaction
-        
+        from django.db.models.deletion import ProtectedError
+
         order = self.get_object()
         items_data = request.data.get('items', [])
-        
+
         if not items_data:
             return Response(
                 {'detail': 'Items are required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        with transaction.atomic():
-            # Delete existing items
-            order.items.all().delete()
-            
-            # Create new items
-            subtotal = Decimal('0.00')
-            
-            for item_data in items_data:
-                product_id = item_data.get('product')
-                variant_id = item_data.get('variant')
-                
-                # Validate and get quantity
-                try:
-                    quantity = int(item_data.get('quantity', 1))
-                    if quantity <= 0:
-                        continue  # Skip invalid items
-                    if quantity > 10000:
-                        continue  # Skip items with excessive quantity
-                except (ValueError, TypeError):
-                    continue  # Skip items with invalid quantity
-                
-                # Security: Price must come from product/variant, not from user input
-                # User can only specify quantity, not price
-                if not product_id:
+
+        # Build desired (product_id, variant_id) -> quantity (variant_id None when not provided)
+        desired = {}
+        for item_data in items_data:
+            product_id = item_data.get('product')
+            variant_id = item_data.get('variant')
+            try:
+                quantity = int(item_data.get('quantity', 1))
+                if quantity <= 0 or quantity > 10000 or not product_id:
                     continue
-                
+            except (ValueError, TypeError):
+                continue
+            key = (int(product_id), int(variant_id) if variant_id else None)
+            desired[key] = desired.get(key, 0) + quantity
+
+        with transaction.atomic():
+            subtotal = Decimal('0.00')
+            existing_by_key = {}
+            for item in order.items.select_related('product', 'variant').all():
+                vid = item.variant_id if item.variant_id else None
+                key = (item.product_id, vid)
+                existing_by_key[key] = item
+
+            # Remove or update existing items
+            for key, existing_item in list(existing_by_key.items()):
+                product = existing_item.product
+                variant = existing_item.variant
+                price = variant.price if variant else product.price
+                if key not in desired:
+                    try:
+                        existing_item.delete()
+                    except ProtectedError:
+                        # Keep item and include in subtotal (e.g. linked to ResalePayoutItem)
+                        q = existing_item.quantity
+                        subtotal += price * q
+                    continue
+                new_qty = desired[key]
+                if existing_item.quantity != new_qty:
+                    existing_item.quantity = new_qty
+                    existing_item.subtotal = price * new_qty
+                    existing_item.save()
+                subtotal += price * existing_item.quantity
+                del desired[key]
+
+            # Create new items for remaining desired keys
+            for (product_id, variant_id), quantity in desired.items():
                 try:
                     product = Product.objects.get(id=product_id, workspace=request.workspace)
                     variant = None
                     if variant_id:
                         variant = ProductVariant.objects.get(id=variant_id, product=product)
-                    
-                    # Security: Use price from product/variant, not from user input
-                    if variant:
-                        price = variant.price
-                    else:
-                        price = product.price
-                    
-                    # Validate price is non-negative
+                    price = variant.price if variant else product.price
                     if price < 0:
-                        continue  # Skip items with negative price
-                    
+                        continue
                     item_subtotal = price * quantity
                     subtotal += item_subtotal
-                    
                     OrderItem.objects.create(
                         order=order,
                         product=product,
@@ -845,23 +857,20 @@ class OrderViewSet(viewsets.ModelViewSet):
                         variant_name=variant.name if variant else '',
                         sku=variant.sku if variant else product.sku,
                         quantity=quantity,
-                        price=price,  # From product/variant, not user input
+                        price=price,
                         subtotal=item_subtotal
                     )
                 except (Product.DoesNotExist, ProductVariant.DoesNotExist):
                     continue
-            
-            # Update order totals
+
             shipping_cost = order.shipping_cost or Decimal('0.00')
             tax = order.tax or Decimal('0.00')
             discount = order.discount or Decimal('0.00')
             order.subtotal = subtotal
             order.total = subtotal + shipping_cost + tax - discount
             order.save()
-        
-        # Refresh from database to ensure all related objects are loaded
+
         order.refresh_from_db()
-        
         serializer = self.get_serializer(order)
         return Response(serializer.data)
 

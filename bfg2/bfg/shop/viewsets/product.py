@@ -155,13 +155,14 @@ class ProductViewSet(viewsets.ModelViewSet):
         if condition:
             queryset = queryset.filter(condition=condition)
         
-        # Search by name or SKU
+        # Search by name, SKU, or barcode
         search = self.request.query_params.get('search')
         if search:
             from django.db.models import Q
             queryset = queryset.filter(
                 Q(name__icontains=search) |
                 Q(sku__icontains=search) |
+                Q(barcode__icontains=search) |
                 Q(variants__sku__icontains=search)
             ).distinct()
         

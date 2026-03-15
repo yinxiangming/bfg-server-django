@@ -1,7 +1,7 @@
 """
 Cart and Order ViewSets
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.db.models import Sum, Count
 from django.db.models.functions import TruncDate
@@ -385,6 +385,29 @@ class OrderViewSet(viewsets.ModelViewSet):
             status_filter = self.request.query_params.get('status')
             if status_filter:
                 queryset = queryset.filter(status=status_filter)
+            payment_status = self.request.query_params.get('payment_status')
+            if payment_status:
+                queryset = queryset.filter(payment_status=payment_status)
+            store_id = self.request.query_params.get('store')
+            if store_id:
+                try:
+                    queryset = queryset.filter(store_id=int(store_id))
+                except (ValueError, TypeError):
+                    pass
+            created_after = self.request.query_params.get('created_after')
+            if created_after:
+                try:
+                    dt = date.fromisoformat(created_after)
+                    queryset = queryset.filter(created_at__date__gte=dt)
+                except (ValueError, TypeError):
+                    pass
+            created_before = self.request.query_params.get('created_before')
+            if created_before:
+                try:
+                    dt = date.fromisoformat(created_before)
+                    queryset = queryset.filter(created_at__date__lte=dt)
+                except (ValueError, TypeError):
+                    pass
         else:
             customer = Customer.objects.filter(
                 workspace=workspace,

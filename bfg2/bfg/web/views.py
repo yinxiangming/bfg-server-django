@@ -789,6 +789,123 @@ class InquiryViewSet(viewsets.ModelViewSet):
         return Response(service.get_inquiry_stats())
 
 
+def _create_github_feedback_issue(feedback_type, content, source, image_base64):
+    """Create a GitHub issue for feedback. Returns (issue_url or None, error or None)."""
+    import os
+    import logging
+    import requests
+    token = os.environ.get('GITHUB_TOKEN', '').strip()
+    repo = os.environ.get('GITHUB_REPO', '').strip()
+    if not token or not repo or '/' not in repo:
+        return None, None
+    title = f'[Feedback][{feedback_type}] {content[:60]}' + ('...' if len(content) > 60 else '')
+    body_lines = [
+        f'**Type:** {feedback_type}',
+        f'**Source:** {source}',
+        '',
+        '**Content:**',
+        '',
+        content,
+    ]
+    if image_base64:
+        body_lines.extend(['', '---', '(Screenshot/attachment: see admin email if configured.)'])
+    body = '\n'.join(body_lines)
+    labels = ['feedback', feedback_type]
+    try:
+        resp = requests.post(
+            f'https://api.github.com/repos/{repo}/issues',
+            headers={
+                'Authorization': f'token {token}',
+                'Accept': 'application/vnd.github.v3+json',
+            },
+            json={'title': title, 'body': body, 'labels': labels},
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            return data.get('html_url'), None
+        logging.warning('Feedback GitHub issue failed: %s %s', resp.status_code, resp.text[:200])
+        return None, resp.text
+    except Exception as e:
+        logging.warning('Feedback GitHub issue error: %s', e)
+        return None, str(e)
+
+
+def _send_feedback_admin_email(workspace, feedback_type, content, source, image_base64):
+    """Send feedback notification to admin email. Uses workspace default EmailConfig or FEEDBACK_ADMIN_EMAIL."""
+    import os
+    import logging
+    from bfg.common.models import EmailConfig
+    from bfg.common.services import SettingsService
+    from bfg.common.email_backends import get_backend
+    settings_obj = SettingsService(workspace=workspace, user=None).get_or_create_settings(workspace)
+    general = (settings_obj.custom_settings or {}).get('general') or {}
+    admin_email = (
+        (settings_obj.support_email or '').strip() or
+        (settings_obj.contact_email or '').strip() or
+        general.get('contact_email') or
+        os.environ.get('FEEDBACK_ADMIN_EMAIL', '').strip()
+    )
+    if not admin_email or '@' not in admin_email:
+        return
+    config = EmailConfig.objects.filter(workspace=workspace, is_default=True).first()
+    if not config:
+        logging.warning('Feedback: no default EmailConfig for workspace %s', workspace.id)
+        return
+    subject = f'[Feedback][{feedback_type}] {content[:50]}' + ('...' if len(content) > 50 else '')
+    body_plain = f'Type: {feedback_type}\nSource: {source}\n\nContent:\n\n{content}'
+    try:
+        backend_class = get_backend(config.backend_type)
+        backend = backend_class()
+        backend.send(
+            to_list=[admin_email],
+            subject=subject,
+            body_plain=body_plain,
+            body_html=None,
+            from_email=config.config.get('from_email'),
+            config=config.config,
+        )
+    except Exception as e:
+        logging.warning('Feedback admin email failed: %s', e)
+
+
+class FeedbackView(APIView):
+    """
+    Public endpoint to submit feedback (bug/feature). POST only, AllowAny.
+    Request body: type (bug|feature), content (required), source (admin|account|storefront), image_base64 (optional).
+    Creates GitHub issue if GITHUB_TOKEN and GITHUB_REPO are set; sends email to admin if configured.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        workspace = get_workspace(request)
+        data = request.data or {}
+        feedback_type = (data.get('type') or 'bug').strip().lower()
+        if feedback_type not in ('bug', 'feature'):
+            feedback_type = 'bug'
+        content = (data.get('content') or '').strip()
+        if not content:
+            return Response(
+                {'detail': 'content is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        source = (data.get('source') or 'storefront').strip().lower()
+        if source not in ('admin', 'account', 'storefront'):
+            source = 'storefront'
+        image_base64 = data.get('image_base64') or ''
+
+        issue_url = None
+        _issue_url, _err = _create_github_feedback_issue(feedback_type, content, source, image_base64)
+        if _issue_url:
+            issue_url = _issue_url
+        _send_feedback_admin_email(workspace, feedback_type, content, source, image_base64)
+
+        payload = {'ok': True}
+        if issue_url:
+            payload['issue_url'] = issue_url
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+
 class BookingTimeSlotViewSet(viewsets.ModelViewSet):
     """
     Booking time slot management.

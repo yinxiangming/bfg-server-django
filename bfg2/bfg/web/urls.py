@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     SiteViewSet, ThemeViewSet, LanguageViewSet, PageViewSet, PostViewSet,
     MediaViewSet, CategoryViewSet, TagViewSet, MenuViewSet, InquiryViewSet,
+    FeedbackView,
     BookingTimeSlotViewSet, BookingViewSet,
     BlockTypesView, BlockValidateView,
     NewsletterSubscriptionViewSet, NewsletterUnsubscribeByTokenView,
@@ -29,6 +30,7 @@ router.register(r'newsletter-send-logs', NewsletterSendLogViewSet, basename='new
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('feedback/', FeedbackView.as_view(), name='feedback'),
     path('blocks/types/', BlockTypesView.as_view(), name='block-types'),
     path('blocks/validate/', BlockValidateView.as_view(), name='block-validate'),
     path('newsletter/unsubscribe/', NewsletterUnsubscribeByTokenView.as_view(), name='newsletter-unsubscribe'),

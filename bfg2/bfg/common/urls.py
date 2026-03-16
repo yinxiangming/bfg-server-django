@@ -9,6 +9,7 @@ from .views import (
     MeViewSet, MeAddressViewSet, MeSettingsViewSet, MeOrdersViewSet,
     MeDashboardStatsView,
     MePaymentMethodViewSet, MePaymentViewSet, MeInvoiceViewSet,
+    MeSupportOptionsView, MeTicketsViewSet,
     countries_list
 )
 
@@ -30,10 +31,12 @@ router.register(r'me/orders', MeOrdersViewSet, basename='me-orders')
 router.register(r'me/payment-methods', MePaymentMethodViewSet, basename='me-payment-method')
 router.register(r'me/payments', MePaymentViewSet, basename='me-payment')
 router.register(r'me/invoices', MeInvoiceViewSet, basename='me-invoice')
+router.register(r'me/tickets', MeTicketsViewSet, basename='me-tickets')
 
 urlpatterns = [
     # Me API - specific action routes must come before router.urls
     path('me/dashboard-stats/', MeDashboardStatsView.as_view(), name='me-dashboard-stats'),
+    path('me/support-options/', MeSupportOptionsView.as_view(), name='me-support-options'),
     path('me/change-password/', MeViewSet.as_view({'post': 'change_password'}), name='me-change-password'),
     path('me/reset-password/', MeViewSet.as_view({'post': 'reset_password'}), name='me-reset-password'),
     path('me/avatar/', MeViewSet.as_view({'post': 'avatar_upload'}), name='me-avatar'),

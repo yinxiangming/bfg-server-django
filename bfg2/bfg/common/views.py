@@ -7,6 +7,7 @@ ViewSets for common module
 import importlib
 
 from django.apps import apps
+from django.db import transaction
 from django.db.models.deletion import ProtectedError
 from rest_framework import viewsets, status, mixins
 from rest_framework.exceptions import APIException
@@ -1829,6 +1830,90 @@ class MeInvoiceViewSet(viewsets.ReadOnlyModelViewSet):
         response = HttpResponse(pdf_content, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="{invoice.invoice_number}.pdf"'
         return response
+
+
+class MeSupportOptionsView(APIView):
+    """
+    GET /api/v1/me/support-options/ - ticket statuses, priorities, categories for customer create-ticket form.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from bfg.support.options import get_options
+        workspace = get_required_workspace(request)
+        data = get_options(workspace)
+        return Response(data)
+
+
+class MeTicketsViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.CreateModelMixin, mixins.RetrieveModelMixin):
+    """
+    Me Tickets ViewSet - current customer's support tickets.
+
+    GET /api/v1/me/tickets/ - List my tickets
+    POST /api/v1/me/tickets/ - Create a ticket
+    GET /api/v1/me/tickets/{id}/ - Get ticket detail
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        from bfg.support.serializers import (
+            TicketListSerializer,
+            TicketDetailSerializer,
+            MeTicketCreateSerializer,
+        )
+        if self.action == 'create':
+            return MeTicketCreateSerializer
+        if self.action == 'retrieve':
+            return TicketDetailSerializer
+        return TicketListSerializer
+
+    def get_queryset(self):
+        from bfg.support.models import SupportTicket
+        workspace = get_required_workspace(self.request)
+        customer, _ = Customer.objects.get_or_create(
+            user=self.request.user,
+            workspace=workspace,
+            defaults={'is_active': True}
+        )
+        return SupportTicket.objects.filter(
+            workspace=workspace,
+            customer=customer
+        ).select_related(
+            'customer', 'customer__user', 'priority', 'category', 'assigned_to', 'team'
+        ).order_by('-created_at')
+
+    def perform_create(self, serializer):
+        from bfg.support.models import SupportTicket
+        from django.utils import timezone
+        workspace = get_required_workspace(self.request)
+        customer, _ = Customer.objects.get_or_create(
+            user=self.request.user,
+            workspace=workspace,
+            defaults={'is_active': True}
+        )
+        with transaction.atomic():
+            today_str = timezone.now().strftime('%Y%m%d')
+            prefix = f"TKT-{today_str}-"
+            last_ticket = SupportTicket.objects.filter(
+                workspace=workspace,
+                ticket_number__startswith=prefix
+            ).order_by('-ticket_number').first()
+            if last_ticket and last_ticket.ticket_number:
+                try:
+                    last_seq = int(last_ticket.ticket_number.split('-')[-1])
+                except (ValueError, IndexError):
+                    last_seq = 0
+            else:
+                last_seq = 0
+            next_seq = str(last_seq + 1).zfill(4)
+            ticket_number = f"{prefix}{next_seq}"
+            serializer.save(
+                workspace=workspace,
+                customer=customer,
+                ticket_number=ticket_number,
+                channel='web',
+                status='new',
+            )
 
 
 class OptionsView(APIView):

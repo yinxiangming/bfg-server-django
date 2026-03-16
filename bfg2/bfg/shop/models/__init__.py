@@ -10,3 +10,4 @@ from .review import ProductReview
 from .sales_channel import SalesChannel, ProductChannelListing, ChannelCollection
 from .returns import Return, ReturnLineItem
 from .batch import ProductBatch, BatchMovement
+from .wishlist import Wishlist

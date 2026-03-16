@@ -28,7 +28,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     
     def get_queryset(self):
-        """Get categories for current workspace"""
+        """Get categories for current workspace. Fallback to English when requested language has no categories (for list)."""
         workspace = getattr(self.request, 'workspace', None)
         if not workspace:
             from rest_framework.exceptions import NotFound
@@ -41,12 +41,16 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
         ).select_related('parent').prefetch_related('children').order_by('order', 'name')
         
         # Filter active by default only for list actions
-        # For retrieve/update/delete, show all to allow management of inactive categories
         if self.action == 'list':
             queryset = queryset.filter(is_active=True)
+            # If current language has no categories, fallback to English so selectors always have options
+            if language != 'en' and not queryset.exists():
+                queryset = ProductCategory.objects.filter(
+                    workspace=workspace,
+                    language='en'
+                ).select_related('parent').prefetch_related('children').filter(is_active=True).order_by('order', 'name')
         
         # If tree=true, return only root categories (categories without parent)
-        # The serializer will recursively include children
         if self.request.query_params.get('tree', '').lower() == 'true':
             queryset = queryset.filter(parent__isnull=True)
         
@@ -145,14 +149,20 @@ class ProductViewSet(viewsets.ModelViewSet):
         featured = self.request.query_params.get('featured')
         if featured == 'true':
             queryset = queryset.filter(is_featured=True)
+
+        # Filter by condition (e.g. ?condition=good)
+        condition = self.request.query_params.get('condition')
+        if condition:
+            queryset = queryset.filter(condition=condition)
         
-        # Search by name or SKU
+        # Search by name, SKU, or barcode
         search = self.request.query_params.get('search')
         if search:
             from django.db.models import Q
             queryset = queryset.filter(
                 Q(name__icontains=search) |
                 Q(sku__icontains=search) |
+                Q(barcode__icontains=search) |
                 Q(variants__sku__icontains=search)
             ).distinct()
         
@@ -408,36 +418,50 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
 
 
 class ProductReviewViewSet(viewsets.ModelViewSet):
-    """Product review ViewSet"""
+    """Product review ViewSet for admin: list, filter, approve/reject, delete."""
     serializer_class = ProductReviewSerializer
-    permission_classes = [IsAuthenticated]
-    
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+
     def get_queryset(self):
-        """Get reviews"""
+        """Get reviews with optional filters."""
         queryset = ProductReview.objects.filter(
             workspace=self.request.workspace
-        ).select_related('product', 'customer')
-        
+        ).select_related('product', 'customer', 'customer__user')
         product_id = self.request.query_params.get('product')
         if product_id:
             queryset = queryset.filter(product_id=product_id)
-        
-        if not getattr(self.request, 'is_staff_member', False):
-            queryset = queryset.filter(is_approved=True)
-        
+        is_approved = self.request.query_params.get('is_approved')
+        if is_approved is not None and is_approved != '':
+            if is_approved.lower() in ('true', '1', 'yes'):
+                queryset = queryset.filter(is_approved=True)
+            elif is_approved.lower() in ('false', '0', 'no'):
+                queryset = queryset.filter(is_approved=False)
         return queryset.order_by('-created_at')
-    
+
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        """Approve a review (staff only)."""
+        review = self.get_object()
+        review.is_approved = True
+        review.save(update_fields=['is_approved', 'updated_at'])
+        serializer = self.get_serializer(review)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        """Reject a review (set is_approved=False)."""
+        review = self.get_object()
+        review.is_approved = False
+        review.save(update_fields=['is_approved', 'updated_at'])
+        serializer = self.get_serializer(review)
+        return Response(serializer.data)
+
     def perform_create(self, serializer):
-        """Create review"""
+        """Create review (admin create not typical; storefront uses store API)."""
         from bfg.common.models import Customer
-        
         customer = Customer.objects.get(
             workspace=self.request.workspace,
             user=self.request.user
         )
-        
-        serializer.save(
-            workspace=self.request.workspace,
-            customer=customer
-        )
+        serializer.save(workspace=self.request.workspace, customer=customer)
 

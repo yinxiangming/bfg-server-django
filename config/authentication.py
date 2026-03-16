@@ -35,3 +35,24 @@ class BearerTokenAuthentication(JWTAuthentication):
         
         return (user, validated_token)
 
+
+class OptionalBearerTokenAuthentication(JWTAuthentication):
+    """
+    Like BearerTokenAuthentication but never raises: missing or invalid/expired
+    token results in anonymous user so AllowAny endpoints (e.g. mark review helpful)
+    keep working without forcing 401.
+    """
+    def authenticate(self, request):
+        header = self.get_header(request)
+        if header is None:
+            return None
+        raw_token = self.get_raw_token(header)
+        if raw_token is None:
+            return None
+        try:
+            validated_token = self.get_validated_token(raw_token)
+            user = self.get_user(validated_token)
+            return (user, validated_token)
+        except exceptions.APIException:
+            return None
+

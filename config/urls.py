@@ -32,7 +32,7 @@ urlpatterns = [
         path('', include('bfg.shop.urls')),
         path('', include('bfg.delivery.urls')),
         path('', include('bfg.marketing.urls')),
-        path('', include('bfg.support.urls')),
+        path('support/', include('bfg.support.urls')),
         path('inbox/', include('bfg.inbox.urls')),
         path('', include('bfg.finance.urls')),
         path('store/', include('bfg.shop.urls_storefront')),

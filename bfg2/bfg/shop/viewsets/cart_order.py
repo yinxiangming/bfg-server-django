@@ -1,7 +1,7 @@
 """
 Cart and Order ViewSets
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.db.models import Sum, Count
 from django.db.models.functions import TruncDate
@@ -367,7 +367,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         ).prefetch_related(
             'items', 'items__product', 'items__variant',
             'invoices', 'invoices__items', 'invoices__currency',
-            'payments', 'payments__gateway', 'payments__currency'
+            'payments', 'payments__gateway', 'payments__currency',
+            'packages'
         )
         
         if not user.is_authenticated:
@@ -384,6 +385,29 @@ class OrderViewSet(viewsets.ModelViewSet):
             status_filter = self.request.query_params.get('status')
             if status_filter:
                 queryset = queryset.filter(status=status_filter)
+            payment_status = self.request.query_params.get('payment_status')
+            if payment_status:
+                queryset = queryset.filter(payment_status=payment_status)
+            store_id = self.request.query_params.get('store')
+            if store_id:
+                try:
+                    queryset = queryset.filter(store_id=int(store_id))
+                except (ValueError, TypeError):
+                    pass
+            created_after = self.request.query_params.get('created_after')
+            if created_after:
+                try:
+                    dt = date.fromisoformat(created_after)
+                    queryset = queryset.filter(created_at__date__gte=dt)
+                except (ValueError, TypeError):
+                    pass
+            created_before = self.request.query_params.get('created_before')
+            if created_before:
+                try:
+                    dt = date.fromisoformat(created_before)
+                    queryset = queryset.filter(created_at__date__lte=dt)
+                except (ValueError, TypeError):
+                    pass
         else:
             customer = Customer.objects.filter(
                 workspace=workspace,
@@ -577,11 +601,13 @@ class OrderViewSet(viewsets.ModelViewSet):
         
         order = self.get_object()
         
-        # Save old address info before any updates
+        # Save old values for audit (address + status)
         old_shipping_address = order.shipping_address
         old_billing_address = order.billing_address
         old_shipping_address_id = order.shipping_address_id
         old_billing_address_id = order.billing_address_id
+        old_status = order.status
+        old_payment_status = order.payment_status
         
         # Check permissions - only staff can update orders
         from bfg.common.models import StaffMember
@@ -697,28 +723,35 @@ class OrderViewSet(viewsets.ModelViewSet):
         # Refresh to get updated data
         order.refresh_from_db()
         
-        # Create audit log if addresses were changed
+        # Track status/payment_status changes for audit
+        if old_status != order.status:
+            changes['status'] = {'old': old_status, 'new': order.status}
+        if old_payment_status != order.payment_status:
+            changes['payment_status'] = {'old': old_payment_status, 'new': order.payment_status}
+        
+        # Create audit log if anything changed (address, status, payment_status)
         if changes:
             audit = AuditService(workspace=request.workspace, user=request.user)
-            address_changes = []
-            
-            # Build detailed description with street information
             descriptions = []
             if 'shipping_address' in changes:
                 change = changes['shipping_address']
                 old_street = change['old'].get('street', 'N/A')
                 new_street = change['new'].get('street', 'N/A')
                 descriptions.append(f"Shipping address: {old_street} → {new_street}")
-                address_changes.append('shipping address')
-            
             if 'billing_address' in changes:
                 change = changes['billing_address']
                 old_street = change['old'].get('street', 'N/A')
                 new_street = change['new'].get('street', 'N/A')
                 descriptions.append(f"Billing address: {old_street} → {new_street}")
-                address_changes.append('billing address')
-            
-            description = f"Updated {', '.join(address_changes)} for order #{order.order_number}. " + " | ".join(descriptions)
+            if 'status' in changes:
+                descriptions.append(
+                    f"Order status: {changes['status']['old']} → {changes['status']['new']}"
+                )
+            if 'payment_status' in changes:
+                descriptions.append(
+                    f"Payment status: {changes['payment_status']['old']} → {changes['payment_status']['new']}"
+                )
+            description = f"Updated order #{order.order_number}. " + " | ".join(descriptions)
             audit.log_update(
                 order,
                 changes=changes,
@@ -746,64 +779,76 @@ class OrderViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def update_items(self, request, pk=None):
-        """Update order items"""
+        """Update order items. Syncs to requested items; does not delete items that are
+        protected by other FKs (e.g. ResalePayoutItem)."""
         from decimal import Decimal
         from django.db import transaction
-        
+        from django.db.models.deletion import ProtectedError
+
         order = self.get_object()
         items_data = request.data.get('items', [])
-        
+
         if not items_data:
             return Response(
                 {'detail': 'Items are required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        with transaction.atomic():
-            # Delete existing items
-            order.items.all().delete()
-            
-            # Create new items
-            subtotal = Decimal('0.00')
-            
-            for item_data in items_data:
-                product_id = item_data.get('product')
-                variant_id = item_data.get('variant')
-                
-                # Validate and get quantity
-                try:
-                    quantity = int(item_data.get('quantity', 1))
-                    if quantity <= 0:
-                        continue  # Skip invalid items
-                    if quantity > 10000:
-                        continue  # Skip items with excessive quantity
-                except (ValueError, TypeError):
-                    continue  # Skip items with invalid quantity
-                
-                # Security: Price must come from product/variant, not from user input
-                # User can only specify quantity, not price
-                if not product_id:
+
+        # Build desired (product_id, variant_id) -> quantity (variant_id None when not provided)
+        desired = {}
+        for item_data in items_data:
+            product_id = item_data.get('product')
+            variant_id = item_data.get('variant')
+            try:
+                quantity = int(item_data.get('quantity', 1))
+                if quantity <= 0 or quantity > 10000 or not product_id:
                     continue
-                
+            except (ValueError, TypeError):
+                continue
+            key = (int(product_id), int(variant_id) if variant_id else None)
+            desired[key] = desired.get(key, 0) + quantity
+
+        with transaction.atomic():
+            subtotal = Decimal('0.00')
+            existing_by_key = {}
+            for item in order.items.select_related('product', 'variant').all():
+                vid = item.variant_id if item.variant_id else None
+                key = (item.product_id, vid)
+                existing_by_key[key] = item
+
+            # Remove or update existing items
+            for key, existing_item in list(existing_by_key.items()):
+                product = existing_item.product
+                variant = existing_item.variant
+                price = variant.price if variant else product.price
+                if key not in desired:
+                    try:
+                        existing_item.delete()
+                    except ProtectedError:
+                        # Keep item and include in subtotal (e.g. linked to ResalePayoutItem)
+                        q = existing_item.quantity
+                        subtotal += price * q
+                    continue
+                new_qty = desired[key]
+                if existing_item.quantity != new_qty:
+                    existing_item.quantity = new_qty
+                    existing_item.subtotal = price * new_qty
+                    existing_item.save()
+                subtotal += price * existing_item.quantity
+                del desired[key]
+
+            # Create new items for remaining desired keys
+            for (product_id, variant_id), quantity in desired.items():
                 try:
                     product = Product.objects.get(id=product_id, workspace=request.workspace)
                     variant = None
                     if variant_id:
                         variant = ProductVariant.objects.get(id=variant_id, product=product)
-                    
-                    # Security: Use price from product/variant, not from user input
-                    if variant:
-                        price = variant.price
-                    else:
-                        price = product.price
-                    
-                    # Validate price is non-negative
+                    price = variant.price if variant else product.price
                     if price < 0:
-                        continue  # Skip items with negative price
-                    
+                        continue
                     item_subtotal = price * quantity
                     subtotal += item_subtotal
-                    
                     OrderItem.objects.create(
                         order=order,
                         product=product,
@@ -812,23 +857,20 @@ class OrderViewSet(viewsets.ModelViewSet):
                         variant_name=variant.name if variant else '',
                         sku=variant.sku if variant else product.sku,
                         quantity=quantity,
-                        price=price,  # From product/variant, not user input
+                        price=price,
                         subtotal=item_subtotal
                     )
                 except (Product.DoesNotExist, ProductVariant.DoesNotExist):
                     continue
-            
-            # Update order totals
+
             shipping_cost = order.shipping_cost or Decimal('0.00')
             tax = order.tax or Decimal('0.00')
             discount = order.discount or Decimal('0.00')
             order.subtotal = subtotal
             order.total = subtotal + shipping_cost + tax - discount
             order.save()
-        
-        # Refresh from database to ensure all related objects are loaded
+
         order.refresh_from_db()
-        
         serializer = self.get_serializer(order)
         return Response(serializer.data)
 

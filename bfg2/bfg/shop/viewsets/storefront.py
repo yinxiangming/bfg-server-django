@@ -9,6 +9,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
+from config.authentication import OptionalBearerTokenAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication as BearerTokenAuthentication
 from django.db import transaction
 from django.utils import timezone
@@ -41,10 +42,10 @@ from bfg.finance.services import PaymentService
 User = get_user_model()
 
 class StorefrontProductViewSet(viewsets.ReadOnlyModelViewSet):
-    """Storefront product browsing ViewSet"""
+    """Storefront product browsing ViewSet. Optional JWT so POST review has user, GET/helpful work without 401."""
     serializer_class = StorefrontProductSerializer
     permission_classes = [AllowAny]
-    authentication_classes = []
+    authentication_classes = [OptionalBearerTokenAuthentication]
     lookup_field = 'slug'
     lookup_url_kwarg = 'id_or_slug'
     
@@ -86,6 +87,11 @@ class StorefrontProductViewSet(viewsets.ReadOnlyModelViewSet):
             thirty_days_ago = timezone.now() - timedelta(days=30)
             queryset = queryset.filter(created_at__gte=thirty_days_ago)
         
+        # Condition filter (e.g. ?condition=good)
+        condition = self.request.query_params.get('condition')
+        if condition:
+            queryset = queryset.filter(condition=condition)
+
         # Price filtering
         min_price = self.request.query_params.get('min_price')
         if min_price:
@@ -226,7 +232,13 @@ class StorefrontProductViewSet(viewsets.ReadOnlyModelViewSet):
                 context={'request': request}
             )
             serializer.is_valid(raise_exception=True)
-            
+            # Default: show review immediately; set is_approved=False only when workspace enables review moderation
+            ws_settings = getattr(request.workspace, 'workspace_settings', None)
+            custom = (getattr(ws_settings, 'custom_settings', None) or {}) or {}
+            shop_settings = custom.get('shop') or {}
+            review_moderation = bool(shop_settings.get('review_moderation_required', False))
+            need_approval = review_moderation
+            is_approved_new = not need_approval
             # Check if this is a verified purchase
             is_verified = False
             order_id = request.data.get('order_id')
@@ -246,21 +258,51 @@ class StorefrontProductViewSet(viewsets.ReadOnlyModelViewSet):
                             customer=customer,
                             order=order,
                             is_verified_purchase=True,
-                            is_approved=False  # Require approval for new reviews
+                            is_approved=is_approved_new
                         )
+                        return Response(serializer.data, status=status.HTTP_201_CREATED)
                 except Order.DoesNotExist:
                     pass
-            
-            if not is_verified:
-                serializer.save(
-                    workspace=request.workspace,
-                    product=product,
-                    customer=customer,
-                    is_verified_purchase=False,
-                    is_approved=False  # Require approval for new reviews
-                )
-            
+
+            serializer.save(
+                workspace=request.workspace,
+                product=product,
+                customer=customer,
+                is_verified_purchase=False,
+                is_approved=is_approved_new
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def _get_product_by_id_or_slug(self, kwargs):
+        """Resolve product by id_or_slug (numeric id or slug)."""
+        lookup_value = kwargs.get(self.lookup_url_kwarg)
+        if lookup_value:
+            try:
+                product_id = int(lookup_value)
+                return self.get_queryset().get(id=product_id)
+            except (ValueError, Product.DoesNotExist):
+                try:
+                    return self.get_queryset().get(slug=lookup_value)
+                except Product.DoesNotExist:
+                    raise NotFound("Product not found")
+        return self.get_object()
+
+    @action(detail=True, methods=['post'], url_path='reviews/(?P<review_id>[^/.]+)/helpful')
+    def review_helpful(self, request, review_id=None, **kwargs):
+        """Mark a review as helpful (increments helpful_count)."""
+        product = self._get_product_by_id_or_slug(kwargs)
+        try:
+            review = ProductReview.objects.get(
+                id=review_id,
+                product=product,
+                is_approved=True
+            )
+        except (ProductReview.DoesNotExist, ValueError):
+            raise NotFound("Review not found")
+        review.helpful_count = (review.helpful_count or 0) + 1
+        review.save(update_fields=['helpful_count', 'updated_at'])
+        serializer = StorefrontProductReviewSerializer(review, context={'request': request})
+        return Response(serializer.data)
 
 
 class StorefrontAddressViewSet(viewsets.ModelViewSet):
@@ -346,26 +388,31 @@ class StorefrontCategoryViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class StorefrontCategoryViewSet(viewsets.ReadOnlyModelViewSet):
-    """Storefront category ViewSet"""
+    """Storefront category ViewSet. Fallback to English when requested language has no categories."""
     serializer_class = StorefrontCategorySerializer
     permission_classes = [AllowAny]
     authentication_classes = []
     
     def get_queryset(self):
-        """Get active categories"""
+        """Get active categories; fallback to en when current language has none."""
         workspace = self.request.workspace
         language = self.request.query_params.get('lang', 'en')
-        
+        tree = self.request.query_params.get('tree', '').lower() == 'true'
         queryset = ProductCategory.objects.filter(
             workspace=workspace,
             is_active=True,
             language=language
         ).select_related('parent').prefetch_related('children')
-        
-        # If tree=true, return only root categories
-        if self.request.query_params.get('tree', '').lower() == 'true':
+        if tree:
             queryset = queryset.filter(parent__isnull=True)
-        
+        if language != 'en' and not queryset.exists():
+            queryset = ProductCategory.objects.filter(
+                workspace=workspace,
+                is_active=True,
+                language='en'
+            ).select_related('parent').prefetch_related('children')
+            if tree:
+                queryset = queryset.filter(parent__isnull=True)
         return queryset.order_by('order', 'name')
 
 

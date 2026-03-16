@@ -95,6 +95,7 @@ class StorefrontProductSerializer(serializers.ModelSerializer):
     is_new = serializers.SerializerMethodField()
     rating = serializers.SerializerMethodField()
     reviews_count = serializers.SerializerMethodField()
+    stock_quantity = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Product
@@ -102,7 +103,8 @@ class StorefrontProductSerializer(serializers.ModelSerializer):
             'id', 'slug', 'name', 'price', 'compare_price', 'product_type',
             'description', 'short_description', 'media', 'variants',
             'categories', 'tags', 'primary_image', 'images',
-            'discount_percentage', 'is_new', 'is_featured', 'rating', 'reviews_count'
+            'discount_percentage', 'is_new', 'is_featured', 'rating', 'reviews_count',
+            'condition', 'stock_quantity'
         ]
         read_only_fields = ['id']
     

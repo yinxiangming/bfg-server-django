@@ -99,17 +99,28 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
                 )
 
     def perform_update(self, serializer):
-        """On assigned_to change, create TicketAssignment record."""
+        """On assigned_to change, create TicketAssignment record. Explicitly persist unassign (assigned_to=None)."""
         instance = serializer.instance
         old_assigned_to_id = instance.assigned_to_id
         new_assigned_to = serializer.validated_data.get('assigned_to')
         with transaction.atomic():
             serializer.save()
+            # Ensure unassign is persisted (some clients send assigned_to: null; keep DB in sync)
+            if 'assigned_to' in serializer.validated_data and serializer.validated_data['assigned_to'] is None:
+                instance.assigned_to_id = None
+                instance.save(update_fields=['assigned_to', 'updated_at'])
             if new_assigned_to is not None and old_assigned_to_id != new_assigned_to.id:
                 TicketAssignment.objects.create(
                     ticket=instance,
                     assigned_from_id=old_assigned_to_id,
                     assigned_to=new_assigned_to,
+                    assigned_by=self.request.user
+                )
+            elif old_assigned_to_id is not None and new_assigned_to is None:
+                TicketAssignment.objects.create(
+                    ticket=instance,
+                    assigned_from_id=old_assigned_to_id,
+                    assigned_to=None,
                     assigned_by=self.request.user
                 )
 

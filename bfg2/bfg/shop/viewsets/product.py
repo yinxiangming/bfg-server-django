@@ -418,36 +418,50 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
 
 
 class ProductReviewViewSet(viewsets.ModelViewSet):
-    """Product review ViewSet"""
+    """Product review ViewSet for admin: list, filter, approve/reject, delete."""
     serializer_class = ProductReviewSerializer
-    permission_classes = [IsAuthenticated]
-    
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+
     def get_queryset(self):
-        """Get reviews"""
+        """Get reviews with optional filters."""
         queryset = ProductReview.objects.filter(
             workspace=self.request.workspace
-        ).select_related('product', 'customer')
-        
+        ).select_related('product', 'customer', 'customer__user')
         product_id = self.request.query_params.get('product')
         if product_id:
             queryset = queryset.filter(product_id=product_id)
-        
-        if not getattr(self.request, 'is_staff_member', False):
-            queryset = queryset.filter(is_approved=True)
-        
+        is_approved = self.request.query_params.get('is_approved')
+        if is_approved is not None and is_approved != '':
+            if is_approved.lower() in ('true', '1', 'yes'):
+                queryset = queryset.filter(is_approved=True)
+            elif is_approved.lower() in ('false', '0', 'no'):
+                queryset = queryset.filter(is_approved=False)
         return queryset.order_by('-created_at')
-    
+
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        """Approve a review (staff only)."""
+        review = self.get_object()
+        review.is_approved = True
+        review.save(update_fields=['is_approved', 'updated_at'])
+        serializer = self.get_serializer(review)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        """Reject a review (set is_approved=False)."""
+        review = self.get_object()
+        review.is_approved = False
+        review.save(update_fields=['is_approved', 'updated_at'])
+        serializer = self.get_serializer(review)
+        return Response(serializer.data)
+
     def perform_create(self, serializer):
-        """Create review"""
+        """Create review (admin create not typical; storefront uses store API)."""
         from bfg.common.models import Customer
-        
         customer = Customer.objects.get(
             workspace=self.request.workspace,
             user=self.request.user
         )
-        
-        serializer.save(
-            workspace=self.request.workspace,
-            customer=customer
-        )
+        serializer.save(workspace=self.request.workspace, customer=customer)
 

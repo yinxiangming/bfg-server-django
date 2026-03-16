@@ -14,6 +14,7 @@ from .viewsets.storefront import (
     StorefrontPaymentViewSet,
     StorefrontAddressViewSet,
 )
+from .viewsets.wishlist import StorefrontWishlistViewSet
 from bfg.marketing.promo_views import PromoView
 
 router = DefaultRouter()
@@ -23,6 +24,7 @@ router.register(r'cart', StorefrontCartViewSet, basename='storefront-cart')
 router.register(r'addresses', StorefrontAddressViewSet, basename='storefront-address')
 router.register(r'orders', StorefrontOrderViewSet, basename='storefront-order')
 router.register(r'payments', StorefrontPaymentViewSet, basename='storefront-payment')
+router.register(r'wishlist', StorefrontWishlistViewSet, basename='storefront-wishlist')
 
 urlpatterns = [
     # Custom payment callback route (must come before router.urls)

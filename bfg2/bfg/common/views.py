@@ -675,6 +675,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
 
         general_custom = (settings_obj.custom_settings or {}).get('general') or {}
         storefront_ui = (settings_obj.custom_settings or {}).get('storefront_ui') or {}
+        shop_custom = (settings_obj.custom_settings or {}).get('shop') or {}
         default_header_options = {
             'show_search': True,
             'show_cart': True,
@@ -706,6 +707,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'header': storefront_ui.get('header'),
             'footer': storefront_ui.get('footer'),
             'header_options': default_header_options,
+            'review_moderation_required': bool(shop_custom.get('review_moderation_required', False)),
         }
 
         try:

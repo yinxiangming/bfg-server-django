@@ -32,6 +32,7 @@ from .store import (
 from .subscription import (
     SubscriptionPlanViewSet
 )
+from .wishlist import WishlistViewSet
 
 __all__ = [
     # Product
@@ -58,4 +59,6 @@ __all__ = [
     'StoreViewSet',
     # Subscription
     'SubscriptionPlanViewSet',
+    # Wishlist
+    'WishlistViewSet',
 ]

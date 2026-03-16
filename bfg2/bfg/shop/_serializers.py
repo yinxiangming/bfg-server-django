@@ -15,7 +15,7 @@ from bfg.shop.models import (
     ProductCategory, ProductTag, Product, ProductVariant, VariantInventory,
     Cart, CartItem, Order, OrderItem, ProductReview, Store,
     SalesChannel, ProductChannelListing, ChannelCollection, Return, ReturnLineItem,
-    SubscriptionPlan
+    SubscriptionPlan, Wishlist
 )
 from bfg.shop.schemas import (
     ProductCategoryRulesModel,
@@ -740,21 +740,33 @@ class OrderDetailSerializer(serializers.ModelSerializer):
 class ProductReviewSerializer(serializers.ModelSerializer):
     """Product review serializer"""
     customer_name = serializers.CharField(source='customer.user.get_full_name', read_only=True)
-    
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
     class Meta:
         model = ProductReview
         fields = [
-            'id', 'product', 'customer', 'customer_name', 'rating',
-            'title', 'comment', 'is_verified_purchase', 'is_approved',
-            'created_at', 'updated_at'
+            'id', 'product', 'product_name', 'customer', 'customer_name', 'rating',
+            'title', 'comment', 'images', 'is_verified_purchase', 'is_approved',
+            'helpful_count', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'customer', 'is_verified_purchase', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'customer', 'is_verified_purchase', 'helpful_count', 'created_at', 'updated_at']
     
     def validate_rating(self, value):
         """Validate rating is between 1-5"""
         if value < 1 or value > 5:
             raise serializers.ValidationError('Rating must be between 1 and 5')
         return value
+
+
+class WishlistSerializer(serializers.ModelSerializer):
+    """Wishlist entry serializer for admin"""
+    customer_name = serializers.CharField(source='customer.user.email', read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
+    class Meta:
+        model = Wishlist
+        fields = ['id', 'workspace', 'customer', 'customer_name', 'product', 'product_name', 'created_at']
+        read_only_fields = ['id', 'workspace', 'created_at']
 
 
 # ============================================================================

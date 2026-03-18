@@ -17,3 +17,9 @@ class WebConfig(AppConfig):
             import bfg.web.handlers  # noqa
         except ImportError:
             pass
+
+        try:
+            from bfg.web.agent_capabilities import register_capabilities
+            register_capabilities()
+        except ImportError:
+            pass

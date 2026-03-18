@@ -13,9 +13,15 @@ class FinanceConfig(AppConfig):
             import bfg.finance.signals  # noqa
         except ImportError:
             pass
-        
+
         # Register event handlers for payment notifications
         try:
             import bfg.finance.handlers  # noqa
+        except ImportError:
+            pass
+
+        try:
+            from bfg.finance.agent_capabilities import register_capabilities
+            register_capabilities()
         except ImportError:
             pass

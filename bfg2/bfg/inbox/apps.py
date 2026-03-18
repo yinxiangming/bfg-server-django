@@ -13,6 +13,9 @@ class InboxConfig(AppConfig):
             import bfg.inbox.signals  # noqa
         except ImportError:
             pass
-        
-        # No event handlers in inbox module
-        # Business-specific handlers are in their respective modules
+
+        try:
+            from bfg.inbox.agent_capabilities import register_capabilities
+            register_capabilities()
+        except ImportError:
+            pass

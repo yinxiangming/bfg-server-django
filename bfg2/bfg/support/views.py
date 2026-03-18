@@ -2,26 +2,47 @@
 """
 BFG Support Module API Views
 """
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.utils import timezone
-from django.db import transaction
 
 from bfg.core.permissions import IsWorkspaceStaff
 from .models import SupportTicket, SupportTicketMessage, TicketAssignment, TicketCategory, TicketPriority
+from .options import get_options
 from .serializers import (
-    TicketListSerializer,
-    TicketDetailSerializer,
-    TicketMessageSerializer,
     TicketCategorySerializer,
+    TicketDetailSerializer,
+    TicketListSerializer,
+    TicketMessageSerializer,
     TicketPrioritySerializer,
 )
-from .options import get_options
+
+try:
+    from drf_spectacular.utils import extend_schema, extend_schema_view
+except ImportError:
+    extend_schema = lambda **kwargs: lambda f: f
+    extend_schema_view = lambda **kwargs: lambda cls: cls
 
 
+@extend_schema_view(
+    close=extend_schema(summary="Close ticket", description="Set ticket status to closed."),
+    reply=extend_schema(
+        summary="Reply to ticket",
+        description="Add a staff reply. Use message or message_text for body; is_internal for internal note.",
+        request={"type": "object", "properties": {"message": {"type": "string"}, "message_text": {"type": "string"}, "is_internal": {"type": "boolean"}}, "required": ["message"]},
+        responses={201: TicketDetailSerializer},
+    ),
+    list_messages=extend_schema(
+        summary="List ticket messages",
+        description="Paginated messages for the ticket (query: page, page_size).",
+        parameters=[{"name": "page", "in": "query", "schema": {"type": "integer"}}, {"name": "page_size", "in": "query", "schema": {"type": "integer"}}],
+        responses={200: {"type": "object", "properties": {"count": {}, "results": {}, "page": {}, "page_size": {}}}},
+    ),
+)
 class SupportTicketViewSet(viewsets.ModelViewSet):
     """Support ticket management ViewSet"""
     permission_classes = [IsAuthenticated, IsWorkspaceStaff]
@@ -63,6 +84,23 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         priority_filter = self.request.query_params.get('priority')
         if priority_filter:
             queryset = queryset.filter(priority__name=priority_filter)
+
+        # Business identifier filters: ticket_number (exact) and search (subject, customer)
+        ticket_number = (self.request.query_params.get('ticket_number') or '').strip()
+        if ticket_number:
+            queryset = queryset.filter(ticket_number__iexact=ticket_number)
+        search = (self.request.query_params.get('search') or '').strip()
+        if search:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(ticket_number__icontains=search) |
+                Q(subject__icontains=search) |
+                Q(description__icontains=search) |
+                Q(customer__user__email__icontains=search) |
+                Q(customer__customer_number__icontains=search) |
+                Q(customer__user__first_name__icontains=search) |
+                Q(customer__user__last_name__icontains=search)
+            ).distinct()
 
         return queryset
 

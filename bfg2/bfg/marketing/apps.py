@@ -13,3 +13,9 @@ class MarketingConfig(AppConfig):
             import bfg.marketing.signals  # noqa
         except ImportError:
             pass
+
+        try:
+            from bfg.marketing.agent_capabilities import register_capabilities
+            register_capabilities()
+        except ImportError:
+            pass

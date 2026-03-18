@@ -18,6 +18,7 @@ urlpatterns = [
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     path('api/v1/', include([
+        path('agent/', include('bfg.core.agent_urls')),
         path('auth/', include([
             path('register/', register, name='register'),
             path('forgot-password/', forgot_password, name='forgot-password'),

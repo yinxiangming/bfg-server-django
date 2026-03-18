@@ -8,8 +8,13 @@ class DeliveryConfig(AppConfig):
     verbose_name = 'BFG Delivery & Logistics'
     
     def ready(self):
-        """Import signals when app is ready."""
+        """Import signals and register agent capabilities when app is ready."""
         try:
             import bfg.delivery.signals  # noqa
+        except ImportError:
+            pass
+        try:
+            from bfg.delivery.agent_capabilities import register_capabilities
+            register_capabilities()
         except ImportError:
             pass

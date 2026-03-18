@@ -8,8 +8,13 @@ class SupportConfig(AppConfig):
     verbose_name = 'BFG Support & Help Desk'
     
     def ready(self):
-        """Import signals when app is ready."""
+        """Import signals and register agent capabilities when app is ready."""
         try:
             import bfg.support.signals  # noqa
+        except ImportError:
+            pass
+        try:
+            from bfg.support.agent_capabilities import register_capabilities
+            register_capabilities()
         except ImportError:
             pass

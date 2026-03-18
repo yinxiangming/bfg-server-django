@@ -408,6 +408,21 @@ class OrderViewSet(viewsets.ModelViewSet):
                     queryset = queryset.filter(created_at__date__lte=dt)
                 except (ValueError, TypeError):
                     pass
+            # Business identifier filters (staff only)
+            order_number = (self.request.query_params.get('order_number') or '').strip()
+            if order_number:
+                queryset = queryset.filter(order_number__iexact=order_number)
+            search = (self.request.query_params.get('search') or '').strip()
+            if search:
+                from django.db.models import Q
+                queryset = queryset.filter(
+                    Q(order_number__icontains=search) |
+                    Q(customer__user__email__icontains=search) |
+                    Q(customer__customer_number__icontains=search) |
+                    Q(customer__user__first_name__icontains=search) |
+                    Q(customer__user__last_name__icontains=search) |
+                    Q(customer__company_name__icontains=search)
+                ).distinct()
         else:
             customer = Customer.objects.filter(
                 workspace=workspace,

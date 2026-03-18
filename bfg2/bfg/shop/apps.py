@@ -13,9 +13,15 @@ class ShopConfig(AppConfig):
             import bfg.shop.signals  # noqa
         except ImportError:
             pass
-        
+
         # Register event handlers for order notifications
         try:
             import bfg.shop.handlers  # noqa
+        except ImportError:
+            pass
+
+        try:
+            from bfg.shop.agent_capabilities import register_capabilities
+            register_capabilities()
         except ImportError:
             pass

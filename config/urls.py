@@ -11,6 +11,11 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, Sp
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView, TokenVerifyView
 from config.serializers import CustomTokenObtainPairSerializer
 from config.views import register, forgot_password, reset_password_confirm, verify_email
+from config.social_auth import (
+    social_login_view,
+    social_callback_view,
+    social_callback_view_csrf_exempt,
+)
 
 urlpatterns = [
     re_path(r'^admin/', admin.site.urls),
@@ -26,7 +31,13 @@ urlpatterns = [
             path('verify-email/', verify_email, name='verify-email'),
             path('token/', TokenObtainPairView.as_view(serializer_class=CustomTokenObtainPairSerializer), name='token_obtain_pair'),
             path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-            path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),
+            path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),             
+            path('google/login/', social_login_view, {'provider': 'google'}, name='google_login'),
+            path('google/callback/', social_callback_view, {'provider': 'google'}, name='google_callback'),
+            path('facebook/login/', social_login_view, {'provider': 'facebook'}, name='facebook_login'),
+            path('facebook/callback/', social_callback_view, {'provider': 'facebook'}, name='facebook_callback'),
+            path('apple/login/', social_login_view, {'provider': 'apple'}, name='apple_login'),
+            path('apple/callback/', social_callback_view_csrf_exempt, {'provider': 'apple'}, name='apple_callback'),
         ])),
         path('', include('bfg.common.urls')),
         path('web/', include('bfg.web.urls')),

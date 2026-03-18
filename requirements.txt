@@ -26,6 +26,9 @@ weasyprint>=60.0  # HTML to PDF generation
 # CORS
 django-cors-headers==4.6.0
 
+# Social auth (Google, Apple, Facebook)
+django-allauth>=0.57
+
 # Static files
 whitenoise==6.8.2  # Replaces dj-static/static3 for modern Django
 

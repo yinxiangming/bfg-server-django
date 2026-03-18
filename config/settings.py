@@ -206,7 +206,7 @@ SIMPLE_JWT = {
 SPECTACULAR_SETTINGS = {
     'TITLE': 'BFG Framework API',
     'DESCRIPTION': 'BFG open-source e-commerce and SaaS backend API',
-    'VERSION': '1.0.0',
+    'VERSION': '1.1.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'SWAGGER_UI_SETTINGS': {
         'deepLinking': True,

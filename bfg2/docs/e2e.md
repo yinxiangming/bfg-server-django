@@ -1,6 +1,6 @@
 # E2E Tests
 
-HTTP-only: run against any BFG2-compatible API. Set `BASE_URL` (or `BFG2_API_BASE_URL`) to the running server.
+HTTP-only: run against any BFG2-compatible API. Set **`BASE_URL`** to the running server.
 
 ```bash
 BASE_URL=http://localhost:3100 pytest bfg2/tests/e2e -m e2e -v
@@ -23,7 +23,7 @@ All passwords and secrets must come from **env** (e.g. `src/server/.env`). Do no
 
 ### Session bootstrap (one pytest session)
 
-1. Read `BASE_URL` and password-related env vars. With `:8000` + superuser env, use the bootstrap account to create workspaces; otherwise register/login to obtain **two workspaces (ws1 / ws2)**.
+1. Read `BASE_URL` and password-related env vars. With **local API host** or `:8000` + superuser env, use the bootstrap account to create workspaces; otherwise register/login to obtain **two workspaces (ws1 / ws2)**.
 2. For each workspace, obtain **admin and customer tokens** and customer records for reuse.
 3. Test modules use fixtures such as `workspace`, `admin_client`, `customer_client`, `authenticated_client`, and `anonymous_api_client` against the **same API process** (~100+ collected tests by default).
 
@@ -64,8 +64,9 @@ All passwords and secrets must come from **env** (e.g. `src/server/.env`). Do no
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `BASE_URL` | yes | API base URL |
-| `BFG2_E2E_SUPERUSER_EMAIL` | optional | Pre-seeded bootstrap user (username or email) when `BASE_URL` ends with `:8000` and that deployment only allows a privileged user to create workspaces |
+| `BFG2_E2E_SUPERUSER_EMAIL` | optional | Pre-seeded bootstrap user (username or email) when using superuser bootstrap (local API host or `BASE_URL` ending with `:8000`) |
 | `BFG2_E2E_SUPERUSER_PASSWORD` | with superuser email | Password for that bootstrap user |
+| `BFG2_E2E_AUTH_LOGIN_EMAIL` | optional | If superuser identifier is a **username** but the API token endpoint expects **email**, set the real login email |
 | `BFG2_E2E_ADMIN_EMAIL` | when not using superuser bootstrap | Workspace admin email (default `admin@test.com`) |
 | `BFG2_E2E_ADMIN_PASSWORD` | when not using superuser bootstrap | Password for workspace admin accounts |
 | `BFG2_E2E_CUSTOMER_PASSWORD` | yes | Password for e2e customer accounts (`customer_e2e@test.com`, `customer2_e2e@test.com`, etc.) |
@@ -75,11 +76,17 @@ Sensitive me endpoints (`test_z_last_me_sensitive.py`) are skipped by default.
 
 ## Bootstrap behaviour
 
-If `BASE_URL` ends with `:8000` **and** both `BFG2_E2E_SUPERUSER_EMAIL` and `BFG2_E2E_SUPERUSER_PASSWORD` are set, the session uses that account to create workspaces (one token for both workspaces when the API allows).
+If both `BFG2_E2E_SUPERUSER_EMAIL` and `BFG2_E2E_SUPERUSER_PASSWORD` are set **and** either `BASE_URL` ends with `:8000` **or** the API host is local (`localhost` / `127.0.0.1` / `::1`), the session uses that account to create workspaces (one token for both workspaces when the API allows).
 
 Otherwise the session registers/logs in `BFG2_E2E_ADMIN_EMAIL` with `BFG2_E2E_ADMIN_PASSWORD` and uses a second admin for the second workspace.
 
+Token login tries `username` and `email` shapes; set `BFG2_E2E_AUTH_LOGIN_EMAIL` if the server requires an email for a username-only superuser.
+
 If token requests fail, confirm the server is up and env credentials match existing users.
+
+### Node.js API (e.g. port 3100)
+
+Use `BASE_URL=http://127.0.0.1:3100` (paths are not rewritten unless the URL ends with `:8000`). From `bfg-server-nodejs`, `npm run e2e` runs resale pytest with the same `BASE_URL` env. Repo root `scripts/e2e-both.sh` sets `BASE_URL` per phase from `PYTHON_API_BASE_URL` / `NODE_API_BASE_URL`.
 
 ## Restore e2e user passwords (reference API host DB)
 

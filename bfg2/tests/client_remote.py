@@ -1,5 +1,5 @@
 """
-HTTP client for e2e when BFG2_API_BASE_URL is set (test against Node/remote API).
+HTTP client for e2e (remote Node or Django API). Base URL from env only.
 Same interface as WorkspaceAPIClient: .get, .post, .data, .status_code, force_authenticate.
 """
 import os
@@ -8,10 +8,10 @@ import requests
 
 
 def get_base_url(require=False):
-    """Return API base URL. If require=True, assert it is set (e2e)."""
-    base = os.environ.get("BFG2_API_BASE_URL") or os.environ.get("BASE_URL") or ""
+    """Return API base URL from BASE_URL. If require=True, assert it is set (e2e)."""
+    base = os.environ.get("BASE_URL") or ""
     if require:
-        assert base.strip(), "BASE_URL or BFG2_API_BASE_URL must be set for e2e tests"
+        assert base.strip(), "BASE_URL must be set for e2e tests"
     return base.rstrip("/") if base else ""
 
 

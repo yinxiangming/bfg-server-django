@@ -5,8 +5,8 @@ E2E tests do not use @pytest.mark.django_db: they never touch the pytest-process
 
 Run: BASE_URL=http://localhost:3100 pytest bfg2/tests/e2e -m e2e
 
-When BASE_URL ends with :8000 and BFG2_E2E_SUPERUSER_* are set, that pre-seeded
-bootstrap user creates both workspaces (if the API allows).
+When BFG2_E2E_SUPERUSER_* are set and BASE_URL is :8000 or a local host, that
+pre-seeded bootstrap user creates both workspaces (if the API allows).
 
 Roles:
 - bootstrap / workspace admin: creates workspaces
@@ -14,6 +14,7 @@ Roles:
 """
 
 import os
+import urllib.parse
 from pathlib import Path
 
 # Load .env from src/server/.env (conftest is at server/bfg2/tests/conftest.py -> server = parent.parent.parent)
@@ -21,10 +22,13 @@ try:
     from dotenv import load_dotenv
     _conftest_file = Path(__file__).resolve()
     _server_env = _conftest_file.parent.parent.parent / ".env"
+    _base_url_preserved = os.environ.get("BASE_URL")
     if _server_env.is_file():
         load_dotenv(_server_env, override=True)
     elif (Path.cwd() / ".env").is_file():
         load_dotenv(Path.cwd() / ".env", override=True)
+    if _base_url_preserved:
+        os.environ["BASE_URL"] = _base_url_preserved
 except ImportError:
     pass
 import uuid
@@ -56,23 +60,36 @@ def _decode_user_id_from_token(token):
 
 def _get_token(base, identifier, password):
     """
-    Get JWT by calling token endpoint (POST /api/v1/auth/token/).
-    identifier: email or username; send as "email" if contains '@', else "username".
-    Use trailing slash only: Django APPEND_SLASH redirect drops POST data on /token.
-    Returns {token, user_id} or raises AssertionError.
+    Get JWT (POST /api/v1/auth/token/). Tries username and email JSON shapes;
+    optional BFG2_E2E_AUTH_LOGIN_EMAIL when superuser is username-only but API expects email.
     """
-    payload = {"password": password}
-    if "@" in identifier:
-        payload["email"] = identifier
-    else:
-        payload["username"] = identifier
     url = f"{base.rstrip('/')}/api/v1/auth/token/"
-    r = requests.post(url, json=payload, timeout=10)
-    if r.status_code == 200:
-        token = r.json().get("access")
-        if token:
-            return {"token": token, "user_id": _decode_user_id_from_token(token)}
-    raise AssertionError(f"Could not get token for {identifier}: {r.status_code} {getattr(r, 'text', r.content[:200])}")
+    alt_email = os.environ.get("BFG2_E2E_AUTH_LOGIN_EMAIL")
+    attempts = []
+    if "@" in identifier:
+        attempts.append({"email": identifier, "password": password})
+    else:
+        attempts.append({"username": identifier, "password": password})
+        attempts.append({"email": identifier, "password": password})
+    if alt_email and alt_email.strip() and alt_email != identifier:
+        attempts.append({"email": alt_email.strip(), "password": password})
+    seen = set()
+    bodies = []
+    for body in attempts:
+        key = tuple(sorted(body.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        bodies.append(body)
+    last = None
+    for body in bodies:
+        last = requests.post(url, json=body, timeout=10)
+        if last.status_code == 200:
+            token = last.json().get("access")
+            if token:
+                return {"token": token, "user_id": _decode_user_id_from_token(token)}
+    snippet = getattr(last, "text", "")[:300] if last else ""
+    raise AssertionError(f"Could not get token for {identifier}: {last.status_code if last else '?'} {snippet}")
 
 
 def _login_only(base, identifier, password):
@@ -146,16 +163,29 @@ def _create_customer_in_workspace(base, token, workspace_id, user_id):
     raise AssertionError(f"Could not create customer in workspace {workspace_id}: {r.text}")
 
 
-def _use_bootstrap_superuser(base):
-    """Use pre-seeded bootstrap user when BASE_URL is :8000 and superuser env is set."""
-    if not (base.endswith(":8000") or ":8000/" in base):
+def _is_local_api_host(base: str) -> bool:
+    try:
+        u = urllib.parse.urlparse(base)
+        host = (u.hostname or "").lower()
+        return host in ("localhost", "127.0.0.1", "::1")
+    except Exception:
         return False
-    return bool(os.environ.get("BFG2_E2E_SUPERUSER_EMAIL") and os.environ.get("BFG2_E2E_SUPERUSER_PASSWORD"))
+
+
+def _use_bootstrap_superuser(base):
+    """Use pre-seeded superuser when env is set and host is local Django port or any local API."""
+    if not (os.environ.get("BFG2_E2E_SUPERUSER_EMAIL") and os.environ.get("BFG2_E2E_SUPERUSER_PASSWORD")):
+        return False
+    b = base.rstrip("/")
+    if b.endswith(":8000") or ":8000/" in base:
+        return True
+    return _is_local_api_host(base)
 
 
 def _require_bootstrap_superuser_env(base):
-    """Require bootstrap credentials when default local port is used without them."""
-    if not (base.endswith(":8000") or ":8000/" in base):
+    """Require bootstrap credentials when default local Django port is used without them."""
+    b = base.rstrip("/")
+    if not (b.endswith(":8000") or ":8000/" in base):
         return
     if os.environ.get("BFG2_E2E_SUPERUSER_EMAIL") and os.environ.get("BFG2_E2E_SUPERUSER_PASSWORD"):
         return
@@ -171,7 +201,7 @@ def _session():
     """
     Bootstrap: superadmin creates ws1/ws2; register admin and customer per workspace.
     Returns dict with superadmin_token, ws1, ws2 (each with workspace, admin_token, customer_token, customer, etc).
-    When BASE_URL ends with :8000 and BFG2_E2E_SUPERUSER_* are set, one bootstrap user creates both workspaces.
+    When BFG2_E2E_SUPERUSER_* are set and host is :8000 or local, one bootstrap user creates both workspaces.
     """
     base = _get_base_url()
     _require_bootstrap_superuser_env(base)

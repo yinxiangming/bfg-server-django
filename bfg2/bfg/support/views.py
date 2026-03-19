@@ -110,9 +110,10 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         """
         workspace = getattr(self.request, 'workspace', None)
         with transaction.atomic():
-            # Generate ticket number TKT-YYYYMMDD-XXXX
+            # Globally unique ticket_number: include workspace id (same date seq reused per workspace before)
             today_str = timezone.now().strftime('%Y%m%d')
-            prefix = f"TKT-{today_str}-"
+            ws_part = getattr(workspace, "id", None) or "0"
+            prefix = f"TKT-{ws_part}-{today_str}-"
             last_ticket = SupportTicket.objects.filter(
                 workspace=workspace,
                 ticket_number__startswith=prefix

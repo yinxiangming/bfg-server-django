@@ -98,6 +98,14 @@ class ProductTagViewSet(viewsets.ModelViewSet):
             language=language
         ).order_by('name')
 
+    def perform_create(self, serializer):
+        """Persist tag with workspace (FK required)."""
+        workspace = getattr(self.request, 'workspace', None)
+        if not workspace:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("No workspace available. Please ensure a workspace exists and is active.")
+        serializer.save(workspace=workspace)
+
 
 class ProductViewSet(viewsets.ModelViewSet):
     """

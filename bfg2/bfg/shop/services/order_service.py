@@ -8,8 +8,11 @@ from typing import Any, Optional, Dict
 from decimal import Decimal
 from datetime import datetime
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 from bfg.core.services import BaseService
+from rest_framework.exceptions import ValidationError as APIValidationError
+
 from bfg.shop.exceptions import EmptyCart, InvalidOrderStatus
 from bfg.shop.models import (
     Order, OrderItem, Cart, Store
@@ -136,7 +139,8 @@ class OrderService(BaseService):
             'shipping_cost': shipping_cost,
             'tax': tax,
             'total': total,
-            'shipping_discount': shipping_discount
+            'shipping_discount': shipping_discount,
+            'coupon_discount': discount_result.get('coupon_discount', Decimal('0.00')),
         }
     
     def _calculate_cart_weight(self, cart: Cart) -> Decimal:
@@ -391,6 +395,34 @@ class OrderService(BaseService):
                 tax = totals['tax']
             
             total = subtotal + shipping_cost + tax - discount
+
+        coupon_row_to_record = None
+        if coupon_code:
+            code_upper = str(coupon_code).strip().upper()
+            if code_upper:
+                from bfg.marketing.models import Coupon
+                from bfg.marketing.services.discount_service import DiscountCalculationService
+
+                try:
+                    coupon_row = Coupon.objects.get(
+                        workspace=self.workspace,
+                        code=code_upper,
+                        is_active=True,
+                    )
+                except Coupon.DoesNotExist:
+                    raise APIValidationError(
+                        {'coupon_code': 'Invalid or inactive coupon.'}
+                    )
+                disc_svc = DiscountCalculationService(
+                    workspace=self.workspace,
+                    user=kwargs.get('user'),
+                )
+                cust = cart.customer if cart.customer else None
+                v_err = disc_svc._validate_coupon(coupon_row, subtotal, cust)
+                if v_err:
+                    # Includes usage-limit exhaustion: expected business response (4xx), not a server fault
+                    raise APIValidationError({'coupon_code': v_err})
+                coupon_row_to_record = coupon_row
         
         # Get freight_service object if freight_service_id is provided
         freight_service = None
@@ -481,6 +513,14 @@ class OrderService(BaseService):
         
         # Clear cart after order creation
         cart.items.all().delete()
+
+        # Record coupon use after successful checkout (enforces usage_limit on next attempt)
+        if coupon_row_to_record is not None:
+            from bfg.marketing.models import Coupon as CouponModel
+
+            CouponModel.objects.filter(pk=coupon_row_to_record.pk).update(
+                times_used=F('times_used') + 1
+            )
         
         # Auto-create Invoice
         invoice = self._create_invoice_for_order(order)

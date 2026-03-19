@@ -5,6 +5,7 @@ E2E Test 02: Website Setup
 import pytest
 from bfg.web.models import Site, Page
 from bfg.web.services import SiteService
+import uuid
 
 @pytest.mark.e2e
 @pytest.mark.django_db
@@ -12,9 +13,10 @@ class TestWebsiteSetup:
     
     def test_site_creation(self, authenticated_client, workspace):
         """Test site creation via API"""
+        suffix = uuid.uuid4().hex[:6]
         payload = {
             "name": "Main Site",
-            "domain": "www.test.com",
+            "domain": f"www.test.com-{suffix}",
             "site_title": "My Shop",
             "default_language": "en"
         }
@@ -22,13 +24,14 @@ class TestWebsiteSetup:
         response = authenticated_client.post('/api/v1/web/sites/', payload)
         
         assert response.status_code == 201
-        assert response.data['domain'] == "www.test.com"
+        assert response.data['domain'] == payload["domain"]
         assert response.data['workspace'] == workspace.id
         
     def test_page_creation(self, authenticated_client, workspace):
         """Test page creation via API"""
+        suffix = uuid.uuid4().hex[:6]
         # 1. Create site first
-        site_payload = {"name": "Site", "domain": "site.com", "site_title": "Site"}
+        site_payload = {"name": "Site", "domain": f"site.com-{suffix}", "site_title": "Site"}
         site_res = authenticated_client.post('/api/v1/web/sites/', site_payload)
         site_id = site_res.data['id']
         

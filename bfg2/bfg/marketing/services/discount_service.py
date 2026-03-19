@@ -258,7 +258,7 @@ class DiscountCalculationService(BaseService):
         if coupon.valid_until and coupon.valid_until < now:
             return "Coupon has expired"
         
-        # Check usage limits
+        # Global usage cap (normal outcome when exhausted, not a system error)
         if coupon.usage_limit and coupon.times_used >= coupon.usage_limit:
             return "Coupon usage limit reached"
         

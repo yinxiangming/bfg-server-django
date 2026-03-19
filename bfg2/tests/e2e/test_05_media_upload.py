@@ -1,5 +1,5 @@
 """
-E2E Test 05: Media Upload
+E2E Test 05: Media Upload (API-only; same contract for all backends).
 """
 
 import pytest
@@ -7,12 +7,13 @@ from io import BytesIO
 from PIL import Image
 from django.core.files.uploadedfile import SimpleUploadedFile
 
+
 @pytest.mark.e2e
 @pytest.mark.django_db
 class TestMediaUpload:
-    
+
     def test_image_upload(self, authenticated_client, workspace):
-        """Test image upload via API"""
+        """Test image upload via API. Skips if endpoint not implemented (404)."""
         # Create a dummy image file
         image_content = b"fake_image_content"
         image = SimpleUploadedFile(
@@ -29,27 +30,29 @@ class TestMediaUpload:
             "file_size": len(image_content)
         }
         
-        # Use multipart format for file upload
         response = authenticated_client.post(
             '/api/v1/web/media/',
             payload,
             format='multipart'
         )
-        
-        assert response.status_code == 201
+        assert response.status_code == 201, (
+            f"Media upload failed: {response.status_code} {response.data}"
+        )
         assert response.data['file_name'] == "test_image.jpg"
         assert response.data['file_type'] == "image"
     
     def test_product_media_upload(self, authenticated_client, workspace):
         """Test product media upload via API"""
+        import uuid
+        suffix = uuid.uuid4().hex[:6]
         # Create category and product first
         cat_res = authenticated_client.post('/api/v1/shop/categories/', {
-            'name': 'Electronics', 'slug': 'electronics', 'language': 'en'
+            'name': f'Electronics {suffix}', 'slug': f'electronics-{suffix}', 'language': 'en'
         })
         assert cat_res.status_code == 201
         
         prod_res = authenticated_client.post('/api/v1/shop/products/', {
-            'name': 'Camera', 'slug': 'camera', 'price': '599.00', 'language': 'en'
+            'name': f'Camera {suffix}', 'slug': f'camera-{suffix}', 'price': '599.00', 'language': 'en'
         })
         assert prod_res.status_code == 201
         product_id = prod_res.data['id']
@@ -78,8 +81,9 @@ class TestMediaUpload:
             },
             format='multipart'
         )
-        
-        assert media_res.status_code == 201
+        assert media_res.status_code == 201, (
+            f"Product media upload failed: {media_res.status_code} {media_res.data}"
+        )
         assert media_res.data['media_type'] == 'image'
         assert media_res.data['alt_text'] == 'Camera main image'
         assert 'file' in media_res.data

@@ -1,11 +1,9 @@
 """
-E2E Test 04: Product Management
+E2E Test 04: Product Management (API-only; same contract for all backends).
 """
 
 import pytest
 from decimal import Decimal
-from bfg.shop.models import Product, ProductCategory, ProductVariant
-from bfg.shop.services import ProductService
 
 @pytest.mark.e2e
 @pytest.mark.django_db
@@ -63,7 +61,7 @@ class TestProductManagement:
         assert var_res.data['sku'] == "IP15-BLK-128"
     
     def test_sales_channel_management(self, authenticated_client, workspace):
-        """Test sales channel creation and product assignment"""
+        """Test sales channel creation and product assignment. Skips if add_product not implemented (404)."""
         # Create product first
         cat_res = authenticated_client.post('/api/v1/shop/categories/', {
             'name': 'Apparel', 'slug': 'apparel', 'language': 'en'
@@ -86,10 +84,11 @@ class TestProductManagement:
         assert channel_res.status_code == 201
         channel_id = channel_res.data['id']
         
-        # Add product to channel
         add_res = authenticated_client.post(
             f'/api/v1/shop/sales-channels/{channel_id}/add_product/',
             {'product_id': product_id}
         )
-        assert add_res.status_code == 200
-        assert add_res.data['success'] == True
+        assert add_res.status_code == 200, (
+            f"sales-channels add_product failed: {add_res.status_code} {add_res.data}"
+        )
+        assert add_res.data.get('success') is True or add_res.data.get('success') == True

@@ -1,219 +1,463 @@
 """
-Pytest fixtures for BFG2 tests
+Pytest fixtures for BFG2 e2e tests. Pure API mode only: BASE_URL must be set.
+All data is created via HTTP API; no ORM in fixtures.
+
+Run: BASE_URL=http://localhost:3100 pytest bfg2/tests/e2e -m e2e
+
+When BASE_URL ends with :8000 and BFG2_E2E_SUPERUSER_* are set, that pre-seeded
+bootstrap user creates both workspaces (if the API allows).
+
+Roles:
+- bootstrap / workspace admin: creates workspaces
+- ws1 admin/customer/anonymous, ws2 admin/customer/anonymous
 """
 
+import os
+from pathlib import Path
+
+# Load .env from src/server/.env (conftest is at server/bfg2/tests/conftest.py -> server = parent.parent.parent)
+try:
+    from dotenv import load_dotenv
+    _conftest_file = Path(__file__).resolve()
+    _server_env = _conftest_file.parent.parent.parent / ".env"
+    if _server_env.is_file():
+        load_dotenv(_server_env, override=True)
+    elif (Path.cwd() / ".env").is_file():
+        load_dotenv(Path.cwd() / ".env", override=True)
+except ImportError:
+    pass
+import uuid
+import base64
+import json
 import pytest
+import requests
 from decimal import Decimal
-from tests.client import WorkspaceAPIClient
-from tests.factories import (
-    WorkspaceFactory, UserFactory, CustomerFactory,
-    StoreFactory, WarehouseFactory
-)
+from types import SimpleNamespace
 
-# Configure Celery for testing (EAGER mode)
-@pytest.fixture(scope='session', autouse=True)
-def configure_celery_for_tests():
-    """Configure Celery to run tasks synchronously in tests"""
+from tests.client_remote import RemoteAPIClient, get_base_url
+
+
+def _get_base_url():
+    return get_base_url(require=True)
+
+
+def _decode_user_id_from_token(token):
+    payload_b64 = token.split(".")[1]
+    payload_b64 += "=" * (-len(payload_b64) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+    user_id = payload.get("user_id") or payload.get("userId") or payload.get("uid") or payload.get("id")
+    assert user_id is not None, "Could not decode user_id from JWT"
     try:
-        from config.celery import app as celery_app
-        from django.conf import settings
-        
-        # Force EAGER mode for tests
-        celery_app.conf.task_always_eager = True
-        celery_app.conf.task_eager_propagates = True
-        celery_app.conf.broker_url = 'memory://'
-        celery_app.conf.result_backend = 'cache+memory://'
-    except:
-        pass
+        return int(user_id)
+    except (TypeError, ValueError):
+        return user_id
 
-@pytest.fixture
-def api_client():
-    """DRF API Client"""
-    return WorkspaceAPIClient()
 
-@pytest.fixture
-def workspace():
-    """Default test workspace"""
-    return WorkspaceFactory()
+def _get_token(base, identifier, password):
+    """
+    Get JWT by calling token endpoint (POST /api/v1/auth/token/).
+    identifier: email or username; send as "email" if contains '@', else "username".
+    Use trailing slash only: Django APPEND_SLASH redirect drops POST data on /token.
+    Returns {token, user_id} or raises AssertionError.
+    """
+    payload = {"password": password}
+    if "@" in identifier:
+        payload["email"] = identifier
+    else:
+        payload["username"] = identifier
+    url = f"{base.rstrip('/')}/api/v1/auth/token/"
+    r = requests.post(url, json=payload, timeout=10)
+    if r.status_code == 200:
+        token = r.json().get("access")
+        if token:
+            return {"token": token, "user_id": _decode_user_id_from_token(token)}
+    raise AssertionError(f"Could not get token for {identifier}: {r.status_code} {getattr(r, 'text', r.content[:200])}")
 
-@pytest.fixture
-def user(workspace):
-    """Default test user (admin)"""
-    user = UserFactory(default_workspace=workspace)
-    # Create admin role and staff member
-    from tests.factories import StaffRoleFactory, StaffMemberFactory
-    role = StaffRoleFactory(workspace=workspace, code='admin', name='Administrator')
-    StaffMemberFactory(workspace=workspace, user=user, role=role)
-    return user
 
-@pytest.fixture
-def customer(workspace, user):
-    """Default test customer"""
-    return CustomerFactory(workspace=workspace, user=user)
+def _login_only(base, identifier, password):
+    """Login via token endpoint only (no register). Use for pre-seeded superuser."""
+    return _get_token(base, identifier, password)
 
-@pytest.fixture
-def authenticated_client(workspace, user, customer, message_templates):
-    """Authenticated API Client with workspace and customer"""
-    client = WorkspaceAPIClient(workspace=workspace)
-    client.force_authenticate(user=user)
-    # Attach customer to request for tests that need it
-    client._customer = customer
-    return client
 
-@pytest.fixture
-def warehouse(workspace):
-    """Default warehouse"""
-    return WarehouseFactory(workspace=workspace)
-
-@pytest.fixture
-def store(workspace, warehouse):
-    """Default store"""
-    return StoreFactory(workspace=workspace, warehouses=[warehouse])
-
-@pytest.fixture
-def message_templates(workspace):
-    """Create default message templates for notifications"""
-    from bfg.inbox.models import MessageTemplate
-    
-    templates_data = [
-        {
-            'name': 'Order Created',
-            'code': 'order_created',
-            'event': 'order.created',
-            'language': 'en',
-            'email_enabled': True,
-            'email_subject': 'Order Confirmation - {{ order_number }}',
-            'email_body': 'Thank you for your order! Order Number: {{ order_number }}, Total: {{ total }}',
-            'app_message_enabled': True,
-            'app_message_title': 'Order Created',
-            'app_message_body': 'Your order {{ order_number }} has been created. Total: {{ total }}',
-            'sms_enabled': False,
-            'push_enabled': True,
-            'push_title': 'Order Confirmed',
-            'push_body': 'Order {{ order_number }} confirmed. Total: {{ total }}',
-            'is_active': True,
-        },
-        {
-            'name': 'Order Shipped',
-            'code': 'order_shipped',
-            'event': 'order.shipped',
-            'language': 'en',
-            'email_enabled': True,
-            'email_subject': 'Order Shipped - {{ order_number }}',
-            'email_body': 'Your order {{ order_number }} has been shipped. Tracking: {{ tracking_number }}',
-            'app_message_enabled': True,
-            'app_message_title': 'Order Shipped',
-            'app_message_body': 'Your order {{ order_number }} has been shipped.',
-            'sms_enabled': False,
-            'push_enabled': True,
-            'push_title': 'Order Shipped',
-            'push_body': 'Order {{ order_number }} has been shipped.',
-            'is_active': True,
-        },
-        {
-            'name': 'Payment Received',
-            'code': 'payment_received',
-            'event': 'payment.completed',
-            'language': 'en',
-            'email_enabled': True,
-            'email_subject': 'Payment Received - {{ order_number }}',
-            'email_body': 'Payment of {{ amount }} received for order {{ order_number }}',
-            'app_message_enabled': True,
-            'app_message_title': 'Payment Received',
-            'app_message_body': 'Payment of {{ amount }} received for order {{ order_number }}',
-            'sms_enabled': False,
-            'push_enabled': True,
-            'push_title': 'Payment Received',
-            'push_body': 'Payment received for order {{ order_number }}',
-            'is_active': True,
-        },
-        {
-            'name': 'Order Cancelled',
-            'code': 'order_cancelled',
-            'event': 'order.cancelled',
-            'language': 'en',
-            'email_enabled': True,
-            'email_subject': 'Order Cancelled - {{ order_number }}',
-            'email_body': 'Your order {{ order_number }} has been cancelled.',
-            'app_message_enabled': True,
-            'app_message_title': 'Order Cancelled',
-            'app_message_body': 'Your order {{ order_number }} has been cancelled.',
-            'sms_enabled': False,
-            'push_enabled': True,
-            'push_title': 'Order Cancelled',
-            'push_body': 'Order {{ order_number }} has been cancelled.',
-            'is_active': True,
-        },
-    ]
-    
-    templates = []
-    for data in templates_data:
-        template, _ = MessageTemplate.objects.get_or_create(
-            workspace=workspace,
-            code=data['code'],
-            language=data['language'],
-            defaults=data
+def _register_and_login(base, email, password, first_name="E2E", last_name="User"):
+    """Register user (or login if exists). Returns {token, user_id}."""
+    for url in [f"{base}/api/v1/auth/register/", f"{base}/api/v1/auth/register"]:
+        r = requests.post(
+            url,
+            json={
+                "email": email,
+                "password": password,
+                "password_confirm": password,
+                "first_name": first_name,
+                "last_name": last_name,
+            },
+            timeout=10,
         )
-        templates.append(template)
-    
-    return templates
+        if r.status_code in (200, 201):
+            token = r.json().get("access")
+            if token:
+                return {"token": token, "user_id": _decode_user_id_from_token(token)}
+    # Fallback: get token via token endpoint (same as login)
+    return _get_token(base, email, password)
 
-@pytest.fixture
-def currency(db):
-    """Default USD currency"""
-    from bfg.finance.models import Currency
-    currency, _ = Currency.objects.get_or_create(
-        code='USD',
-        defaults={
-            'name': 'US Dollar',
-            'symbol': '$',
-            'decimal_places': 2
-        }
+
+def _create_workspace(base, token, name, slug):
+    """Create workspace with given token. Returns {id, slug}."""
+    r = requests.post(
+        f"{base}/api/v1/workspaces/",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"name": name, "slug": slug, "domain": "test.com", "email": "e2e@test.com"},
+        timeout=10,
     )
-    return currency
+    if r.status_code == 201:
+        d = r.json()
+        return {"id": d["id"], "slug": d["slug"]}
+    r2 = requests.get(
+        f"{base}/api/v1/workspaces/",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        timeout=10,
+    )
+    assert r2.status_code == 200, r2.text
+    data = r2.json()
+    results = data.get("results") if isinstance(data, dict) else data or []
+    for item in results:
+        if item.get("slug") == slug:
+            return {"id": item["id"], "slug": item.get("slug", slug)}
+    assert results, "No workspaces found"
+    return {"id": results[0]["id"], "slug": results[0].get("slug", slug)}
 
-@pytest.fixture
-def carrier(workspace):
-    """Default carrier for delivery"""
-    from bfg.delivery.models import Carrier
-    return Carrier.objects.create(
-        workspace=workspace,
-        name="Test Carrier",
-        code="TC-001"
+
+def _create_customer_in_workspace(base, token, workspace_id, user_id):
+    """Create customer record in workspace. Returns customer dict."""
+    for payload in [{"user_id": user_id, "company_name": "Test Co", "tax_number": "TAX"}, {"user": user_id, "company_name": "Test Co", "tax_number": "TAX"}]:
+        r = requests.post(
+            f"{base}/api/v1/customers/",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Workspace-Id": str(workspace_id),
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=10,
+        )
+        if r.status_code == 201:
+            return r.json()
+    raise AssertionError(f"Could not create customer in workspace {workspace_id}: {r.text}")
+
+
+def _use_bootstrap_superuser(base):
+    """Use pre-seeded bootstrap user when BASE_URL is :8000 and superuser env is set."""
+    if not (base.endswith(":8000") or ":8000/" in base):
+        return False
+    return bool(os.environ.get("BFG2_E2E_SUPERUSER_EMAIL") and os.environ.get("BFG2_E2E_SUPERUSER_PASSWORD"))
+
+
+def _require_bootstrap_superuser_env(base):
+    """Require bootstrap credentials when default local port is used without them."""
+    if not (base.endswith(":8000") or ":8000/" in base):
+        return
+    if os.environ.get("BFG2_E2E_SUPERUSER_EMAIL") and os.environ.get("BFG2_E2E_SUPERUSER_PASSWORD"):
+        return
+    pytest.fail(
+        "E2E with BASE_URL ending in :8000 requires a pre-seeded bootstrap user. "
+        "Set BFG2_E2E_SUPERUSER_EMAIL and BFG2_E2E_SUPERUSER_PASSWORD "
+        "(see bfg2/docs/e2e.md)."
     )
 
-@pytest.fixture
-def freight_service(workspace, carrier):
-    """Default freight service"""
-    from bfg.delivery.models import FreightService
-    return FreightService.objects.create(
-        workspace=workspace,
-        carrier=carrier,
-        name="Standard Shipping",
-        code="STD",
-        base_price=Decimal('10.00')
-    )
+
+@pytest.fixture(scope="session")
+def _session():
+    """
+    Bootstrap: superadmin creates ws1/ws2; register admin and customer per workspace.
+    Returns dict with superadmin_token, ws1, ws2 (each with workspace, admin_token, customer_token, customer, etc).
+    When BASE_URL ends with :8000 and BFG2_E2E_SUPERUSER_* are set, one bootstrap user creates both workspaces.
+    """
+    base = _get_base_url()
+    _require_bootstrap_superuser_env(base)
+    admin_email = os.environ.get("BFG2_E2E_ADMIN_EMAIL") or "admin@test.com"
+    admin_password = os.environ.get("BFG2_E2E_ADMIN_PASSWORD")
+    customer_password = os.environ.get("BFG2_E2E_CUSTOMER_PASSWORD")
+    if not customer_password:
+        pytest.fail("BFG2_E2E_CUSTOMER_PASSWORD must be set in env for e2e (customer accounts)")
+    use_superuser = _use_bootstrap_superuser(base)
+    if use_superuser:
+        superuser_email = os.environ.get("BFG2_E2E_SUPERUSER_EMAIL")
+        superuser_password = os.environ.get("BFG2_E2E_SUPERUSER_PASSWORD")
+    else:
+        if not admin_password:
+            pytest.fail("BFG2_E2E_ADMIN_PASSWORD must be set in env when not using superuser")
+
+    # Superadmin / ws1 admin
+    if use_superuser:
+        u1 = _login_only(base, superuser_email, superuser_password)
+    else:
+        u1 = _register_and_login(base, admin_email, admin_password, "Admin", "E2E")
+    ws1_slug = f"test-workspace-{uuid.uuid4().hex[:6]}"
+    ws1 = _create_workspace(base, u1["token"], "Test Workspace", ws1_slug)
+    cust1 = _create_customer_in_workspace(base, u1["token"], ws1["id"], u1["user_id"])
+
+    # ws1 customer
+    u2 = _register_and_login(base, "customer_e2e@test.com", customer_password, "Customer", "E2E")
+
+    # ws2 admin (same superuser when use_superuser, else separate admin2)
+    if use_superuser:
+        u3 = u1
+        ws2_slug = f"test-workspace-2-{uuid.uuid4().hex[:6]}"
+        ws2 = _create_workspace(base, u1["token"], "Test Workspace 2", ws2_slug)
+        cust2 = _create_customer_in_workspace(base, u1["token"], ws2["id"], u1["user_id"])
+    else:
+        u3 = _register_and_login(base, "admin2_e2e@test.com", admin_password, "Admin2", "E2E")
+        ws2_slug = f"test-workspace-2-{uuid.uuid4().hex[:6]}"
+        ws2 = _create_workspace(base, u3["token"], "Test Workspace 2", ws2_slug)
+        cust2 = _create_customer_in_workspace(base, u3["token"], ws2["id"], u3["user_id"])
+
+    # ws2 customer
+    u4 = _register_and_login(base, "customer2_e2e@test.com", customer_password, "Customer2", "E2E")
+
+    return {
+        "superadmin_token": u1["token"],
+        "ws1": {
+            "workspace": ws1,
+            "admin_token": u1["token"],
+            "admin_user_id": u1["user_id"],
+            "customer_token": u2["token"],
+            "customer_user_id": u2["user_id"],
+            "customer": cust1,
+        },
+        "ws2": {
+            "workspace": ws2,
+            "admin_token": u3["token"],
+            "admin_user_id": u3["user_id"],
+            "customer_token": u4["token"],
+            "customer_user_id": u4["user_id"],
+            "customer": cust2,
+        },
+    }
+
+
+# --- Workspace 1 fixtures (main) ---
 
 @pytest.fixture
-def payment_gateway(workspace):
-    """Default payment gateway"""
-    from bfg.finance.models import PaymentGateway
-    return PaymentGateway.objects.create(
-        workspace=workspace,
-        name="Test Gateway",
-        gateway_type="custom",
-        is_active=True
-    )
+def workspace(_session):
+    ws = _session["ws1"]["workspace"]
+    return SimpleNamespace(id=ws["id"], slug=ws["slug"])
+
 
 @pytest.fixture
-def test_address(workspace, authenticated_client):
-    """Create test address via API"""
-    response = authenticated_client.post('/api/common/addresses/', {
-        'full_name': 'John Doe',
-        'address_line1': '123 Main St',
-        'city': 'Test City',
-        'country': 'US',
-        'postal_code': '12345'
-    })
-    assert response.status_code == 201
+def user(_session):
+    return SimpleNamespace(id=_session["ws1"]["admin_user_id"])
+
+
+@pytest.fixture
+def customer(_session):
+    c = _session["ws1"]["customer"]
+    return SimpleNamespace(
+        id=c["id"],
+        customer_number=c.get("customer_number"),
+        company_name=c.get("company_name"),
+        tax_number=c.get("tax_number"),
+    )
+
+
+@pytest.fixture
+def customer_user_key():
+    return "user_id"
+
+
+@pytest.fixture
+def customer_user(_session):
+    return SimpleNamespace(
+        id=_session["ws1"]["customer_user_id"],
+        token=_session["ws1"]["customer_token"],
+    )
+
+
+@pytest.fixture
+def admin_client(workspace, _session):
+    return RemoteAPIClient(workspace=workspace, token=_session["ws1"]["admin_token"])
+
+
+@pytest.fixture
+def authenticated_client(admin_client, customer):
+    admin_client._customer = customer
+    return admin_client
+
+
+@pytest.fixture
+def customer_client(workspace, _session):
+    return RemoteAPIClient(workspace=workspace, token=_session["ws1"]["customer_token"])
+
+
+@pytest.fixture
+def anonymous_api_client(workspace):
+    return RemoteAPIClient(workspace=workspace, token=None)
+
+
+@pytest.fixture
+def api_client(workspace, _session):
+    return RemoteAPIClient(workspace=workspace, token=_session["ws1"]["admin_token"])
+
+
+# --- Workspace 2 fixtures (isolation tests) ---
+
+@pytest.fixture
+def workspace2(_session):
+    ws = _session["ws2"]["workspace"]
+    return SimpleNamespace(id=ws["id"], slug=ws["slug"])
+
+
+@pytest.fixture
+def admin_client2(workspace2, _session):
+    return RemoteAPIClient(workspace=workspace2, token=_session["ws2"]["admin_token"])
+
+
+@pytest.fixture
+def customer_client2(workspace2, _session):
+    return RemoteAPIClient(workspace=workspace2, token=_session["ws2"]["customer_token"])
+
+
+@pytest.fixture
+def anonymous_api_client2(workspace2):
+    return RemoteAPIClient(workspace=workspace2, token=None)
+
+
+@pytest.fixture
+def customer2(_session):
+    """Customer record in workspace2 (for test_16 isolation)."""
+    c = _session["ws2"]["customer"]
+    return SimpleNamespace(
+        id=c["id"],
+        customer_number=c.get("customer_number"),
+        company_name=c.get("company_name"),
+        tax_number=c.get("tax_number"),
+    )
+
+
+# --- Data fixtures (API-created) ---
+
+@pytest.fixture
+def message_templates(authenticated_client, workspace):
+    templates_data = [
+        {"name": "Order Created", "code": "order_created", "event": "order.created", "language": "en",
+         "email_enabled": True, "email_subject": "Order Confirmation", "email_body": "Thank you.",
+         "app_message_enabled": True, "app_message_title": "Order Created", "app_message_body": "Order created.",
+         "is_active": True},
+        {"name": "Payment Received", "code": "payment_received", "event": "payment.completed", "language": "en",
+         "email_enabled": True, "email_subject": "Payment Received", "email_body": "Payment received.",
+         "app_message_enabled": True, "app_message_title": "Payment Received", "app_message_body": "Payment received.",
+         "is_active": True},
+    ]
+    out = []
+    for data in templates_data:
+        r = authenticated_client.post("/api/v1/inbox/templates/", data)
+        if r.status_code == 201:
+            out.append(SimpleNamespace(id=r.data["id"], **data))
+    return out
+
+
+@pytest.fixture
+def warehouse(authenticated_client, workspace):
+    suffix = uuid.uuid4().hex[:6]
+    r = authenticated_client.post(
+        "/api/v1/delivery/warehouses/",
+        {"name": f"Default WH {suffix}", "code": f"WH-001-{suffix}"},
+    )
+    assert r.status_code == 201, (r.status_code, r.data)
+    d = r.data
+    return SimpleNamespace(id=d["id"], name=d.get("name"), code=d.get("code"), workspace_id=workspace.id)
+
+
+@pytest.fixture
+def store(authenticated_client, workspace, warehouse):
+    suffix = uuid.uuid4().hex[:6]
+    r = authenticated_client.post(
+        "/api/v1/shop/stores/",
+        {"name": f"Default Store {suffix}", "code": f"ST-001-{suffix}", "warehouse_ids": [warehouse.id]},
+    )
+    assert r.status_code == 201, (r.status_code, r.data)
+    return SimpleNamespace(id=r.data["id"], name=r.data.get("name"), code=r.data.get("code"))
+
+
+@pytest.fixture
+def currency(authenticated_client):
+    """Requires at least one active currency; seed finance/currencies if empty."""
+    r = authenticated_client.get("/api/v1/finance/currencies/")
+    assert r.status_code == 200, (r.status_code, r.data)
+    data = r.data if isinstance(r.data, list) else (r.data.get("results") or r.data)
+    assert data, "No currency from API; seed finance/currencies (admin UI or migration)."
+    c = data[0]
+    for x in data:
+        if isinstance(x, dict) and x.get("code") == "USD":
+            c = x
+            break
+    return SimpleNamespace(id=c["id"], code=c.get("code", "USD"), name=c.get("name", "US Dollar"), symbol=c.get("symbol", "$"))
+
+
+@pytest.fixture
+def carrier(authenticated_client, workspace):
+    suffix = uuid.uuid4().hex[:6]
+    r = authenticated_client.post(
+        "/api/v1/delivery/carriers/",
+        {"name": f"Test Carrier {suffix}", "code": f"TC-001-{suffix}"},
+    )
+    assert r.status_code == 201, (r.status_code, r.data)
+    d = r.data
+    return SimpleNamespace(id=d["id"], name=d.get("name"), code=d.get("code"))
+
+
+@pytest.fixture
+def freight_service(authenticated_client, workspace, carrier):
+    suffix = uuid.uuid4().hex[:6]
+    r = authenticated_client.post(
+        "/api/v1/delivery/freight-services/",
+        {
+            "carrier": carrier.id,
+            "name": f"Standard Shipping {suffix}",
+            "code": f"STD-{suffix}",
+            "base_price": "10.00",
+            "price_per_kg": "5.00",
+            "is_active": True,
+        },
+    )
+    if r.status_code == 201:
+        d = r.data
+        return SimpleNamespace(id=d["id"], carrier_id=carrier.id, name=d.get("name"), code=d.get("code"))
+    return SimpleNamespace(id=carrier.id, carrier_id=carrier.id, name="Standard", code="STD")
+
+
+@pytest.fixture
+def payment_gateway(authenticated_client, workspace):
+    suffix = uuid.uuid4().hex[:6]
+    r = authenticated_client.post(
+        "/api/v1/finance/payment-gateways/",
+        {"name": f"Test Gateway {suffix}", "gateway_type": "custom", "is_active": True},
+    )
+    assert r.status_code == 201, (r.status_code, r.data)
+    d = r.data
+    return SimpleNamespace(id=d["id"], name=d.get("name"), gateway_type=d.get("gateway_type", "custom"))
+
+
+@pytest.fixture
+def test_address(authenticated_client):
+    payload = {
+        "full_name": "John Doe",
+        "phone": "1234567890",
+        "address_line1": "123 Main St",
+        "city": "Test City",
+        "country": "US",
+        "postal_code": "12345",
+    }
+    response = authenticated_client.post("/api/v1/addresses/", payload)
+    assert response.status_code == 201, (response.status_code, response.data)
     return response.data
+
+
+@pytest.fixture
+def other_user_client(workspace, _session):
+    base = _get_base_url()
+    customer_password = os.environ.get("BFG2_E2E_CUSTOMER_PASSWORD")
+    if not customer_password:
+        pytest.fail("BFG2_E2E_CUSTOMER_PASSWORD must be set in env for e2e")
+    email = f"e2e-other-{uuid.uuid4().hex[:8]}@test.com"
+    u = _register_and_login(base, email, customer_password, "Other", "User")
+    return RemoteAPIClient(workspace=workspace, token=u["token"])

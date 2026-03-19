@@ -30,13 +30,28 @@ class CampaignGroupSerializer(serializers.ModelSerializer):
 
 
 class DiscountRuleSerializer(serializers.ModelSerializer):
-    """Discount rule serializer"""
+    """Discount rule serializer. Supports product_ids/category_ids for apply_to products/categories."""
+
+    product_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False,
+        allow_empty=True,
+    )
+    category_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False,
+        allow_empty=True,
+    )
 
     class Meta:
         model = DiscountRule
         fields = [
             'id', 'name', 'discount_type', 'discount_value', 'apply_to', 'is_active', 'config',
             'valid_from', 'valid_until', 'display_label', 'promo_display_order', 'is_group_buy',
+            'minimum_purchase', 'maximum_discount',
+            'product_ids', 'category_ids',
         ]
 
     def validate_config(self, value):
@@ -63,6 +78,26 @@ class DiscountRuleSerializer(serializers.ModelSerializer):
         if value > 999999:
             raise serializers.ValidationError("Discount value cannot exceed 999999")
         return value
+
+    def create(self, validated_data):
+        product_ids = validated_data.pop('product_ids', [])
+        category_ids = validated_data.pop('category_ids', [])
+        instance = super().create(validated_data)
+        if product_ids:
+            instance.products.set(product_ids)
+        if category_ids:
+            instance.categories.set(category_ids)
+        return instance
+
+    def update(self, instance, validated_data):
+        product_ids = validated_data.pop('product_ids', None)
+        category_ids = validated_data.pop('category_ids', None)
+        instance = super().update(instance, validated_data)
+        if product_ids is not None:
+            instance.products.set(product_ids)
+        if category_ids is not None:
+            instance.categories.set(category_ids)
+        return instance
 
 
 class CampaignSerializer(serializers.ModelSerializer):

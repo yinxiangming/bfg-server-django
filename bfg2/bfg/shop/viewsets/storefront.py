@@ -364,45 +364,24 @@ class StorefrontAddressViewSet(viewsets.ModelViewSet):
 
 
 class StorefrontCategoryViewSet(viewsets.ReadOnlyModelViewSet):
-    """Storefront category ViewSet"""
-    serializer_class = StorefrontCategorySerializer
-    permission_classes = [AllowAny]
-    authentication_classes = []
-    
-    def get_queryset(self):
-        """Get active categories"""
-        workspace = self.request.workspace
-        language = self.request.query_params.get('lang', 'en')
-        
-        queryset = ProductCategory.objects.filter(
-            workspace=workspace,
-            is_active=True,
-            language=language
-        ).select_related('parent').prefetch_related('children')
-        
-        # If tree=true, return only root categories
-        if self.request.query_params.get('tree', '').lower() == 'true':
-            queryset = queryset.filter(parent__isnull=True)
-        
-        return queryset.order_by('order', 'name')
-
-
-class StorefrontCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """Storefront category ViewSet. Fallback to English when requested language has no categories."""
     serializer_class = StorefrontCategorySerializer
     permission_classes = [AllowAny]
     authentication_classes = []
     
     def get_queryset(self):
-        """Get active categories; fallback to en when current language has none."""
+        """Get active categories; optional ?slug=; fallback to en when current language has none."""
         workspace = self.request.workspace
         language = self.request.query_params.get('lang', 'en')
         tree = self.request.query_params.get('tree', '').lower() == 'true'
+        slug = (self.request.query_params.get('slug') or '').strip()
         queryset = ProductCategory.objects.filter(
             workspace=workspace,
             is_active=True,
             language=language
         ).select_related('parent').prefetch_related('children')
+        if slug:
+            queryset = queryset.filter(slug=slug)
         if tree:
             queryset = queryset.filter(parent__isnull=True)
         if language != 'en' and not queryset.exists():
@@ -411,6 +390,8 @@ class StorefrontCategoryViewSet(viewsets.ReadOnlyModelViewSet):
                 is_active=True,
                 language='en'
             ).select_related('parent').prefetch_related('children')
+            if slug:
+                queryset = queryset.filter(slug=slug)
             if tree:
                 queryset = queryset.filter(parent__isnull=True)
         return queryset.order_by('order', 'name')
@@ -585,6 +566,12 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         from decimal import Decimal
         
         cart = self._get_or_create_cart()
+        workspace = self._get_workspace(request)
+        if not workspace:
+            return Response(
+                {'detail': 'Workspace is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         # Get freight_service_id (preferred) or shipping_method (backward compatibility)
         freight_service_id = request.query_params.get('freight_service_id')
@@ -593,7 +580,7 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         # Use unified price calculation from OrderService
         from bfg.shop.services import OrderService
         order_service = OrderService(
-            workspace=request.workspace,
+            workspace=workspace,
             user=request.user if request.user.is_authenticated else None
         )
         
@@ -604,12 +591,12 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                 from bfg.common.models import Customer, Address
                 customer, _ = Customer.objects.get_or_create(
                     user=request.user,
-                    workspace=request.workspace,
+                    workspace=workspace,
                     defaults={'is_active': True}
                 )
                 # Try to get default address
                 shipping_address = Address.objects.filter(
-                    workspace=request.workspace,
+                    workspace=workspace,
                     content_object=customer
                 ).first()
             except Exception:
@@ -637,10 +624,16 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def add_item(self, request):
         """Add item to cart"""
+        workspace = self._get_workspace(request)
+        if not workspace:
+            return Response(
+                {'detail': 'Workspace is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         cart = self._get_or_create_cart()
         
         service = CartService(
-            workspace=request.workspace,
+            workspace=workspace,
             user=request.user if request.user.is_authenticated else None
         )
         
@@ -669,7 +662,7 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             )
         
         try:
-            product = Product.objects.get(id=product_id, workspace=request.workspace, is_active=True)
+            product = Product.objects.get(id=product_id, workspace=workspace, is_active=True)
             variant = ProductVariant.objects.get(id=variant_id) if variant_id else None
             
             service.add_to_cart(cart, product, quantity, variant)
@@ -708,10 +701,16 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def update_item(self, request):
         """Update cart item quantity"""
+        workspace = self._get_workspace(request)
+        if not workspace:
+            return Response(
+                {'detail': 'Workspace is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         cart = self._get_or_create_cart()
         
         service = CartService(
-            workspace=request.workspace,
+            workspace=workspace,
             user=request.user if request.user.is_authenticated else None
         )
         
@@ -752,10 +751,16 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def remove_item(self, request):
         """Remove item from cart"""
+        workspace = self._get_workspace(request)
+        if not workspace:
+            return Response(
+                {'detail': 'Workspace is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         cart = self._get_or_create_cart()
         
         service = CartService(
-            workspace=request.workspace,
+            workspace=workspace,
             user=request.user if request.user.is_authenticated else None
         )
         
@@ -781,10 +786,16 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def clear(self, request):
         """Clear cart"""
+        workspace = self._get_workspace(request)
+        if not workspace:
+            return Response(
+                {'detail': 'Workspace is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         cart = self._get_or_create_cart()
         
         service = CartService(
-            workspace=request.workspace,
+            workspace=workspace,
             user=request.user if request.user.is_authenticated else None
         )
         
@@ -805,6 +816,12 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_401_UNAUTHORIZED
             )
         
+        workspace = self._get_workspace(request)
+        if not workspace:
+            return Response(
+                {'detail': 'Workspace is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         cart = self._get_or_create_cart()
         
         if not cart.items.exists():
@@ -829,13 +846,13 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             )
         
         try:
-            store = Store.objects.get(id=store_id, workspace=request.workspace)
+            store = Store.objects.get(id=store_id, workspace=workspace)
             shipping_address = Address.objects.get(id=shipping_address_id)
             
             # Verify address belongs to customer
             customer, _ = Customer.objects.get_or_create(
                 user=request.user,
-                workspace=request.workspace,
+                workspace=workspace,
                 defaults={'is_active': True}
             )
             
@@ -856,7 +873,7 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                     )
             
             order_service = OrderService(
-                workspace=request.workspace,
+                workspace=workspace,
                 user=request.user
             )
             
@@ -899,7 +916,12 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             
             serializer = StorefrontOrderSerializer(order, context={'request': request})
             return Response(serializer.data, status=status.HTTP_201_CREATED)
-            
+
+        except ValidationError as exc:
+            return Response(
+                exc.detail if isinstance(exc.detail, dict) else {'detail': exc.detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except Store.DoesNotExist:
             return Response(
                 {'detail': 'Store not found'},
@@ -1085,6 +1107,11 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             )
             serializer = StorefrontOrderSerializer(order, context={'request': request})
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ValidationError as exc:
+            return Response(
+                exc.detail if isinstance(exc.detail, dict) else {'detail': exc.detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except Exception as e:
             return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

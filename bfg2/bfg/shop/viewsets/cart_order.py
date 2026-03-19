@@ -10,7 +10,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError as APIValidationError
 from decimal import Decimal
 
 from bfg.common.models import Customer, Address
@@ -319,7 +319,12 @@ class CartViewSet(viewsets.ModelViewSet):
             from bfg.shop.serializers import OrderDetailSerializer
             serializer = OrderDetailSerializer(order, context={'request': request})
             return Response(serializer.data, status=status.HTTP_201_CREATED)
-            
+
+        except APIValidationError as exc:
+            return Response(
+                exc.detail if isinstance(exc.detail, dict) else {'detail': exc.detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except Store.DoesNotExist:
             return Response(
                 {'detail': 'Store not found'},

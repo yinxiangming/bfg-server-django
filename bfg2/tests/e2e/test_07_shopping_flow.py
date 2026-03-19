@@ -4,6 +4,7 @@ E2E Test 07: Shopping Flow
 
 import pytest
 from decimal import Decimal
+import uuid
 
 @pytest.mark.e2e
 @pytest.mark.django_db
@@ -11,23 +12,24 @@ class TestShoppingFlow:
     
     def test_add_to_cart(self, authenticated_client, workspace):
         """Test adding items to cart via API"""
+        suffix = uuid.uuid4().hex[:6]
         # 1. Setup Product
         # Create category
         cat_res = authenticated_client.post('/api/v1/shop/categories/', {
-            "name": "General", "slug": "general", "language": "en"
+            "name": f"General {suffix}", "slug": f"general-{suffix}", "language": "en"
         })
         cat_id = cat_res.data['id']
         
         # Create product
         prod_res = authenticated_client.post('/api/v1/shop/products/', {
-            "name": "T-Shirt", "slug": "t-shirt", "category_ids": [cat_id], 
+            "name": f"T-Shirt {suffix}", "slug": f"t-shirt-{suffix}", "category_ids": [cat_id], 
             "price": "20.00", "language": "en"
         })
         prod_id = prod_res.data['id']
         
         # Create variant with stock
         var_res = authenticated_client.post('/api/v1/shop/variants/', {
-            "product": prod_id, "sku": "TSHIRT-L", "name": "Large", "price": "20.00", "stock_quantity": 10
+            "product": prod_id, "sku": f"TSHIRT-{suffix}-L", "name": f"Large {suffix}", "price": "20.00", "stock_quantity": 10
         })
         var_id = var_res.data['id']
         
@@ -53,34 +55,38 @@ class TestShoppingFlow:
         
     def test_checkout_preparation(self, authenticated_client, workspace):
         """Test checkout preparation (address, shipping)"""
-        # 1. Create Address first
-        from bfg.common.models import Address
-        address = Address.objects.create(
-            workspace=workspace,
-            full_name="John Doe",
-            address_line1="123 St",
-            city="City",
-            country="US",
-            postal_code="12345"
-        )
-        
-        # 2. Create Store
-        from bfg.shop.models import Store
-        from bfg.delivery.models import Warehouse
-        warehouse = Warehouse.objects.create(
-            workspace=workspace,
-            name="Main Warehouse",
-            code="WH-001",
-            city="City",
-            country="US",
-            postal_code="12345"
-        )
-        store = Store.objects.create(
-            workspace=workspace,
-            name="Test Store",
-            code="ST-001"
-        )
-        store.warehouses.add(warehouse)
+        suffix = uuid.uuid4().hex[:6]
+        # 1. Create Address via API
+        addr_res = authenticated_client.post("/api/v1/addresses/", {
+            "full_name": "John Doe",
+            "address_line1": f"123 St {suffix}",
+            "phone": "1234567890",
+            "city": "City",
+            "country": "US",
+            "postal_code": "12345",
+        })
+        assert addr_res.status_code == 201
+        address_id = addr_res.data["id"]
+
+        # 2. Create Warehouse via API
+        wh_res = authenticated_client.post("/api/v1/delivery/warehouses/", {
+            "name": f"Main Warehouse {suffix}",
+            "code": f"WH-001-{suffix}",
+            "city": "City",
+            "country": "US",
+            "postal_code": "12345",
+        })
+        assert wh_res.status_code == 201
+        warehouse_id = wh_res.data["id"]
+
+        # 3. Create Store via API
+        store_res = authenticated_client.post("/api/v1/shop/stores/", {
+            "name": f"Test Store {suffix}",
+            "code": f"ST-001-{suffix}",
+            "warehouse_ids": [warehouse_id],
+        })
+        assert store_res.status_code == 201
+        store_id = store_res.data["id"]
         
         # 3. Create Cart
         cart_res = authenticated_client.post('/api/v1/shop/carts/', {})
@@ -89,8 +95,8 @@ class TestShoppingFlow:
         # Checkout requires items, so we'll just verify the endpoint is accessible
         # In a full test, we'd add items first
         checkout_payload = {
-            "store": store.id,
-            "shipping_address": address.id
+            "store": store_id,
+            "shipping_address": address_id,
         }
         
         # Checkout should fail without items, but endpoint should be accessible

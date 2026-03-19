@@ -8,6 +8,57 @@ BASE_URL=http://localhost:3100 pytest bfg2/tests/e2e -m e2e -v
 
 All passwords and secrets must come from **env** (e.g. `src/server/.env`). Do not hardcode them in tests.
 
+## What the suite covers
+
+### Goals
+
+- Exercise BFG2 over a **real HTTP API**: registration, web setup, catalog, orders, marketing, storefront, fulfillment, and related flows end-to-end.
+- **No browser UI**; tests use `pytest -m e2e`, assert status codes and response bodies.
+
+### How requests are made
+
+- **`RemoteAPIClient`**: DRF-like surface (`get`/`post`, `.status_code`, `.data`). Anonymous flows use `requests.Session` so **cookies persist** (e.g. storefront cart `sessionid`).
+- Authenticated calls send **Bearer** tokens plus **`X-Workspace-Id` / `X-Workspace-Slug`** (from fixtures).
+- If `BASE_URL` ends with **`:8000`**, some paths are **normalized** (e.g. `/api/v1/shop/...` → `/api/v1/...`) to match how routes are mounted on that server.
+
+### Session bootstrap (one pytest session)
+
+1. Read `BASE_URL` and password-related env vars. With `:8000` + superuser env, use the bootstrap account to create workspaces; otherwise register/login to obtain **two workspaces (ws1 / ws2)**.
+2. For each workspace, obtain **admin and customer tokens** and customer records for reuse.
+3. Test modules use fixtures such as `workspace`, `admin_client`, `customer_client`, `authenticated_client`, and `anonymous_api_client` against the **same API process** (~100+ collected tests by default).
+
+### Coverage by file
+
+| Area | Test file | What it exercises |
+|------|-----------|-------------------|
+| Accounts & profile | `test_01_registration.py` | Workspace, customer signup, addresses |
+| Site & CMS | `test_02_website_setup.py` | Site, pages |
+| Store foundation | `test_03_store_setup.py` | Warehouses, stores |
+| Catalog (admin) | `test_04_product_mgmt.py` | Categories, products, sales channels |
+| Media | `test_05_media_upload.py` | Uploads, product media |
+| Warehousing | `test_06_warehouse_setup.py` | Warehouse config, inventory queries |
+| Shopping | `test_07_shopping_flow.py` | Add to cart, checkout prep |
+| Payments (admin-style) | `test_08_payment_flow.py` | Payment create/process, gift cards |
+| Fulfillment | `test_09_fulfillment.py` | Consignments, tracking, returns, package templates, order packages |
+| Long journey | `test_10_full_workflow.py` | Full customer journey |
+| Support | `test_11_support.py` | Tickets CRUD, list/filter, replies |
+| Inbox | `test_12_inbox.py` | Messages, templates, listing |
+| Marketing | `test_13_marketing.py` | Campaigns, discount rules, coupons, gift cards, storefront promo payloads |
+| Order math | `test_14_order_calculation.py` | Percent/fixed/free shipping, product/category rules, gift cards, **coupon usage limits**, minimum purchase, etc. |
+| Input validation | `test_15_input_validation.py` | Invalid/out-of-range payloads for cart, product, invoice, gift card, etc. |
+| Multi-tenant isolation | `test_16_workspace_isolation.py` | Cross-workspace read/update/delete must fail |
+| Storefront (customer API) | `test_17_storefront_*.py` | Products/categories, filters, anonymous cart, orders, payment intents, **me** (profile, addresses, orders, invoices, …) |
+| Storefront inventory | `test_18_storefront_inventory.py` | Multi-warehouse stock display and changes |
+| Customer ops | `test_customer_mgmt.py` | Segments, customer tags |
+| Sensitive me | `test_z_last_me_sensitive.py` | Password change/reset (**skipped by default**) |
+
+`test_17_storefront.py` is a stub documenting the split; real tests live under `test_17_storefront_*.py`.
+
+### Skips and data prerequisites
+
+- **Skips**: Sensitive me tests—see the env table above; enable explicitly to run them.
+- **Data**: At least one active **currency** (fixture validates); most other data is created by tests or the session bootstrap.
+
 ## Env variables
 
 | Variable | Required | Description |

@@ -1431,10 +1431,14 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
         # Get gateway by gateway_type
         try:
             if workspace:
-                payment_gateway = PaymentGateway.objects.get(
-                    gateway_type=gateway,
-                    workspace=workspace,
-                    is_active=True
+                payment_gateway = (
+                    PaymentGateway.objects.filter(
+                        gateway_type=gateway,
+                        workspace=workspace,
+                        is_active=True,
+                    )
+                    .order_by("-created_at")
+                    .first()
                 )
             else:
                 # Fallback: find any active gateway of this type

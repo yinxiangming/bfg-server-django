@@ -7,7 +7,6 @@ from decimal import Decimal
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestPaymentFlow:
 
     def test_create_payment(self, authenticated_client, workspace, store, currency, payment_gateway, customer, message_templates):

@@ -8,7 +8,6 @@ from datetime import datetime
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestStorefrontMe:
     """Test storefront personal information API"""
     

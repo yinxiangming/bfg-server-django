@@ -32,7 +32,6 @@ def _create_discount_rule_via_api(client, name="Test Discount Rule", **kwargs):
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestMarketing:
 
     def test_campaign_creation(self, authenticated_client, workspace):

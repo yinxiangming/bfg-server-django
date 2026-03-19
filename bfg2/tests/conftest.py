@@ -1,6 +1,7 @@
 """
 Pytest fixtures for BFG2 e2e tests. Pure API mode only: BASE_URL must be set.
 All data is created via HTTP API; no ORM in fixtures.
+E2E tests do not use @pytest.mark.django_db: they never touch the pytest-process test DB, only the live API.
 
 Run: BASE_URL=http://localhost:3100 pytest bfg2/tests/e2e -m e2e
 

@@ -7,7 +7,6 @@ from decimal import Decimal
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestStorefrontOrders:
     """Test storefront order-related API"""
     

@@ -5,7 +5,6 @@ E2E Test 06: Warehouse Setup
 import pytest
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestWarehouseSetup:
     
     def test_warehouse_configuration(self, authenticated_client, workspace):

@@ -2,13 +2,10 @@
 E2E Test 02: Website Setup
 """
 
-import pytest
-from bfg.web.models import Site, Page
-from bfg.web.services import SiteService
 import uuid
+import pytest
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestWebsiteSetup:
     
     def test_site_creation(self, authenticated_client, workspace):

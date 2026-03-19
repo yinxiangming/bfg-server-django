@@ -6,7 +6,6 @@ import pytest
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestStorefrontPayments:
     """Test storefront payment-related API."""
 

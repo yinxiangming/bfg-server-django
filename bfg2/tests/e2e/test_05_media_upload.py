@@ -9,7 +9,6 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestMediaUpload:
 
     def test_image_upload(self, authenticated_client, workspace):

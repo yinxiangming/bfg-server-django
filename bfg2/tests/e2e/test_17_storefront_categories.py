@@ -10,7 +10,6 @@ import pytest
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestStorefrontCategories:
     """Test storefront category-related API"""
     

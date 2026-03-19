@@ -68,7 +68,6 @@ def _setup_workspace_data(client, workspace, customer):
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestWorkspaceIsolation:
     """Test workspace data isolation via API."""
 

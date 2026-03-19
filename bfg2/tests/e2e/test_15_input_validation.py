@@ -15,7 +15,6 @@ from types import SimpleNamespace
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestInputValidation:
     """Test input validation for preventing calculation errors"""
 

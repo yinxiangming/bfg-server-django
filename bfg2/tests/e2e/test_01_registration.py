@@ -7,7 +7,6 @@ import pytest
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestRegistration:
 
     def test_workspace_creation(self, api_client, workspace):

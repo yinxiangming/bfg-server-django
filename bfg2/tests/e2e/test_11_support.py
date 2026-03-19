@@ -5,7 +5,6 @@ E2E Test 11: Support Ticket Management (API-only).
 import pytest
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestSupport:
     
     def test_ticket_creation(self, authenticated_client, workspace, customer):

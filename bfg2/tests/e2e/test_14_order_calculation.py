@@ -109,7 +109,6 @@ def _create_shipping_address_via_api(client, customer_id, full_name="John Doe", 
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestOrderCalculation:
     """
     Comprehensive order calculation tests

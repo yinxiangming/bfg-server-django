@@ -8,7 +8,6 @@ import uuid
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestFulfillment:
     
     def test_create_consignment(self, authenticated_client, workspace):

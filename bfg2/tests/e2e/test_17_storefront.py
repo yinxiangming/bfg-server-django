@@ -18,7 +18,6 @@ import pytest
 # All tests have been moved to separate files for better organization
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestStorefrontAPIBase:
     """Base test class - all tests moved to separate files"""
     pass

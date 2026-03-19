@@ -2,14 +2,10 @@
 E2E Test 03: Store Setup
 """
 
-import pytest
 import uuid
-from bfg.shop.models import Store
-from bfg.shop.services import StoreService
-from bfg.delivery.models import Warehouse
+import pytest
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestStoreSetup:
     
     def test_warehouse_creation(self, authenticated_client, workspace):

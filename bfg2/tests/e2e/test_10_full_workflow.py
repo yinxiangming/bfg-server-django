@@ -8,7 +8,6 @@ import uuid
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestFullWorkflow:
     
     def test_complete_customer_journey(self, authenticated_client, workspace, user, message_templates):

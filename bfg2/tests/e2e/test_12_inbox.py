@@ -3,10 +3,8 @@ E2E Test 12: Inbox Message Management
 """
 
 import pytest
-from bfg.inbox.models import Message, MessageTemplate
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestInbox:
     
     def test_message_creation(self, authenticated_client, workspace, customer):

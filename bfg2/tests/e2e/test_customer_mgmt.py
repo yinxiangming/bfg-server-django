@@ -6,7 +6,6 @@ import pytest
 from decimal import Decimal
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestCustomerManagement:
     
     def test_customer_segment_creation(self, authenticated_client, workspace):

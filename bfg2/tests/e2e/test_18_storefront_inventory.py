@@ -11,7 +11,6 @@ from decimal import Decimal
 
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestStorefrontInventory:
     """Test storefront inventory display and tracking"""
 

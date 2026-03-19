@@ -7,7 +7,6 @@ from decimal import Decimal
 import uuid
 
 @pytest.mark.e2e
-@pytest.mark.django_db
 class TestShoppingFlow:
     
     def test_add_to_cart(self, authenticated_client, workspace):

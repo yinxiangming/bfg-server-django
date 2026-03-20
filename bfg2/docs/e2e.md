@@ -20,7 +20,7 @@ All passwords and secrets must come from **env** (e.g. `src/server/.env`). Do no
 
 ### How requests are made
 
-- **`RemoteAPIClient`**: DRF-like surface (`get`/`post`, `.status_code`, `.data`). Anonymous flows use `requests.Session` so **cookies persist** (e.g. storefront cart `sessionid`). Tests do **not** use `@pytest.mark.django_db`: data lives on the API server’s database, not the pytest Django test database.
+- **`RemoteAPIClient`**: DRF-like surface (`get`/`post`, `.status_code`, `.data`). Anonymous flows use `requests.Session` so **cookies persist** (e.g. storefront cart `sessionid`) and send **`X-Bfg-Cart-Session`** so storefront carts stay isolated (Django / Node / .NET). Tests do **not** use `@pytest.mark.django_db`: data lives on the API server’s database, not the pytest Django test database.
 - Authenticated calls send **Bearer** tokens plus **`X-Workspace-Id` / `X-Workspace-Slug`** (from fixtures).
 - If `BASE_URL` ends with **`:8000`**, some paths are **normalized** (e.g. `/api/v1/shop/...` → `/api/v1/...`) to match how routes are mounted on that server.
 

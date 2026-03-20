@@ -540,6 +540,10 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                         return cart
                 except (ValueError, TypeError):
                     pass
+            # Explicit guest cart key (e2e / .NET parity); avoids sharing one cart per workspace
+            bfg_cart_session = (self.request.headers.get('X-Bfg-Cart-Session') or '').strip()
+            if bfg_cart_session:
+                return service.get_or_create_guest_cart(bfg_cart_session[:255])
             if not self.request.session.session_key:
                 self.request.session.create()
             session_key = self.request.session.session_key

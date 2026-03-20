@@ -1,6 +1,6 @@
 """
 HTTP client for e2e (remote Node or Django API). Base URL from env only.
-Same interface as WorkspaceAPIClient: .get, .post, .data, .status_code, force_authenticate.
+Mimics DRF test client: .get, .post, .data, .status_code, force_authenticate.
 """
 import os
 import json

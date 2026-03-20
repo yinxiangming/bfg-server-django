@@ -4,6 +4,8 @@ BFG Finance Module Serializers
 Serializers for finance module models
 """
 
+from decimal import Decimal
+
 from rest_framework import serializers
 from bfg.finance.models import (
     Currency, PaymentGateway, PaymentMethod, Brand, FinancialCode,
@@ -750,7 +752,7 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
 
 
 class WithdrawalRequestCreateSerializer(serializers.Serializer):
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0.01)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0.01'))
     payout_method = serializers.CharField(max_length=100, required=False, allow_blank=True)
     payout_details = serializers.JSONField(required=False, default=dict)
     notes = serializers.CharField(required=False, allow_blank=True)

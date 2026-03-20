@@ -1,9 +1,12 @@
 # E2E Tests
 
-HTTP-only: run against any BFG2-compatible API. Set **`BASE_URL`** to the running server.
+HTTP-only suite: **`tests/e2e/`** (under this `bfg2` tree). Run against any BFG2-compatible API; set **`BASE_URL`** to the running server.
+
+From **`src/server/bfg2`** (resale repo):
 
 ```bash
-BASE_URL=http://localhost:3100 pytest bfg2/tests/e2e -m e2e -v
+cd src/server/bfg2
+BASE_URL=http://127.0.0.1:8020 pytest tests/e2e -m e2e -v
 ```
 
 All passwords and secrets must come from **env** (e.g. `src/server/.env`). Do not hardcode them in tests.
@@ -84,9 +87,22 @@ Token login tries `username` and `email` shapes; set `BFG2_E2E_AUTH_LOGIN_EMAIL`
 
 If token requests fail, confirm the server is up and env credentials match existing users.
 
-### Node.js API (e.g. port 3100)
+### Node.js API (`bfg-server-nodejs`)
 
-Use `BASE_URL=http://127.0.0.1:3100` (paths are not rewritten unless the URL ends with `:8000`). From `bfg-server-nodejs`, `npm run e2e` runs resale pytest with the same `BASE_URL` env. Repo root `scripts/e2e-both.sh` sets `BASE_URL` per phase from `PYTHON_API_BASE_URL` / `NODE_API_BASE_URL`.
+Use the **same** pytest command from **`resale/src/server/bfg2`**; point `BASE_URL` at the Node process. Paths are **not** rewritten unless `BASE_URL` ends with `:8000` (see `RemoteAPIClient`).
+
+Example (after `npm run build`, `npm run seed:e2e`, and `PORT=8020 node dist/index.js` in `bfg-server-nodejs`):
+
+```bash
+cd /path/to/resale/src/server/bfg2
+export BASE_URL=http://127.0.0.1:8020
+export BFG2_E2E_SUPERUSER_EMAIL=admin
+export BFG2_E2E_SUPERUSER_PASSWORD=admin123   # match bfg-server-nodejs seed:e2e
+export BFG2_E2E_CUSTOMER_PASSWORD='YourSecureCustomerPwd1!'
+pytest tests/e2e -m e2e -v
+```
+
+`bfg-server-nodejs` also has a small smoke suite under its own `e2e/` (`npm run e2e`); full parity lives in **`tests/e2e/`** here.
 
 ## Restore e2e user passwords (reference API host DB)
 

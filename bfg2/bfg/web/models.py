@@ -563,6 +563,8 @@ class Booking(models.Model):
         ('pending', _('Pending')),
         ('confirmed', _('Confirmed')),
         ('cancelled', _('Cancelled')),
+        ('accepted', _('Accepted')),
+        ('rejected', _('Rejected')),
         ('completed', _('Completed')),
         ('no_show', _('No Show')),
     )
@@ -607,6 +609,7 @@ class Inquiry(models.Model):
         ('inquiry', _('Business Inquiry')),
         ('feedback', _('Feedback/Complaint')),
         ('other', _('Other')),
+        ('consignment_request', _('Consignment Request')),
     )
     
     STATUS_CHOICES = (
@@ -614,6 +617,8 @@ class Inquiry(models.Model):
         ('processing', _('Processing')),
         ('completed', _('Completed')),
         ('cancelled', _('Cancelled')),
+        ('accepted', _('Accepted')),
+        ('rejected', _('Rejected')),
     )
     
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='inquiries')
@@ -746,6 +751,8 @@ class NewsletterSend(models.Model):
         ('sending', _('Sending')),
         ('sent', _('Sent')),
         ('cancelled', _('Cancelled')),
+        ('accepted', _('Accepted')),
+        ('rejected', _('Rejected')),
     )
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='newsletter_sends')
     subject = models.CharField(_("Subject"), max_length=255)

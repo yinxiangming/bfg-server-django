@@ -31,13 +31,13 @@ from decimal import Decimal
 
 
 def _get_min_withdrawal_amount_for_workspace(workspace):
-    """Optional minimum withdrawal from WorkspaceSettings.custom_settings['finance']['min_withdrawal_amount']."""
+    """Optional minimum withdrawal from Settings.custom_settings['finance']['min_withdrawal_amount']."""
     if not workspace:
         return None
     try:
-        from bfg.common.models import WorkspaceSettings
+        from bfg.common.models import Settings
 
-        ws = WorkspaceSettings.objects.filter(workspace=workspace).first()
+        ws = Settings.objects.filter(workspace=workspace).first()
         if not ws:
             return None
         fin = (ws.custom_settings or {}).get('finance') or {}

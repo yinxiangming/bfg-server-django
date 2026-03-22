@@ -184,10 +184,15 @@ class CustomerViewSet(viewsets.ModelViewSet):
             workspace=self.request.workspace,
             user=self.request.user
         )
+        validated = dict(serializer.validated_data)
+        user_id = validated.pop('user_id', None)
+        target_user = self.request.user
+        if user_id is not None:
+            target_user = User.objects.get(id=user_id)
         customer = service.create_customer(
-            user=self.request.user,
+            user=target_user,
             workspace=self.request.workspace,
-            **serializer.validated_data
+            **validated
         )
         serializer.instance = customer
     

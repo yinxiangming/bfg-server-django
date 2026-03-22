@@ -27,6 +27,26 @@ from bfg.finance.serializers import (
 from bfg.finance.exceptions import InsufficientFunds
 from bfg.finance.services import PaymentService, InvoiceService, TaxService, WalletService
 from bfg.common.constants import get_default_currency_for_workspace
+from decimal import Decimal
+
+
+def _get_min_withdrawal_amount_for_workspace(workspace):
+    """Optional minimum withdrawal from WorkspaceSettings.custom_settings['finance']['min_withdrawal_amount']."""
+    if not workspace:
+        return None
+    try:
+        from bfg.common.models import WorkspaceSettings
+
+        ws = WorkspaceSettings.objects.filter(workspace=workspace).first()
+        if not ws:
+            return None
+        fin = (ws.custom_settings or {}).get('finance') or {}
+        v = fin.get('min_withdrawal_amount')
+        if v is None or v == '':
+            return None
+        return Decimal(str(v))
+    except Exception:
+        return None
 
 
 class CurrencyViewSet(viewsets.ModelViewSet):
@@ -890,6 +910,16 @@ class WalletViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = WithdrawalRequestCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         amount = serializer.validated_data['amount']
+        min_w = _get_min_withdrawal_amount_for_workspace(wallet.workspace)
+        if min_w is not None and amount < min_w:
+            return Response(
+                {
+                    'detail': f'Minimum withdrawal amount is {min_w}.',
+                    'code': 'min_withdrawal_amount',
+                    'min_amount': str(min_w),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if wallet.cash_balance < amount:
             return Response(
                 {'detail': f'Insufficient cash balance. Available: {wallet.cash_balance}'},

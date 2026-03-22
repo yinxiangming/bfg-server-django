@@ -82,6 +82,7 @@ class CustomerDetailSerializer(serializers.ModelSerializer):
     user_id = serializers.IntegerField(write_only=True, required=False)
     segments = serializers.SerializerMethodField()
     experience_points = serializers.SerializerMethodField()
+    addresses = serializers.SerializerMethodField()
     
     class Meta:
         model = Customer
@@ -89,7 +90,7 @@ class CustomerDetailSerializer(serializers.ModelSerializer):
             'id', 'workspace', 'user', 'user_id', 'customer_number',
             'company_name', 'tax_number', 'credit_limit', 'balance',
             'is_active', 'is_verified', 'verified_at', 'notes',
-            'segments', 'experience_points', 'created_at', 'updated_at'
+            'segments', 'experience_points', 'addresses', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'workspace', 'customer_number', 'balance', 'created_at', 'updated_at']
     
@@ -135,11 +136,19 @@ class CustomerDetailSerializer(serializers.ModelSerializer):
             # Return 0 if shop module not available or calculation fails
             return 0
 
+    def get_addresses(self, obj):
+        """Addresses linked to this customer (GenericRelation)."""
+        # AddressSerializer is defined below in this module
+        return AddressSerializer(
+            obj.addresses.all().order_by('-is_default', '-created_at'),
+            many=True,
+        ).data
+
 
 class AddressSerializer(serializers.ModelSerializer):
     """Address serializer"""
     customer_id = serializers.IntegerField(write_only=True, required=False)
-    
+
     class Meta:
         model = Address
         fields = [

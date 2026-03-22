@@ -330,14 +330,15 @@ class InquiryDetailSerializer(serializers.ModelSerializer):
 
 
 class InquiryCreateSerializer(serializers.ModelSerializer):
-    """Inquiry creation serializer (public submission)"""
-    
+    """Inquiry creation serializer (public submission; input-only fields)."""
+
     class Meta:
         model = Inquiry
         fields = [
-            'inquiry_type', 'name', 'email', 'phone', 'subject', 'message', 'form_data',
+            'id', 'inquiry_type', 'name', 'email', 'phone', 'subject', 'message', 'form_data',
             'source_url'
         ]
+        read_only_fields = ['id']
     
     def validate_email(self, value):
         """Validate email is provided for certain inquiry types"""

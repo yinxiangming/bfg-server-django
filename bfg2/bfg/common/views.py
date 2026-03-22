@@ -159,15 +159,17 @@ class CustomerViewSet(viewsets.ModelViewSet):
         ).exists()
         
         if is_staff:
-            return Customer.objects.filter(
+            qs = Customer.objects.filter(
                 workspace=workspace
             ).select_related('user')
-        
-        # Customers can only see themselves
-        return Customer.objects.filter(
-            workspace=workspace,
-            user=user
-        ).select_related('user')
+        else:
+            qs = Customer.objects.filter(
+                workspace=workspace,
+                user=user
+            ).select_related('user')
+        if self.action == 'retrieve':
+            qs = qs.prefetch_related('addresses')
+        return qs
     
     def get_permissions(self):
         """Set permissions based on action"""

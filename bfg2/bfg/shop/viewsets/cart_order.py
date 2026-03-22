@@ -350,7 +350,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         """Return appropriate serializer"""
         if self.action == 'create':
             return OrderCreateSerializer
-        if self.action == 'retrieve' or self.action == 'update_items':
+        if self.action in ('retrieve', 'update_items', 'mark_paid', 'refund', 'cancel'):
             return OrderDetailSerializer
         return OrderListSerializer
     
@@ -559,10 +559,31 @@ class OrderViewSet(viewsets.ModelViewSet):
             workspace=self.request.workspace,
             user=self.request.user
         )
+
+        # Optional line items from request body (staff direct create)
+        items_raw = self.request.data.get('items') or []
+        order_items = []
+        subtotal = Decimal('0')
+        for it in items_raw:
+            try:
+                pid = int(it.get('product_id'))
+                qty = int(it.get('quantity', 1))
+            except (TypeError, ValueError):
+                continue
+            price = Decimal(str(it.get('price', '0')))
+            line = price * qty
+            subtotal += line
+            order_items.append({
+                'product_id': pid,
+                'quantity': qty,
+                'price': price,
+                'subtotal': line,
+            })
+        shipping_cost = Decimal('0')
+        tax = Decimal('0')
+        discount = Decimal('0')
+        total = subtotal + shipping_cost + tax - discount
         
-        # Note: All financial fields (subtotal, shipping_cost, tax, discount, total) 
-        # are now read_only and will be calculated by the service
-        # For direct order creation, we start with empty order (no items yet)
         order = service.create_order(
             customer=customer,
             store=store,
@@ -572,6 +593,12 @@ class OrderViewSet(viewsets.ModelViewSet):
             payment_status=payment_status,
             customer_note=customer_note,
             admin_note=admin_note,
+            subtotal=subtotal,
+            shipping_cost=shipping_cost,
+            tax=tax,
+            discount=discount,
+            total=total,
+            order_items=order_items,
         )
         
         serializer.instance = order
@@ -610,6 +637,62 @@ class OrderViewSet(viewsets.ModelViewSet):
         )
         
         order = service.update_order_status(order, new_status)
+        serializer = self.get_serializer(order)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='mark-paid')
+    def mark_paid(self, request, pk=None):
+        """Mark order as paid (staff). Triggers order.paid and resale payout hooks."""
+        from bfg.common.models import StaffMember
+
+        if not (
+            request.user.is_superuser
+            or getattr(request, 'is_staff_member', False)
+            or StaffMember.objects.filter(
+                workspace=request.workspace,
+                user=request.user,
+                is_active=True,
+            ).exists()
+        ):
+            return Response(
+                {'detail': 'Only staff can mark orders as paid'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        order = self.get_object()
+        service = OrderService(
+            workspace=request.workspace,
+            user=request.user,
+        )
+        order = service.mark_as_paid(order)
+        serializer = self.get_serializer(order)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='refund')
+    def refund(self, request, pk=None):
+        """Mark order as refunded (staff). Emits order.refunded for resale reversal hooks."""
+        from bfg.common.models import StaffMember
+
+        if not (
+            request.user.is_superuser
+            or getattr(request, 'is_staff_member', False)
+            or StaffMember.objects.filter(
+                workspace=request.workspace,
+                user=request.user,
+                is_active=True,
+            ).exists()
+        ):
+            return Response(
+                {'detail': 'Only staff can refund orders'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        order = self.get_object()
+        service = OrderService(
+            workspace=request.workspace,
+            user=request.user,
+        )
+        order = service.update_order_status(order, 'refunded')
+        order.payment_status = 'refunded'
+        order.save(update_fields=['payment_status'])
         serializer = self.get_serializer(order)
         return Response(serializer.data)
     

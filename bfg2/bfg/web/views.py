@@ -789,7 +789,154 @@ class InquiryViewSet(viewsets.ModelViewSet):
         return Response(service.get_inquiry_stats())
 
 
-def _create_github_feedback_issue(feedback_type, content, source, image_base64):
+def _feedback_submitter_label(request):
+    """Resolved from JWT/session when present; never trust client-supplied identity."""
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'is_authenticated', False):
+        return None
+    email = (getattr(user, 'email', None) or '').strip()
+    username = (getattr(user, 'username', None) or '').strip()
+    uid = getattr(user, 'pk', None)
+    parts = []
+    if email:
+        parts.append(email)
+    if username:
+        parts.append(f'username={username}')
+    if uid is not None:
+        parts.append(f'id={uid}')
+    return ', '.join(parts) if parts else None
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    import os
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _parse_feedback_image_data_url(image_base64: str):
+    """Return (file_ext, raw_bytes) from a data URL, or (None, None)."""
+    import re
+    import base64
+    import binascii
+
+    s = (image_base64 or '').strip()
+    if not s:
+        return None, None
+    m = re.match(r'^data:image/(png|jpeg|jpg|gif|webp);base64,(.+)$', s, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return None, None
+    fmt = m.group(1).lower()
+    if fmt in ('jpeg', 'jpg'):
+        ext = 'jpg'
+    elif fmt == 'png':
+        ext = 'png'
+    elif fmt == 'gif':
+        ext = 'gif'
+    else:
+        ext = 'webp'
+    try:
+        raw = base64.b64decode(m.group(2), validate=True)
+    except (ValueError, binascii.Error):
+        return None, None
+    if len(raw) > 5_000_000:
+        return None, None
+    return ext, raw
+
+
+def _save_feedback_screenshot_to_media_storage(workspace_id, image_base64):
+    """
+    Save feedback image using Django default file storage (same as Media / product uploads).
+    Path: media/{workspace_id}/feedbacks/{uuid}.{ext} — matches media_upload_to with folder "feedbacks".
+    """
+    import uuid
+    import logging
+    from django.core.files.base import ContentFile
+    from django.core.files.storage import default_storage
+
+    ext, raw = _parse_feedback_image_data_url(image_base64)
+    if not raw or workspace_id is None:
+        return None
+    name = f'media/{workspace_id}/feedbacks/{uuid.uuid4().hex}.{ext}'
+    try:
+        saved = default_storage.save(name, ContentFile(raw))
+        try:
+            if hasattr(default_storage, 'path'):
+                logging.info('Feedback screenshot saved: %s', default_storage.path(saved))
+        except Exception:
+            pass
+        return saved
+    except Exception as e:
+        logging.warning('Feedback: failed to save screenshot to storage: %s', e)
+        return None
+
+
+def _media_url_is_github_fetchable(url: str) -> bool:
+    """GitHub renders issue images via camo; it cannot reach localhost or private hosts."""
+    import ipaddress
+    from urllib.parse import urlparse
+
+    if not url or not url.startswith(('http://', 'https://')):
+        return False
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        return False
+    host = host.lower()
+    if host == 'localhost':
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+            return False
+    except ValueError:
+        pass
+    return True
+
+
+def _public_url_for_stored_media(request, storage_name):
+    """
+    Absolute URL for GitHub issue markdown. S3 backends usually return https already.
+    For local FileSystemStorage, use MEDIA_PUBLIC_BASE_URL (settings) or request.build_absolute_uri.
+    """
+    import logging
+    from django.conf import settings as dj_settings
+    from django.core.files.storage import default_storage
+
+    url = default_storage.url(storage_name)
+    if url.startswith(('http://', 'https://')):
+        return url
+    base = (getattr(dj_settings, 'MEDIA_PUBLIC_BASE_URL', None) or '').strip().rstrip('/')
+    if base:
+        path = url if url.startswith('/') else f'/{url}'
+        return f'{base}{path}'
+    if request is not None:
+        return request.build_absolute_uri(url)
+    logging.warning(
+        'Feedback: relative media URL and no MEDIA_PUBLIC_BASE_URL; GitHub may not load the image'
+    )
+    return url
+
+
+def _embed_feedback_screenshots_enabled():
+    import os
+    if os.environ.get('FEEDBACK_EMBED_SCREENSHOTS') is not None:
+        return _env_flag('FEEDBACK_EMBED_SCREENSHOTS', True)
+    return _env_flag('GITHUB_FEEDBACK_EMBED_SCREENSHOTS', True)
+
+
+def _create_github_feedback_issue(
+    feedback_type,
+    content,
+    source,
+    image_base64,
+    page_url=None,
+    submitter_label=None,
+    workspace_id=None,
+    request=None,
+    saved_storage_name=None,
+):
     """Create a GitHub issue for feedback. Returns (issue_url or None, error or None)."""
     import os
     import logging
@@ -799,16 +946,46 @@ def _create_github_feedback_issue(feedback_type, content, source, image_base64):
     if not token or not repo or '/' not in repo:
         return None, None
     title = f'[Feedback][{feedback_type}] {content[:60]}' + ('...' if len(content) > 60 else '')
+    ref_url = page_url or '(not provided)'
+    ref_user = submitter_label or 'anonymous'
     body_lines = [
         f'**Type:** {feedback_type}',
         f'**Source:** {source}',
+        '',
+        '**Context (reference):**',
+        f'- Page URL: {ref_url}',
+        f'- Logged-in user: {ref_user}',
         '',
         '**Content:**',
         '',
         content,
     ]
     if image_base64:
-        body_lines.extend(['', '---', '(Screenshot/attachment: see admin email if configured.)'])
+        embed_url = None
+        saved_name = saved_storage_name
+        if saved_name is None and _embed_feedback_screenshots_enabled() and workspace_id is not None:
+            saved_name = _save_feedback_screenshot_to_media_storage(workspace_id, image_base64)
+        if saved_name and _embed_feedback_screenshots_enabled():
+            candidate = _public_url_for_stored_media(request, saved_name)
+            if candidate and _media_url_is_github_fetchable(candidate):
+                embed_url = candidate
+        if embed_url:
+            body_lines.extend(['', '**Screenshot:**', f'![feedback screenshot]({embed_url})'])
+        elif saved_name and _embed_feedback_screenshots_enabled():
+            body_lines.extend([
+                '',
+                '**Screenshot (storage path, not embedded in GitHub):**',
+                f'- Relative path: `{saved_name}` (under `MEDIA_ROOT`, i.e. `.../media/{saved_name}` on disk)',
+                '- GitHub cannot load images from `localhost` or private networks. Set `MEDIA_PUBLIC_BASE_URL` '
+                'to your **public** API origin (e.g. `https://api.example.com`) so the next feedback can embed.',
+            ])
+        elif _embed_feedback_screenshots_enabled() and not saved_name:
+            body_lines.extend([
+                '',
+                '---',
+                '(Screenshot was not saved; check server logs and `MEDIA_ROOT` permissions, '
+                'or set `FEEDBACK_EMBED_SCREENSHOTS=0` to skip.)',
+            ])
     body = '\n'.join(body_lines)
     labels = ['feedback', feedback_type]
     try:
@@ -831,10 +1008,21 @@ def _create_github_feedback_issue(feedback_type, content, source, image_base64):
         return None, str(e)
 
 
-def _send_feedback_admin_email(workspace, feedback_type, content, source, image_base64):
+def _send_feedback_admin_email(
+    workspace,
+    feedback_type,
+    content,
+    source,
+    image_base64,
+    page_url=None,
+    submitter_label=None,
+    image_public_url=None,
+    image_storage_name=None,
+):
     """Send feedback notification to admin email. Uses workspace default EmailConfig or FEEDBACK_ADMIN_EMAIL."""
     import os
     import logging
+    import html
     from bfg.common.models import EmailConfig
     from bfg.common.services import SettingsService
     from bfg.common.email_backends import get_backend
@@ -853,7 +1041,45 @@ def _send_feedback_admin_email(workspace, feedback_type, content, source, image_
         logging.warning('Feedback: no default EmailConfig for workspace %s', workspace.id)
         return
     subject = f'[Feedback][{feedback_type}] {content[:50]}' + ('...' if len(content) > 50 else '')
-    body_plain = f'Type: {feedback_type}\nSource: {source}\n\nContent:\n\n{content}'
+    ref_url = page_url or '(not provided)'
+    ref_user = submitter_label or 'anonymous'
+    body_plain = (
+        f'Type: {feedback_type}\n'
+        f'Source: {source}\n'
+        f'Page URL: {ref_url}\n'
+        f'User: {ref_user}\n\n'
+        f'Content:\n\n{content}'
+    )
+    body_html = None
+    if image_public_url or image_storage_name:
+        body_plain += '\n\n---\nScreenshot:\n'
+        if image_public_url:
+            body_plain += f'Image URL: {image_public_url}\n'
+        if image_storage_name:
+            body_plain += f'Storage path (relative to MEDIA_ROOT): {image_storage_name}\n'
+        safe_url = html.escape(image_public_url, quote=True) if image_public_url else ''
+        safe_path = html.escape(image_storage_name or '', quote=True)
+        parts = [
+            '<p>',
+            f'Type: {html.escape(str(feedback_type))}<br/>',
+            f'Source: {html.escape(str(source))}<br/>',
+            f'Page URL: {html.escape(str(ref_url))}<br/>',
+            f'User: {html.escape(str(ref_user))}',
+            '</p>',
+            '<p><strong>Content</strong></p>',
+            f'<pre style="white-space:pre-wrap">{html.escape(content)}</pre>',
+        ]
+        if image_public_url or image_storage_name:
+            parts.append('<p><strong>Screenshot</strong></p>')
+            if image_public_url:
+                parts.append(f'<p>Image URL: <a href="{safe_url}">{safe_url}</a></p>')
+            if image_storage_name:
+                parts.append(f'<p>Storage path: <code>{safe_path}</code></p>')
+            if image_public_url:
+                parts.append(
+                    f'<p><img src="{safe_url}" alt="Feedback screenshot" style="max-width:100%;height:auto" /></p>'
+                )
+        body_html = ''.join(parts)
     try:
         backend_class = get_backend(config.backend_type)
         backend = backend_class()
@@ -861,7 +1087,7 @@ def _send_feedback_admin_email(workspace, feedback_type, content, source, image_
             to_list=[admin_email],
             subject=subject,
             body_plain=body_plain,
-            body_html=None,
+            body_html=body_html,
             from_email=config.config.get('from_email'),
             config=config.config,
         )
@@ -872,7 +1098,11 @@ def _send_feedback_admin_email(workspace, feedback_type, content, source, image_
 class FeedbackView(APIView):
     """
     Public endpoint to submit feedback (bug/feature). POST only, AllowAny.
-    Request body: type (bug|feature), content (required), source (admin|account|storefront), image_base64 (optional).
+    Request body: type (bug|feature), content (required), source (admin|account|storefront),
+    image_base64 (optional), page_url (optional, client page URL for context).
+    With Authorization: Bearer, logged-in user is attached from the token (not from body).
+    Screenshots are saved with Django default file storage to media/<workspace_id>/feedbacks/
+    (same backend as product Media; S3 when STORAGES/default is configured).
     Creates GitHub issue if GITHUB_TOKEN and GITHUB_REPO are set; sends email to admin if configured.
     """
     permission_classes = [AllowAny]
@@ -893,12 +1123,43 @@ class FeedbackView(APIView):
         if source not in ('admin', 'account', 'storefront'):
             source = 'storefront'
         image_base64 = data.get('image_base64') or ''
+        page_url = (data.get('page_url') or '').strip()
+        if len(page_url) > 2048:
+            page_url = page_url[:2048]
+        submitter_label = _feedback_submitter_label(request)
+
+        saved_storage_name = None
+        image_public_url = None
+        if image_base64:
+            saved_storage_name = _save_feedback_screenshot_to_media_storage(workspace.id, image_base64)
+            if saved_storage_name:
+                image_public_url = _public_url_for_stored_media(request, saved_storage_name)
 
         issue_url = None
-        _issue_url, _err = _create_github_feedback_issue(feedback_type, content, source, image_base64)
+        _issue_url, _err = _create_github_feedback_issue(
+            feedback_type,
+            content,
+            source,
+            image_base64,
+            page_url=page_url or None,
+            submitter_label=submitter_label,
+            workspace_id=workspace.id,
+            request=request,
+            saved_storage_name=saved_storage_name,
+        )
         if _issue_url:
             issue_url = _issue_url
-        _send_feedback_admin_email(workspace, feedback_type, content, source, image_base64)
+        _send_feedback_admin_email(
+            workspace,
+            feedback_type,
+            content,
+            source,
+            image_base64,
+            page_url=page_url or None,
+            submitter_label=submitter_label,
+            image_public_url=image_public_url,
+            image_storage_name=saved_storage_name,
+        )
 
         payload = {'ok': True}
         if issue_url:

@@ -6,7 +6,7 @@ Django admin configuration for BFG Common models.
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.translation import gettext_lazy as _
-from .models import Workspace, User, Customer, Address, Settings, AuditLog
+from .models import Workspace, User, Customer, Address, Settings, AuditLog, APIKey
 
 
 @admin.register(Workspace)
@@ -156,3 +156,29 @@ class AuditLogAdmin(admin.ModelAdmin):
     
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(APIKey)
+class APIKeyAdmin(admin.ModelAdmin):
+    list_display = ('name', 'prefix', 'workspace', 'is_active', 'created_by', 'last_used_at', 'expires_at', 'created_at')
+    list_filter = ('workspace', 'is_active', 'created_at')
+    search_fields = ('name', 'prefix', 'workspace__name')
+    readonly_fields = ('prefix', 'secret_hash', 'created_by', 'last_used_at', 'created_at', 'updated_at')
+
+    fieldsets = (
+        (_('Key Info'), {
+            'fields': ('workspace', 'name', 'prefix')
+        }),
+        (_('Status'), {
+            'fields': ('is_active', 'expires_at')
+        }),
+        (_('Metadata'), {
+            'fields': ('created_by', 'last_used_at', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+        (_('Security'), {
+            'fields': ('secret_hash',),
+            'classes': ('collapse',),
+            'description': 'The secret hash is stored for verification. The raw secret is never stored.'
+        }),
+    )

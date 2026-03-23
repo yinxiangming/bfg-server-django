@@ -4,3 +4,4 @@ from .customer import Customer, CustomerSegment, CustomerTag
 from .staff import StaffRole, StaffMember
 from .preferences import UserPreferences
 from .email import EmailConfig
+from .api_key import APIKey

@@ -180,6 +180,7 @@ MEDIA_PUBLIC_BASE_URL = os.environ.get('MEDIA_PUBLIC_BASE_URL', '').strip().rstr
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        'config.authentication.APIKeyAuthentication',
         'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication',
         'config.authentication.BearerTokenAuthentication',
@@ -223,6 +224,7 @@ CORS_ALLOW_HEADERS = [
     'accept', 'accept-language', 'accept-encoding', 'authorization',
     'content-type', 'dnt', 'origin', 'user-agent', 'x-csrftoken',
     'x-requested-with', 'x-workspace-id', 'x-forwarded-host',
+    'x-api-key', 'x-api-secret',
 ]
 
 # Celery

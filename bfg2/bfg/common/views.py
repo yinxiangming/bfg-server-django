@@ -2099,3 +2099,68 @@ def countries_list(request):
     Returns list of {code, name} objects
     """
     return Response(COUNTRY_LIST)
+
+
+# ── API Key Management ────────────────────────────────────────────
+
+class APIKeyViewSet(viewsets.ModelViewSet):
+    """
+    CRUD for workspace API keys.
+
+    * ``POST``   — create a new key (response includes the one-time ``api_secret``).
+    * ``GET``    — list / retrieve keys (secret is never shown again).
+    * ``PATCH``  — update name / is_active / expires_at.
+    * ``DELETE`` — permanently remove a key.
+    * ``POST /api-keys/{id}/regenerate/`` — rotate the secret.
+    """
+    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def get_serializer_class(self):
+        from bfg.common.serializers import APIKeySerializer, APIKeyCreateSerializer
+        if self.action == 'create':
+            return APIKeyCreateSerializer
+        return APIKeySerializer
+
+    def get_queryset(self):
+        from bfg.common.models import APIKey
+        workspace = getattr(self.request, 'workspace', None)
+        if workspace:
+            return APIKey.objects.filter(workspace=workspace)
+        return APIKey.objects.none()
+
+    def perform_create(self, serializer):
+        from bfg.common.models import APIKey
+        workspace = getattr(self.request, 'workspace', None)
+        if not workspace:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError('No workspace found.')
+
+        instance, raw_secret = APIKey.create_key(
+            workspace=workspace,
+            name=serializer.validated_data['name'],
+            created_by=self.request.user if self.request.user.is_authenticated else None,
+            expires_at=serializer.validated_data.get('expires_at'),
+        )
+        # Attach the raw secret so the serializer can include it in the response
+        instance.api_secret = raw_secret
+        serializer.instance = instance
+
+    @action(detail=True, methods=['post'])
+    def regenerate(self, request, pk=None):
+        """
+        Rotate the secret for an existing key.
+
+        Returns the new ``api_key`` (prefix, unchanged) and ``api_secret`` (new plain text).
+        """
+        from bfg.common.models.api_key import generate_api_key_secret, hash_secret
+        from bfg.common.serializers import APIKeyCreateSerializer
+
+        api_key = self.get_object()
+        new_secret = generate_api_key_secret()
+        api_key.secret_hash = hash_secret(new_secret)
+        api_key.save(update_fields=['secret_hash', 'updated_at'])
+
+        api_key.api_secret = new_secret
+        serializer = APIKeyCreateSerializer(api_key)
+        return Response(serializer.data)

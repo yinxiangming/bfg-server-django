@@ -7,7 +7,8 @@ Serializers for common module models
 from rest_framework import serializers
 from bfg.common.models import (
     Workspace, Customer, Address, User, StaffRole, StaffMember, Settings,
-    CustomerSegment, CustomerTag, UserPreferences, Media, MediaLink, EmailConfig
+    CustomerSegment, CustomerTag, UserPreferences, Media, MediaLink, EmailConfig,
+    APIKey,
 )
 from django.conf import settings    
 
@@ -522,3 +523,44 @@ class MediaLinkSerializer(serializers.ModelSerializer):
     def get_height(self, obj):
         """Get image height"""
         return obj.media.height if obj.media else None
+
+
+# ── API Key Serializers ───────────────────────────────────────────
+
+class APIKeySerializer(serializers.ModelSerializer):
+    """Read serializer — never exposes the secret."""
+    created_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = APIKey
+        fields = [
+            'id', 'name', 'prefix', 'is_active',
+            'created_by', 'created_by_name',
+            'last_used_at', 'expires_at',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'prefix', 'created_by', 'created_by_name',
+            'last_used_at', 'created_at', 'updated_at',
+        ]
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.get_full_name() or obj.created_by.username
+        return None
+
+
+class APIKeyCreateSerializer(serializers.ModelSerializer):
+    """
+    Write serializer for key creation.
+
+    The response includes ``api_key`` (prefix) and ``api_secret`` (plain text)
+    which are **only** shown once.
+    """
+    api_key = serializers.CharField(source='prefix', read_only=True)
+    api_secret = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = APIKey
+        fields = ['id', 'name', 'expires_at', 'api_key', 'api_secret', 'created_at']
+        read_only_fields = ['id', 'api_key', 'api_secret', 'created_at']

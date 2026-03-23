@@ -173,6 +173,8 @@ STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+# Absolute API/site origin for media URLs when storage returns relative paths (e.g. GitHub issue embeds).
+MEDIA_PUBLIC_BASE_URL = os.environ.get('MEDIA_PUBLIC_BASE_URL', '').strip().rstrip('/')
 
 # REST Framework
 REST_FRAMEWORK = {

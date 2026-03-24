@@ -134,10 +134,16 @@ class ProductViewSet(viewsets.ModelViewSet):
             'categories', 'tags', 'media_links__media', 'variants'
         )
         
-        # Non-staff can only see active products
-        if not getattr(self.request, 'is_staff_member', False):
+        # Non-staff can only see active products. If middleware never set is_staff_member (e.g. DEBUG
+        # default workspace without X-Workspace-ID), fall back to StaffMember check.
+        staff_like = getattr(self.request, 'is_staff_member', None)
+        if staff_like is None and self.request.user.is_authenticated:
+            staff_like = IsWorkspaceStaff().has_permission(self.request, self)
+        else:
+            staff_like = bool(staff_like)
+        if not staff_like:
             queryset = queryset.filter(is_active=True)
-        
+
         # Filter by category
         category_id = self.request.query_params.get('category')
         if category_id:

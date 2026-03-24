@@ -16,6 +16,7 @@ from bfg.common.models import Media, MediaLink
 from bfg.shop.models import (
     Product, ProductVariant, ProductCategory, ProductTag
 )
+from bfg.shop.services.product_identifier_service import ensure_product_identifiers
 
 
 class ProductService(BaseService):
@@ -60,30 +61,32 @@ class ProductService(BaseService):
                 counter += 1
         
         # Create product
-        product = Product.objects.create(
-            workspace=self.workspace,
-            name=name,
-            slug=slug,
-            sku=kwargs.get('sku', ''),
-            product_type=kwargs.get('product_type', 'physical'),
-            description=kwargs.get('description', ''),
-            short_description=kwargs.get('short_description', ''),
-            price=price,
-            compare_price=kwargs.get('compare_price'),
-            cost=kwargs.get('cost'),
-            is_subscription=kwargs.get('is_subscription', False),
-            subscription_plan=kwargs.get('subscription_plan'),
-            track_inventory=kwargs.get('track_inventory', True),
-            stock_quantity=kwargs.get('stock_quantity', 0),
-            low_stock_threshold=kwargs.get('low_stock_threshold', 10),
-            requires_shipping=kwargs.get('requires_shipping', True),
-            weight=kwargs.get('weight'),
-            meta_title=kwargs.get('meta_title', name),
-            meta_description=kwargs.get('meta_description', ''),
-            is_active=kwargs.get('is_active', True),
-            is_featured=kwargs.get('is_featured', False),
-            language=language,
-        )
+        product_data = ensure_product_identifiers({
+            'workspace': self.workspace,
+            'name': name,
+            'slug': slug,
+            'sku': kwargs.get('sku', ''),
+            'barcode': kwargs.get('barcode', ''),
+            'product_type': kwargs.get('product_type', 'physical'),
+            'description': kwargs.get('description', ''),
+            'short_description': kwargs.get('short_description', ''),
+            'price': price,
+            'compare_price': kwargs.get('compare_price'),
+            'cost': kwargs.get('cost'),
+            'is_subscription': kwargs.get('is_subscription', False),
+            'subscription_plan': kwargs.get('subscription_plan'),
+            'track_inventory': kwargs.get('track_inventory', True),
+            'stock_quantity': kwargs.get('stock_quantity', 0),
+            'low_stock_threshold': kwargs.get('low_stock_threshold', 10),
+            'requires_shipping': kwargs.get('requires_shipping', True),
+            'weight': kwargs.get('weight'),
+            'meta_title': kwargs.get('meta_title', name),
+            'meta_description': kwargs.get('meta_description', ''),
+            'is_active': kwargs.get('is_active', True),
+            'is_featured': kwargs.get('is_featured', False),
+            'language': language,
+        }, workspace=self.workspace)
+        product = Product.objects.create(**product_data)
         
         # Add categories if provided
         if 'categories' in kwargs:

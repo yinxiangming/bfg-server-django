@@ -17,7 +17,7 @@ from bfg.shop.serializers import (
     ProductListSerializer, ProductDetailSerializer,
     ProductVariantSerializer, ProductReviewSerializer, VariantInventorySerializer
 )
-from bfg.shop.services import ProductService
+from bfg.shop.services import ProductService, ensure_product_identifiers
 from bfg.delivery.models import Warehouse
 from bfg.shop.schemas import get_category_rules_form_schema
 
@@ -206,6 +206,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         """Create product using service"""
+        ensure_product_identifiers(serializer.validated_data, workspace=self.request.workspace)
         category_ids = serializer.validated_data.pop('category_ids', None)
         tag_ids = serializer.validated_data.pop('tag_ids', None)
         tag_names = serializer.validated_data.pop('tag_names', None)

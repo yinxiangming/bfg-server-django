@@ -7,6 +7,7 @@ from config.local_apps import get_local_apps
 from django.contrib import admin
 from django.conf.urls.static import static
 from django.conf import settings
+from django.views.static import serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView, TokenVerifyView
 from config.serializers import CustomTokenObtainPairSerializer
@@ -50,6 +51,19 @@ urlpatterns = [
         path('store/', include('bfg.shop.urls_storefront')),
         *[path(f'{app}/', include(f'apps.{app}.urls')) for app in get_local_apps()],
     ])),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + static(
-    '/images/', document_root=os.path.join(settings.MEDIA_ROOT, 'images')
-)
+]
+
+# static() only adds /media/ when DEBUG=True; production needs explicit routes or nginx alias.
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + static(
+        '/images/', document_root=os.path.join(settings.MEDIA_ROOT, 'images')
+    )
+else:
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+        re_path(
+            r'^images/(?P<path>.*)$',
+            serve,
+            {'document_root': os.path.join(settings.MEDIA_ROOT, 'images')},
+        ),
+    ]

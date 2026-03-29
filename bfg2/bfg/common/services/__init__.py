@@ -10,6 +10,7 @@ from .address_service import AddressService
 from .settings_service import SettingsService
 from .audit_service import AuditService
 from .email_service import EmailService
+from .user_service import UserService
 
 __all__ = [
     'WorkspaceService',
@@ -18,4 +19,5 @@ __all__ = [
     'SettingsService',
     'AuditService',
     'EmailService',
+    'UserService',
 ]

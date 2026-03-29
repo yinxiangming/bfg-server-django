@@ -62,6 +62,17 @@ class User(AbstractUser):
         verbose_name=_("Default Workspace")
     )
     
+    # Platform Mapping
+    platform_user_id = models.CharField(
+        _("Platform User ID"), 
+        max_length=255, 
+        null=True, 
+        blank=True, 
+        unique=True,
+        db_index=True,
+        help_text=_("Mapping identifier towards the central BFG Platform SSO")
+    )
+    
     # Preferences
     language = models.CharField(_("Language"), max_length=10, default='en')
     timezone_name = models.CharField(_("Timezone"), max_length=50, default='UTC')

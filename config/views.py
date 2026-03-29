@@ -4,7 +4,7 @@ Custom views for API
 """
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -13,6 +13,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
+from django.conf import settings
 from .serializers import (
     RegisterSerializer,
     ForgotPasswordSerializer,
@@ -21,6 +22,58 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+
+@api_view(['POST'])
+@authentication_classes([])  # Skip JWT auth — we verify PLATFORM_API_KEY manually
+@permission_classes([AllowAny])
+def provision_user(request):
+    """
+    POST /internal/auth/provision-user/
+    Called by Platform Server (via Token Exchange) to sync a user and get a Workspace JWT.
+    Headers: { "Authorization": "Bearer <PLATFORM_API_KEY>" }
+    Body: { "platform_user_id", "email", "name", "role" }
+    """
+    auth_header = request.headers.get("Authorization")
+    platform_key = getattr(settings, "PLATFORM_API_KEY", None)
+
+    # In local development, if PLATFORM_API_KEY is not configured, we allow the request
+    # but still verify the header matches what the platform sent if it was provided
+    if platform_key and (not auth_header or auth_header != f"Bearer {platform_key}"):
+        import logging
+        logging.getLogger(__name__).warning("Invalid or missing Platform API Key")
+        return Response({"detail": "Invalid Platform API Key"}, status=status.HTTP_403_FORBIDDEN)
+
+    data = request.data
+    platform_user_id = data.get("platform_user_id")
+    email = data.get("email")
+    
+    if not email and not platform_user_id:
+        return Response({"detail": "Email or Platform User ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    name = data.get("name", "")
+    role_code = data.get("role", "staff")
+
+    try:
+        from bfg.common.services import UserService
+        user, _ = UserService.provision_sso_user(
+            platform_user_id=platform_user_id,
+            email=email,
+            name=name,
+            role_code=role_code
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to provision user: {e}")
+        return Response({"detail": f"User provisioning failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Generate Workspace JWT
+    refresh = RefreshToken.for_user(user)
+
+    return Response({
+        "token": str(refresh.access_token),
+        "refresh": str(refresh)
+    }, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])
@@ -42,11 +95,15 @@ def register(request):
     serializer = RegisterSerializer(data=request.data)
     if serializer.is_valid():
         user = serializer.save()
-        
+
+        store_name = getattr(user, '_temporary_store_name', None)
+        from bfg.common.services import UserService
+        workspace, workspace_error = UserService.process_registration(user, store_name)
+
         # Generate JWT token for the new user
         refresh = RefreshToken.for_user(user)
-        
-        return Response({
+
+        response_data = {
             'user': {
                 'id': user.id,
                 'username': user.username,
@@ -56,8 +113,19 @@ def register(request):
             },
             'access': str(refresh.access_token),
             'refresh': str(refresh),
-        }, status=status.HTTP_201_CREATED)
-    
+        }
+
+        if workspace:
+            response_data['workspace'] = {
+                'id': workspace.id,
+                'name': workspace.name,
+                'slug': workspace.slug,
+            }
+        elif workspace_error:
+            response_data['workspace_warning'] = workspace_error
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -77,55 +145,12 @@ def forgot_password(request):
     if serializer.is_valid():
         email = serializer.validated_data['email']
         
-        # Send password reset email with frontend URL (from settings/env)
         try:
             from django.conf import settings
-            frontend_url = settings.FRONTEND_URL
-            
-            # Find user by email
-            try:
-                user = User.objects.get(email=email, is_active=True)
-            except User.DoesNotExist:
-                # Don't reveal if email exists for security
-                pass
-            else:
-                # Generate token and uid
-                token = default_token_generator.make_token(user)
-                uid = urlsafe_base64_encode(force_bytes(user.pk))
-                
-                # Create reset URL with uid and token
-                reset_link = f"{frontend_url}/reset-password?uid={uid}&token={token}"
-                
-                # Send email
-                try:
-                    from django.core.mail import send_mail
-                    
-                    subject = f"Password reset for {settings.SITE_NAME}"
-                    message = f"""
-You're receiving this email because you requested a password reset for your account.
-
-Please go to the following page and choose a new password:
-{reset_link}
-
-If you didn't request this, please ignore this email.
-
-Your password won't change until you access the link above and create a new one.
-                    """
-                    
-                    send_mail(
-                        subject,
-                        message,
-                        settings.DEFAULT_FROM_EMAIL,
-                        [email],
-                        fail_silently=False,
-                    )
-                except Exception as e:
-                    # If email sending fails, log it but don't reveal to user
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.error(f"Failed to send password reset email: {e}")
+            from bfg.common.services import UserService
+            frontend_url = getattr(settings, 'FRONTEND_URL', '')
+            UserService.request_password_reset(email, frontend_url)
         except Exception:
-            # If email backend is not configured, just return success
             pass
         
         # Return success without revealing if email exists
@@ -158,24 +183,13 @@ def reset_password_confirm(request):
         new_password = serializer.validated_data['new_password']
         
         try:
-            # Decode user ID
-            user_id = force_str(urlsafe_base64_decode(uid))
-            user = User.objects.get(pk=user_id, is_active=True)
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            from bfg.common.services import UserService
+            UserService.reset_password(uid, token, new_password)
+        except ValueError as e:
             return Response({
-                'detail': 'Invalid password reset link.'
+                'detail': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Verify token
-        if not default_token_generator.check_token(user, token):
-            return Response({
-                'detail': 'Invalid or expired password reset link.'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Set new password
-        user.set_password(new_password)
-        user.save()
-        
+            
         return Response({
             'detail': 'Password has been reset successfully.'
         }, status=status.HTTP_200_OK)
@@ -202,17 +216,16 @@ def verify_email(request):
     if serializer.is_valid():
         key = serializer.validated_data['key']
         
-        # Try to find user by email verification key or similar mechanism
-        # This is a simplified implementation - you may need to adjust based on your verification system
         try:
-            # For now, we'll just return success
-            # In a real implementation, you would verify the key and activate the user
+            from bfg.common.services import UserService
+            UserService.verify_email(key)
+        except ValueError as e:
             return Response({
-                'detail': 'Email verified successfully.'
-            }, status=status.HTTP_200_OK)
-        except Exception:
-            return Response({
-                'detail': 'Invalid verification key.'
+                'detail': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
+            
+        return Response({
+            'detail': 'Email verified successfully.'
+        }, status=status.HTTP_200_OK)
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

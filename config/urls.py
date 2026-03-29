@@ -11,7 +11,7 @@ from django.views.static import serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView, TokenVerifyView
 from config.serializers import CustomTokenObtainPairSerializer
-from config.views import register, forgot_password, reset_password_confirm, verify_email
+from config.views import register, forgot_password, reset_password_confirm, verify_email, provision_user
 from config.social_auth import (
     social_login_view,
     social_callback_view,
@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     path('api/v1/', include([
         path('agent/', include('bfg.core.agent_urls')),
+        path('internal/auth/provision-user/', provision_user, name='provision_user'),
         path('auth/', include([
             path('register/', register, name='register'),
             path('forgot-password/', forgot_password, name='forgot-password'),

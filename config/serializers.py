@@ -19,6 +19,7 @@ class RegisterSerializer(serializers.Serializer):
     password_confirm = serializers.CharField(write_only=True, min_length=8, style={'input_type': 'password'})
     first_name = serializers.CharField(required=False, allow_blank=True)
     last_name = serializers.CharField(required=False, allow_blank=True)
+    store_name = serializers.CharField(required=False, allow_blank=True)
 
     def validate_email(self, value):
         """Validate email is unique"""
@@ -39,17 +40,20 @@ class RegisterSerializer(serializers.Serializer):
         validated_data.pop('password_confirm')
         password = validated_data.pop('password')
         
+        # We pop store_name if it exists, so we don't pass it to create_user
+        store_name = validated_data.pop('store_name', None)
+
         # Use email as username (before @) if username not provided
         email = validated_data['email']
         username = email.split('@')[0]
-        
+
         # Ensure username is unique
         base_username = username
         counter = 1
         while User.objects.filter(username=username).exists():
             username = f"{base_username}{counter}"
             counter += 1
-        
+
         # Create user - similar to allauth's user creation
         user = User.objects.create_user(
             username=username,
@@ -59,7 +63,11 @@ class RegisterSerializer(serializers.Serializer):
             last_name=validated_data.get('last_name', ''),
             is_active=True
         )
-        
+
+        # If a store name was provided, attach it temporarily
+        if store_name:
+            user._temporary_store_name = store_name
+
         return user
 
 

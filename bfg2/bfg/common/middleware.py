@@ -157,6 +157,15 @@ class WorkspaceMiddleware(MiddlewareMixin):
     Uses caching to reduce database queries.
     """
     
+    # Paths that operate outside any workspace context (Platform APIs, internal auth,
+    # auth endpoints). Do NOT fallback to a random workspace for these — they either
+    # work without a workspace or the caller must provide X-Workspace-ID explicitly.
+    WORKSPACE_EXEMPT_PREFIXES = (
+        '/api/v1/platform/',
+        '/api/v1/internal/',
+        '/api/v1/auth/',
+    )
+
     def process_request(self, request):
         """Identify workspace: X-Workspace-ID header first (for API), then domain, then first active."""
         workspace = None
@@ -174,8 +183,12 @@ class WorkspaceMiddleware(MiddlewareMixin):
             workspace = _get_workspace_by_domain(hostname)
 
         if not workspace:
-            # 3. Fall back to the first active workspace
-            workspace = _get_first_active_workspace()
+            # 3. Fall back to the first active workspace — but NOT for paths that
+            #    are designed to work without workspace context (platform, auth, internal).
+            path = request.path
+            is_exempt = any(path.startswith(prefix) for prefix in self.WORKSPACE_EXEMPT_PREFIXES)
+            if not is_exempt:
+                workspace = _get_first_active_workspace()
 
         # Set workspace in request and thread-local
         request.workspace = workspace

@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import uuid as _uuid_module
+
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 
@@ -17,6 +19,14 @@ class Workspace(models.Model):
     """
     # Basic Info
     name = models.CharField(_("Name"), max_length=255)
+    uuid = models.UUIDField(
+        _("UUID"),
+        default=_uuid_module.uuid4,
+        unique=True,
+        editable=False,
+        db_index=True,
+        help_text=_("Globally unique identifier for cross-instance workspace identification"),
+    )
     slug = models.SlugField(_("Slug"), max_length=100, unique=True)
     
     # Domain

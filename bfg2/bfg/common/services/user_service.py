@@ -94,6 +94,10 @@ class UserService:
         """
         Post-registration logic to auto-provision workspace if needed
         and trigger email verification.
+
+        Branching:
+          - BFG_INSTANCE_TYPE=platform: dual-write (Platform DB + Workspace Server API)
+          - BFG_INSTANCE_TYPE=workspace: local create only
         Returns (workspace, error_message)
         """
         workspace = None
@@ -103,7 +107,6 @@ class UserService:
         try:
             from allauth.account.utils import send_email_confirmation
             from django.http import HttpRequest
-            # Create a dummy request to satisfy allauth's internal requirements if needed
             dummy_request = HttpRequest()
             dummy_request.META['SERVER_NAME'] = 'localhost'
             dummy_request.META['SERVER_PORT'] = '80'
@@ -112,18 +115,121 @@ class UserService:
             logger.error(f"Failed to send verification email for {user.email}: {e}")
         
         if store_name:
-            try:
-                from bfg.common.services.workspace_service import WorkspaceService
-                ws_service = WorkspaceService()
-                workspace = ws_service.create_workspace(
-                    name=store_name,
-                    owner_user=user,
-                )
-            except Exception as e:
-                logger.warning(f"Auto-provision workspace failed for user {user.email}: {e}")
-                workspace_error = str(e)
+            from django.conf import settings
+            instance_type = getattr(settings, 'BFG_INSTANCE_TYPE', 'workspace')
+
+            if instance_type == 'platform':
+                workspace, workspace_error = cls._provision_workspace_remote(user, store_name)
+            else:
+                workspace, workspace_error = cls._provision_workspace_local(user, store_name)
                 
         return workspace, workspace_error
+
+    @classmethod
+    def _provision_workspace_remote(cls, user, store_name: str) -> Tuple[object, str]:
+        """
+        Platform dual-write: create metadata in Platform DB, then call Workspace
+        Server API to create the real business workspace.
+
+        Atomicity: if the remote API call fails, the local metadata is rolled back.
+
+        Step 1 (Platform DB):
+          - common.Workspace (metadata entry)
+          - common.StaffMember (access control)
+          - platform.WorkspacePlatformProfile (routing / API keys)
+
+        Step 2 (Workspace Server):
+          - POST /api/v1/internal/auth/provision-workspace/
+          - Creates local Workspace + User + StaffMember on the Workspace instance
+        """
+        import requests as http_requests
+        from django.conf import settings
+        from django.db import transaction
+        from django.utils.text import slugify
+        from bfg.common.models import Workspace, StaffMember, StaffRole
+
+        slug = slugify(store_name)
+        workspace_api_url = getattr(settings, 'WORKSPACE_API_URL', 'http://localhost:8000')
+        platform_api_key = getattr(settings, 'PLATFORM_API_KEY', 'local-dev-key')
+
+        try:
+            with transaction.atomic():
+                # -- Step 1: Platform DB metadata --
+                workspace, _ = Workspace.objects.get_or_create(
+                    slug=slug,
+                    defaults={'name': store_name},
+                )
+                admin_role, _ = StaffRole.objects.get_or_create(
+                    workspace=workspace, code='admin',
+                    defaults={'name': 'Administrator', 'permissions': {}},
+                )
+                StaffMember.objects.get_or_create(
+                    user=user, workspace=workspace,
+                    defaults={'role': admin_role, 'is_active': True},
+                )
+
+                # WorkspacePlatformProfile (only available when platform extension is installed)
+                profile = None
+                try:
+                    from apps.platform.models import WorkspacePlatformProfile, PlatformMembership
+                    profile, _ = WorkspacePlatformProfile.objects.get_or_create(
+                        workspace=workspace,
+                    )
+                    if not profile.platform_api_key:
+                        profile.generate_api_keys()
+                        profile.save()
+                    # 创建 PlatformMembership（用户 ↔ workspace profile 的准入记录）
+                    PlatformMembership.objects.get_or_create(
+                        user=user,
+                        profile=profile,
+                        defaults={"role_code": "admin", "is_active": True},
+                    )
+                except ImportError:
+                    pass
+
+                # -- Step 2: Workspace Server API --
+                resp = http_requests.post(
+                    f'{workspace_api_url}/api/v1/internal/auth/provision-workspace/',
+                    json={
+                        'platform_user_id': str(user.id),
+                        'email': user.email,
+                        'name': user.get_full_name(),
+                        'workspace_name': store_name,
+                        'workspace_slug': slug,
+                    },
+                    headers={'Authorization': f'Bearer {platform_api_key}'},
+                    timeout=15,
+                )
+                resp.raise_for_status()
+
+                # 如果 Workspace Server 返回了 workspace_uuid，更新 remote_workspace_uuid
+                try:
+                    remote_uuid = resp.json().get("workspace_uuid")
+                    if remote_uuid and profile:
+                        profile.remote_workspace_uuid = remote_uuid
+                        profile.save(update_fields=["remote_workspace_uuid"])
+                except Exception:
+                    pass
+
+            # Both steps succeeded — return the Platform metadata workspace
+            return workspace, None
+
+        except Exception as e:
+            # transaction.atomic() ensures Step 1 is rolled back if Step 2 fails
+            logger.warning(f'Remote workspace provision failed (rolled back): {e}')
+            return None, str(e)
+
+    @classmethod
+    def _provision_workspace_local(cls, user, store_name: str) -> Tuple[object, str]:
+        """Standalone Workspace — create tenant directly in local DB."""
+        try:
+            from bfg.common.services.workspace_service import WorkspaceService
+            ws_service = WorkspaceService()
+            workspace = ws_service.create_workspace(name=store_name, owner_user=user)
+            return workspace, None
+        except Exception as e:
+            logger.warning(f'Local workspace provision failed: {e}')
+            return None, str(e)
 
     @classmethod
     def request_password_reset(cls, email: str, frontend_url: str) -> None:

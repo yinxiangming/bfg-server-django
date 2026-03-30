@@ -77,6 +77,67 @@ def provision_user(request):
 
 
 @api_view(['POST'])
+@authentication_classes([])  # Skip JWT auth — we verify PLATFORM_API_KEY manually
+@permission_classes([AllowAny])
+def provision_workspace(request):
+    """
+    POST /api/v1/internal/auth/provision-workspace/
+    Called by Platform Server during registration to create a real business workspace.
+    Headers: { "Authorization": "Bearer <PLATFORM_API_KEY>" }
+    Body: { "platform_user_id", "email", "name", "workspace_name", "workspace_slug" }
+    """
+    auth_header = request.headers.get("Authorization")
+    platform_key = getattr(settings, "PLATFORM_API_KEY", None)
+
+    if platform_key and (not auth_header or auth_header != f"Bearer {platform_key}"):
+        import logging
+        logging.getLogger(__name__).warning("provision_workspace: Invalid or missing Platform API Key")
+        return Response({"detail": "Invalid Platform API Key"}, status=status.HTTP_403_FORBIDDEN)
+
+    data = request.data
+    platform_user_id = data.get("platform_user_id")
+    email = data.get("email")
+
+    if not email and not platform_user_id:
+        return Response(
+            {"detail": "Email or Platform User ID is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        # Step 1: Provision user locally
+        from bfg.common.services import UserService
+        user, _ = UserService.provision_sso_user(
+            platform_user_id=platform_user_id,
+            email=email,
+            name=data.get("name", ""),
+            role_code="admin",  # Owner of new workspace gets admin
+        )
+
+        # Step 2: Create the business workspace locally
+        from bfg.common.services.workspace_service import WorkspaceService
+        ws_service = WorkspaceService()
+        workspace = ws_service.create_workspace(
+            name=data.get("workspace_name", "My Workspace"),
+            slug=data.get("workspace_slug"),
+            owner_user=user,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to provision workspace: {e}")
+        return Response(
+            {"detail": f"Workspace provisioning failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response({
+        "workspace_id": workspace.id,
+        "workspace_slug": workspace.slug,
+        "workspace_uuid": str(workspace.uuid),
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
     """

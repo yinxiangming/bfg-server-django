@@ -2,17 +2,11 @@ from __future__ import annotations
 
 import re
 import random
-import string
 from typing import MutableMapping
 
 
 DEFAULT_SKU_PREFIX = ""
 DEFAULT_BARCODE_PREFIX = "P-"
-
-
-def _random_suffix(length: int = 3) -> str:
-    alphabet = string.ascii_uppercase + string.digits
-    return "".join(random.choices(alphabet, k=length))
 
 
 def _sku_from_name(name: str) -> str:
@@ -39,13 +33,40 @@ def _sku_from_name(name: str) -> str:
     return abbrev[:8]
 
 
-def generate_sku(prefix: str, name: str = "") -> str:
+def _next_sku_sequence(base: str, workspace) -> str:
+    """Return the next available 3-digit sequence number for a SKU base within a workspace.
+
+    Scans existing SKUs matching ``{base}-NNN`` and increments the highest found,
+    starting at 001 when none exist.
+    """
+    from bfg.shop.models import Product
+    prefix_with_dash = f"{base}-"
+    existing = (
+        Product.objects
+        .filter(workspace=workspace, sku__startswith=prefix_with_dash)
+        .values_list('sku', flat=True)
+    )
+    pattern = re.compile(r'^' + re.escape(prefix_with_dash) + r'(\d{3})$')
+    max_num = 0
+    for sku_val in existing:
+        m = pattern.match(sku_val)
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+    return f"{prefix_with_dash}{max_num + 1:03d}"
+
+
+def generate_sku(prefix: str, name: str = "", workspace=None) -> str:
     name_part = _sku_from_name(name) if name else ""
-    suffix = _random_suffix(3)
-    if name_part:
-        return f"{prefix}{name_part}-{suffix}" if prefix else f"{name_part}-{suffix}"
-    # Fallback when no name is available
-    return f"{prefix}{suffix}" if prefix else suffix
+    base = f"{prefix}{name_part}" if prefix else name_part
+    if base:
+        if workspace is not None:
+            return _next_sku_sequence(base, workspace)
+        # Fallback when no workspace context (e.g. tests)
+        return f"{base}-{random.randint(1, 999):03d}"
+    # No name and no prefix — use a plain sequence or random
+    if workspace is not None:
+        return _next_sku_sequence("SKU", workspace)
+    return f"{random.randint(1, 999):03d}"
 
 
 def generate_barcode_from_product_id(product_id, prefix: str = DEFAULT_BARCODE_PREFIX) -> str:

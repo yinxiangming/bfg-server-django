@@ -53,6 +53,8 @@ def provision_user(request):
 
     name = data.get("name", "")
     role_code = data.get("role", "staff")
+    workspace_uuid = data.get("workspace_uuid")
+    workspace_slug = data.get("workspace_slug")
 
     try:
         from bfg.common.services import UserService
@@ -60,19 +62,41 @@ def provision_user(request):
             platform_user_id=platform_user_id,
             email=email,
             name=name,
-            role_code=role_code
+            role_code=role_code,
+            workspace_uuid=workspace_uuid,
         )
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"Failed to provision user: {e}")
         return Response({"detail": f"User provisioning failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    # Ensure StaffMember for the specific workspace (by slug) and return its local id
+    workspace_id = None
+    if workspace_slug:
+        try:
+            from bfg.common.models import Workspace, StaffMember, StaffRole
+            ws = Workspace.objects.filter(slug=workspace_slug).first()
+            if ws:
+                workspace_id = ws.id
+                role, _ = StaffRole.objects.get_or_create(
+                    workspace=ws, code=role_code,
+                    defaults={'name': role_code.title(), 'permissions': {}}
+                )
+                StaffMember.objects.get_or_create(
+                    user=user, workspace=ws,
+                    defaults={"role": role}
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"workspace StaffMember ensure failed slug={workspace_slug}: {e}")
+
     # Generate Workspace JWT
     refresh = RefreshToken.for_user(user)
 
     return Response({
         "token": str(refresh.access_token),
-        "refresh": str(refresh)
+        "refresh": str(refresh),
+        "workspace_id": workspace_id,
     }, status=status.HTTP_200_OK)
 
 

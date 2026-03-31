@@ -51,9 +51,13 @@ read_line() {
 read_secret() {
   local prompt="$1"
   local s
-  read -r -s -p "$prompt" s || true
-  echo ""
-  echo "$s"
+  if [[ -t 0 ]]; then
+    read -r -s -p "$prompt" s || true
+    printf '\n' >&2
+  else
+    read -r s || true
+  fi
+  printf '%s\n' "$s"
 }
 
 command_exists() {
@@ -283,6 +287,24 @@ fi
 echo "Adding git submodules..."
 git -C "$APP_ROOT" submodule add "$SUBMODULE_SERVER_URL" src/server
 git -C "$APP_ROOT" submodule add "$SUBMODULE_CLIENT_URL" src/client
+
+if [[ "$DB_CHOICE" == "1" || -z "$DB_CHOICE" ]]; then
+  echo "Applying SQLite compatibility patch for Django settings..."
+  APP_ROOT_SQLITE="$APP_ROOT" python3 <<'PY'
+from pathlib import Path
+import os
+
+path = Path(os.environ["APP_ROOT_SQLITE"]) / "src/server/config/settings.py"
+text = path.read_text(encoding="utf-8")
+needle = "db_from_env = dj_database_url.config(conn_max_age=500)\nif db_from_env:\n    DATABASES['default'].update(db_from_env)\n"
+if needle in text and "DATABASES['default'].pop('OPTIONS', None)" not in text:
+    text = text.replace(
+        needle,
+        needle + "if DATABASES['default'].get('ENGINE') == 'django.db.backends.sqlite3':\n    DATABASES['default'].pop('OPTIONS', None)\n",
+    )
+    path.write_text(text, encoding="utf-8")
+PY
+fi
 
 echo "Rendering extension templates..."
 python3 "${BOOTSTRAP_DIR}/scripts/render_templates.py" \

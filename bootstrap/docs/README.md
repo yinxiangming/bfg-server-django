@@ -14,6 +14,7 @@ Optional:
 - `SKIP_DOCKER=1` — never start Docker services.
 - `INIT_ADMIN_PASSWORD` — if set, `manage.py init` runs non-interactively with this password.
 - `INIT_ADMIN_USERNAME` — optional admin username for non-interactive init (default: `admin`).
+- `ADMIN_PASSWORD` — password used by `seed_data`; if missing in interactive mode, installer prompts for it.
 
 After creation, open the new app folder in VS Code and use tasks to run server/client.
 
@@ -38,6 +39,12 @@ For `yinxiangming/bfg-server-django` main branch (uses default BUNDLE_URL):
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/yinxiangming/bfg-server-django/main/bootstrap/install.sh" | bash
 ```
+
+Password prompt behavior:
+
+- If `INIT_ADMIN_PASSWORD` is not provided, installer prompts for it.
+- If `ADMIN_PASSWORD` is not provided, installer prompts for it.
+- If `INIT_ADMIN_PASSWORD` is provided, it is reused as `ADMIN_PASSWORD` by default.
 
 ## OpenAI
 

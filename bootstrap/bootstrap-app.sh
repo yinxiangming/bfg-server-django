@@ -415,7 +415,21 @@ cd "${APP_ROOT}/src/server"
 "$PY" manage.py migrate --noinput
 
 echo ""
-echo "Running manage.py init (workspace + admin + optional seed). You will be prompted for the admin password."
+echo "Preparing admin passwords for init/seed..."
+if [[ -z "${INIT_ADMIN_PASSWORD:-}" && -t 0 ]]; then
+  INIT_ADMIN_PASSWORD="$(read_secret "INIT admin password (for manage.py init): ")"
+fi
+
+if [[ -z "${ADMIN_PASSWORD:-}" ]]; then
+  if [[ -n "${INIT_ADMIN_PASSWORD:-}" ]]; then
+    ADMIN_PASSWORD="${INIT_ADMIN_PASSWORD}"
+  elif [[ -t 0 ]]; then
+    ADMIN_PASSWORD="$(read_secret "ADMIN_PASSWORD (for seed_data): ")"
+  fi
+fi
+export ADMIN_PASSWORD
+
+echo "Running manage.py init (workspace + admin + optional seed)."
 set +e
 if [[ -n "${INIT_ADMIN_PASSWORD:-}" ]]; then
   INIT_ADMIN_USERNAME_EFFECTIVE="${INIT_ADMIN_USERNAME:-admin}"

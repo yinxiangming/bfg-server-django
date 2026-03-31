@@ -1,5 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from .viewsets.quick_entry import QuickProductEntryView
 from .viewsets import (
     ProductViewSet, ProductCategoryViewSet as CategoryViewSet, ProductTagViewSet,
     ProductVariantViewSet, StoreViewSet, CartViewSet, OrderViewSet,
@@ -30,6 +31,8 @@ router.register(r'wishlists', WishlistViewSet, basename='wishlist')
 
 # Custom nested routes must come BEFORE router.urls to be matched first
 urlpatterns = [
+    # Mobile staff quick entry
+    path('products/quick-entry/', QuickProductEntryView.as_view(), name='product-quick-entry'),
     # Nested route for products/categories (must be before router.urls)
     path('products/categories/', CategoryViewSet.as_view({'get': 'list', 'post': 'create'}), name='product-category-list'),
     path('products/categories/<int:pk>/', CategoryViewSet.as_view({

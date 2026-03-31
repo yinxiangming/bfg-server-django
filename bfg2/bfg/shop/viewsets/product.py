@@ -18,6 +18,7 @@ from bfg.shop.serializers import (
     ProductVariantSerializer, ProductReviewSerializer, VariantInventorySerializer
 )
 from bfg.shop.services import ProductService, ensure_product_identifiers
+from bfg.shop.services.product_identifier_service import generate_barcode_from_product_id
 from bfg.delivery.models import Warehouse
 from bfg.shop.schemas import get_category_rules_form_schema
 
@@ -207,11 +208,16 @@ class ProductViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Create product using service"""
         ensure_product_identifiers(serializer.validated_data, workspace=self.request.workspace)
+        barcode_prefix = serializer.validated_data.pop('_barcode_prefix', 'BC-')
         category_ids = serializer.validated_data.pop('category_ids', None)
         tag_ids = serializer.validated_data.pop('tag_ids', None)
         tag_names = serializer.validated_data.pop('tag_names', None)
-        
+
         product = serializer.save(workspace=self.request.workspace)
+
+        if not product.barcode:
+            product.barcode = generate_barcode_from_product_id(product.pk, barcode_prefix)
+            product.save(update_fields=['barcode'])
         
         if category_ids:
             categories = ProductCategory.objects.filter(

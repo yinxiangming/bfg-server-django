@@ -354,9 +354,10 @@ class MeSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name', 'phone',
-            'avatar', 'language', 'timezone_name', 'customer', 'is_active'
+            'avatar', 'language', 'timezone_name', 'customer', 'is_active',
+            'is_staff', 'is_superuser'
         ]
-        read_only_fields = ['id', 'is_active']
+        read_only_fields = ['id', 'is_active', 'is_staff', 'is_superuser']
         extra_kwargs = {'avatar': {'required': False, 'allow_null': True}}
 
     def update(self, instance, validated_data):

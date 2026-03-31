@@ -1,0 +1,41 @@
+# Optional local dependencies for BFG app bootstrap (Redis, Mailpit, MySQL, PostgreSQL).
+# Usage from app root: docker compose -f path/to/this/file --profile <name> up -d
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${BFG_BOOTSTRAP_REDIS_PORT:-6379}:6379"
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "${BFG_BOOTSTRAP_MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${BFG_BOOTSTRAP_MAILPIT_UI_PORT:-8025}:8025"
+
+  mysql:
+    profiles: ["mysql"]
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${BFG_BOOTSTRAP_MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${BFG_BOOTSTRAP_MYSQL_DATABASE:-bfg}
+      MYSQL_USER: ${BFG_BOOTSTRAP_MYSQL_USER:-bfg}
+      MYSQL_PASSWORD: ${BFG_BOOTSTRAP_MYSQL_PASSWORD:-bfg}
+    ports:
+      - "${BFG_BOOTSTRAP_MYSQL_PORT:-3306}:3306"
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${BFG_BOOTSTRAP_POSTGRES_USER:-bfg}
+      POSTGRES_PASSWORD: ${BFG_BOOTSTRAP_POSTGRES_PASSWORD:-bfg}
+      POSTGRES_DB: ${BFG_BOOTSTRAP_POSTGRES_DB:-bfg}
+    ports:
+      - "${BFG_BOOTSTRAP_POSTGRES_PORT:-5432}:5432"

@@ -18,6 +18,15 @@ Optional:
 
 After creation, open the new app folder in VS Code and use tasks to run server/client.
 
+Generated layout notes:
+
+- App root includes a default `.gitignore`.
+- `docs/` is created empty.
+- Extension template references are placed in:
+  - `src/server/_extension_template/server`
+  - `src/client/src/_extension_template/client`
+- VS Code tasks include backend, client, celery worker, and `start all`.
+
 ## curl install
 
 Pure `curl | bash` cannot access bundled `templates/` unless you download a tarball or clone the repo. Recommended:

@@ -142,11 +142,11 @@ case "$DB_CHOICE" in
     MYSQL_HOST="$(read_line "MySQL host" "127.0.0.1")"
     MYSQL_PORT="$(read_line "MySQL port" "3306")"
     MYSQL_USER="$(read_line "MySQL username" "bfg")"
-    MYSQL_PASSWORD="$(read_secret "MySQL password for app user: ")"
+    MYSQL_PASSWORD="$(read_secret "MySQL password for app user (input hidden): ")"
     DB_NAME="$(read_line "Database name" "$DB_NAME_DEFAULT")"
     echo "MySQL admin (for CREATE DATABASE if needed):"
     MYSQL_ADMIN_USER="$(read_line "Admin username" "root")"
-    MYSQL_ADMIN_PASSWORD="$(read_secret "MySQL admin password: ")"
+    MYSQL_ADMIN_PASSWORD="$(read_secret "MySQL admin password (for CREATE DATABASE, input hidden): ")"
     DATABASE_URL="mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@${MYSQL_HOST}:${MYSQL_PORT}/${DB_NAME}"
     ;;
   3)
@@ -154,11 +154,11 @@ case "$DB_CHOICE" in
     POSTGRES_HOST="$(read_line "PostgreSQL host" "127.0.0.1")"
     POSTGRES_PORT="$(read_line "PostgreSQL port" "5432")"
     POSTGRES_USER="$(read_line "PostgreSQL username" "bfg")"
-    POSTGRES_PASSWORD="$(read_secret "PostgreSQL password for app user: ")"
+    POSTGRES_PASSWORD="$(read_secret "PostgreSQL password for app user (input hidden): ")"
     DB_NAME="$(read_line "Database name" "$DB_NAME_DEFAULT")"
     echo "PostgreSQL admin (superuser for CREATE DATABASE):"
     POSTGRES_ADMIN_USER="$(read_line "Admin username" "postgres")"
-    POSTGRES_ADMIN_PASSWORD="$(read_secret "PostgreSQL admin password: ")"
+    POSTGRES_ADMIN_PASSWORD="$(read_secret "PostgreSQL admin password (for CREATE DATABASE, input hidden): ")"
     DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${DB_NAME}"
     ;;
   *)
@@ -280,6 +280,28 @@ echo ""
 echo "Creating project at ${APP_ROOT}"
 mkdir -p "${APP_ROOT}/src" "${APP_ROOT}/docs" "${APP_ROOT}/extensions"
 
+cat > "${APP_ROOT}/.gitignore" <<'EOF'
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
+.next/
+
+# Build / tooling
+dist/
+coverage/
+.pytest_cache/
+EOF
+
 if [[ "${SKIP_GIT_INIT:-0}" != "1" ]]; then
   git -C "$APP_ROOT" init
 fi
@@ -319,23 +341,20 @@ python3 "${BOOTSTRAP_DIR}/scripts/render_templates.py" \
   --slug "$APP_SLUG" \
   --title "$APP_TITLE"
 
-echo "Installing reference extension templates (docs only, not loaded as apps)..."
-mkdir -p "${APP_ROOT}/docs/extension-templates"
+echo "Installing reference extension templates under server/client..."
+mkdir -p "${APP_ROOT}/src/server/_extension_template"
+mkdir -p "${APP_ROOT}/src/client/src/_extension_template"
 python3 "${BOOTSTRAP_DIR}/scripts/render_templates.py" \
   "${BOOTSTRAP_DIR}/templates/server" \
-  "${APP_ROOT}/docs/extension-templates/server" \
+  "${APP_ROOT}/src/server/_extension_template/server" \
   --slug "myapp" \
   --title "Extension template (copy and rename)"
 
 python3 "${BOOTSTRAP_DIR}/scripts/render_templates.py" \
   "${BOOTSTRAP_DIR}/templates/client" \
-  "${APP_ROOT}/docs/extension-templates/client" \
+  "${APP_ROOT}/src/client/src/_extension_template/client" \
   --slug "myapp" \
   --title "Extension template (copy and rename)"
-
-mkdir -p "${APP_ROOT}/docs/openai-tools"
-cp "${BOOTSTRAP_DIR}/openai/analyze_cli.py" "${APP_ROOT}/docs/openai-tools/analyze_cli.py"
-cp "${BOOTSTRAP_DIR}/openai/pipeline.py" "${APP_ROOT}/docs/openai-tools/pipeline.py"
 
 echo "Linking extensions into submodule apps/plugins..."
 mkdir -p "${APP_ROOT}/src/server/apps"
@@ -417,14 +436,17 @@ cd "${APP_ROOT}/src/server"
 echo ""
 echo "Preparing admin passwords for init/seed..."
 if [[ -z "${INIT_ADMIN_PASSWORD:-}" && -t 0 ]]; then
-  INIT_ADMIN_PASSWORD="$(read_secret "INIT admin password (for manage.py init): ")"
+  echo "Password step 1/2: admin password for manage.py init (default admin user)."
+  INIT_ADMIN_PASSWORD="$(read_secret "Enter INIT admin password (input hidden): ")"
 fi
 
 if [[ -z "${ADMIN_PASSWORD:-}" ]]; then
   if [[ -n "${INIT_ADMIN_PASSWORD:-}" ]]; then
+    echo "Password step 2/2: seed_data admin password reused from INIT admin password."
     ADMIN_PASSWORD="${INIT_ADMIN_PASSWORD}"
   elif [[ -t 0 ]]; then
-    ADMIN_PASSWORD="$(read_secret "ADMIN_PASSWORD (for seed_data): ")"
+    echo "Password step 2/2: password used by seed_data to create/update admin."
+    ADMIN_PASSWORD="$(read_secret "Enter ADMIN_PASSWORD for seed_data (input hidden): ")"
   fi
 fi
 export ADMIN_PASSWORD
@@ -472,6 +494,17 @@ tasks = {
       "problemMatcher": [],
     },
     {
+      "label": f"{slug}: celery worker",
+      "type": "shell",
+      "command": ".venv/bin/celery -A config worker -l info",
+      "options": {
+        "cwd": "${workspaceFolder}/src/server",
+        "env": {"LOCAL_APPS": slug, "BFG_EXTENSION_APPS": f"apps.{slug}"},
+      },
+      "isBackground": True,
+      "problemMatcher": [],
+    },
+    {
       "label": f"{slug}: client ({cp})",
       "type": "shell",
       "command": "npm run dev -- -p " + cp,
@@ -479,10 +512,24 @@ tasks = {
       "isBackground": True,
       "problemMatcher": [],
     },
+    {
+      "label": f"{slug}: start all",
+      "dependsOn": [
+        f"{slug}: backend ({sp})",
+        f"{slug}: celery worker",
+        f"{slug}: client ({cp})",
+      ],
+      "dependsOrder": "parallel",
+      "problemMatcher": [],
+    },
   ],
 }
 path.write_text(json.dumps(tasks, indent=2) + "\n", encoding="utf-8")
 PY
+
+echo "Cleaning Python caches in extension directories..."
+find "${APP_ROOT}/extensions" -type d -name "__pycache__" -prune -exec rm -rf {} +
+find "${APP_ROOT}/extensions" -type f -name "*.pyc" -delete
 
 echo ""
 echo "=== Done ==="

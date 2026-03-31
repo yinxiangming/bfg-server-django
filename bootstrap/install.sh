@@ -33,13 +33,19 @@ import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
-matches = list(root.rglob("src/server/bootstrap/bootstrap-app.sh"))
+patterns = [
+    "bootstrap/bootstrap-app.sh",
+    "src/server/bootstrap/bootstrap-app.sh",
+]
+matches = []
+for pattern in patterns:
+    matches.extend(root.rglob(pattern))
 if not matches:
     raise SystemExit(1)
 print(matches[0].resolve())
 PY
 )" || {
-  echo "Could not find src/server/bootstrap/bootstrap-app.sh in bundle." >&2
+  echo "Could not find bootstrap-app.sh in bundle." >&2
   exit 1
 }
 

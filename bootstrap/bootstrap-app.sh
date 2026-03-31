@@ -417,7 +417,13 @@ cd "${APP_ROOT}/src/server"
 echo ""
 echo "Running manage.py init (workspace + admin + optional seed). You will be prompted for the admin password."
 set +e
-"$PY" manage.py init --no-migrate --seed-data
+if [[ -n "${INIT_ADMIN_PASSWORD:-}" ]]; then
+  INIT_ADMIN_USERNAME_EFFECTIVE="${INIT_ADMIN_USERNAME:-admin}"
+  printf '%s\n%s\n' "${INIT_ADMIN_PASSWORD}" "${INIT_ADMIN_PASSWORD}" | \
+    "$PY" manage.py init --no-migrate --seed-data --admin "${INIT_ADMIN_USERNAME_EFFECTIVE}"
+else
+  "$PY" manage.py init --no-migrate --seed-data
+fi
 INIT_RC=$?
 set -e
 if [[ "$INIT_RC" -ne 0 ]]; then

@@ -12,6 +12,8 @@ Optional:
 - `BOOTSTRAP_DIR` — override directory that contains `templates/`, `scripts/`, `docker/`, `openai/`.
 - `SKIP_GIT_INIT=1` — skip `git init` in the new app root.
 - `SKIP_DOCKER=1` — never start Docker services.
+- `INIT_ADMIN_PASSWORD` — if set, `manage.py init` runs non-interactively with this password.
+- `INIT_ADMIN_USERNAME` — optional admin username for non-interactive init (default: `admin`).
 
 After creation, open the new app folder in VS Code and use tasks to run server/client.
 
@@ -22,6 +24,19 @@ Pure `curl | bash` cannot access bundled `templates/` unless you download a tarb
 ```bash
 git clone <your-resale-fork-or-mirror>.git resale && cd resale
 bash src/server/bootstrap/bootstrap-app.sh
+```
+
+One-line installer is available via `install.sh` (it downloads the bundle first):
+
+```bash
+curl -fsSL "<raw-install-sh-url>" | \
+  BUNDLE_URL="https://github.com/<org>/<repo>/archive/refs/heads/main.tar.gz" bash
+```
+
+For `yinxiangming/bfg-server-django` main branch (uses default BUNDLE_URL):
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/yinxiangming/bfg-server-django/main/bootstrap/install.sh" | bash
 ```
 
 ## OpenAI

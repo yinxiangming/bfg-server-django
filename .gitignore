@@ -15,4 +15,3 @@ __pycache__/
 # Extension apps (submodules or symlinks)
 apps/*
 !apps/__init__.py
-!apps/nexus

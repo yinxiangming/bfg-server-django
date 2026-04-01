@@ -5,6 +5,7 @@ Usage: python manage.py init [--workspace-name NAME] [--workspace-slug SLUG] [--
 """
 
 import json
+import os
 from pathlib import Path
 
 from django.core.management.base import BaseCommand
@@ -94,6 +95,11 @@ class Command(BaseCommand):
         workspace_name = options['workspace_name']
         workspace_slug = options['workspace_slug']
         admin_username = options['admin_username']
+
+        # Non-interactive / CI: bootstrap uses INIT_ADMIN_PASSWORD; seed_data expects ADMIN_PASSWORD.
+        env_init_pw = os.environ.get('INIT_ADMIN_PASSWORD', '').strip()
+        if env_init_pw and not os.environ.get('ADMIN_PASSWORD', '').strip():
+            os.environ['ADMIN_PASSWORD'] = env_init_pw
 
         # 0. Run migrate unless disabled
         if not options['no_migrate']:
@@ -206,7 +212,10 @@ class Command(BaseCommand):
         self.stdout.write(f'Login: {admin_username} / (password you entered)')
 
     def get_password(self, username):
-        """Prompt for admin password (with confirmation)."""
+        """Prompt for admin password (with confirmation), or INIT_ADMIN_PASSWORD if set."""
+        env_pw = os.environ.get('INIT_ADMIN_PASSWORD', '').strip()
+        if env_pw:
+            return env_pw
         from getpass import getpass
         p1 = getpass(f'Password for {username}: ')
         if not p1:

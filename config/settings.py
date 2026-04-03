@@ -27,6 +27,11 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-change-in-production')
 DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
 TESTING = sys.argv[1:2] == ['test']
 
+# Cross-instance configuration
+BFG_INSTANCE_TYPE = os.environ.get('BFG_INSTANCE_TYPE', 'workspace')
+WORKSPACE_API_URL = os.environ.get('WORKSPACE_API_URL', 'http://localhost:8000')
+PLATFORM_API_KEY = os.environ.get('PLATFORM_API_KEY', 'local-dev-key')
+
 ALLOWED_HOSTS = ['*']
 
 # Application definition (BFG core only; no apps.* business modules)

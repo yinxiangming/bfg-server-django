@@ -53,6 +53,7 @@ def provision_user(request):
 
     name = data.get("name", "")
     role_code = data.get("role", "staff")
+    workspace_slug = data.get("workspace_slug")
 
     try:
         from bfg.common.services import UserService
@@ -67,13 +68,94 @@ def provision_user(request):
         logging.getLogger(__name__).error(f"Failed to provision user: {e}")
         return Response({"detail": f"User provisioning failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    # Ensure the user is a StaffMember of the specific workspace (by slug)
+    workspace_id = None
+    if workspace_slug:
+        try:
+            from bfg.common.models import Workspace, StaffMember, StaffRole
+            ws = Workspace.objects.filter(slug=workspace_slug).first()
+            if ws:
+                workspace_id = ws.id
+                role, _ = StaffRole.objects.get_or_create(
+                    workspace=ws, code=role_code,
+                    defaults={'name': role_code.title(), 'permissions': {}}
+                )
+                StaffMember.objects.get_or_create(
+                    user=user, workspace=ws,
+                    defaults={"role": role}
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Could not assign workspace StaffMember for slug={workspace_slug}: {e}")
+
     # Generate Workspace JWT
     refresh = RefreshToken.for_user(user)
 
     return Response({
         "token": str(refresh.access_token),
-        "refresh": str(refresh)
+        "refresh": str(refresh),
+        "workspace_id": workspace_id,
     }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@authentication_classes([])  # Skip JWT auth — we verify PLATFORM_API_KEY manually
+@permission_classes([AllowAny])
+def provision_workspace(request):
+    """
+    POST /api/v1/internal/auth/provision-workspace/
+    Called by Platform Server during registration to create a real business workspace.
+    Headers: { "Authorization": "Bearer <PLATFORM_API_KEY>" }
+    Body: { "platform_user_id", "email", "name", "workspace_name", "workspace_slug" }
+    """
+    auth_header = request.headers.get("Authorization")
+    platform_key = getattr(settings, "PLATFORM_API_KEY", None)
+
+    if platform_key and (not auth_header or auth_header != f"Bearer {platform_key}"):
+        import logging
+        logging.getLogger(__name__).warning("provision_workspace: Invalid or missing Platform API Key")
+        return Response({"detail": "Invalid Platform API Key"}, status=status.HTTP_403_FORBIDDEN)
+
+    data = request.data
+    platform_user_id = data.get("platform_user_id")
+    email = data.get("email")
+
+    if not email and not platform_user_id:
+        return Response(
+            {"detail": "Email or Platform User ID is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        # Step 1: Provision user locally
+        from bfg.common.services import UserService
+        user, _ = UserService.provision_sso_user(
+            platform_user_id=platform_user_id,
+            email=email,
+            name=data.get("name", ""),
+            role_code="admin",  # Owner of new workspace gets admin
+        )
+
+        # Step 2: Create the business workspace locally
+        from bfg.common.services.workspace_service import WorkspaceService
+        ws_service = WorkspaceService()
+        workspace = ws_service.create_workspace(
+            name=data.get("workspace_name", "My Workspace"),
+            slug=data.get("workspace_slug"),
+            owner_user=user,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to provision workspace: {e}")
+        return Response(
+            {"detail": f"Workspace provisioning failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response({
+        "workspace_id": workspace.id,
+        "workspace_slug": workspace.slug,
+    }, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])

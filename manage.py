@@ -18,21 +18,9 @@ def main():
     except ImportError:
         pass
 
-    # Set default settings module
-    env = os.getenv('ENV', 'dev')
-    
-    # Mapping environment names to settings modules
-    env_mapping = {
-        'prod': 'config.prod',
-        'test': 'config.test',
-        'dev': 'config.dev',
-        'local': 'config.dev',
-    }
-    
-    # Default to 'config.settings' if env is not in mapping
-    settings_module = env_mapping.get(env, 'config.settings')
-    
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings_module)
+    from config.django_settings_env import setdefault_django_settings_module
+
+    setdefault_django_settings_module()
 
 
 

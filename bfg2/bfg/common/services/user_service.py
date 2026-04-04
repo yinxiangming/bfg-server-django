@@ -13,11 +13,12 @@ class UserService:
 
     @classmethod
     def provision_sso_user(
-        cls, 
-        platform_user_id: str, 
-        email: str, 
-        name: str, 
-        role_code: str = 'staff'
+        cls,
+        platform_user_id: str,
+        email: str,
+        name: str,
+        role_code: str = 'staff',
+        workspace_uuid: str = None,
     ) -> Tuple[object, bool]:
         """
         Provision or synchronize an SSO user locally from Platform details.
@@ -67,9 +68,12 @@ class UserService:
                 counter += 1
             user.save()
 
-        # Synchronize StaffMember for active Workspace
+        # Synchronize StaffMember for target Workspace
         from bfg.common.models import Workspace, StaffRole, StaffMember
-        workspace = Workspace.objects.filter(is_active=True).first()
+        if workspace_uuid:
+            workspace = Workspace.objects.filter(uuid=workspace_uuid, is_active=True).first()
+        else:
+            workspace = Workspace.objects.filter(is_active=True).first()
 
         if workspace:
             try:
@@ -169,6 +173,7 @@ class UserService:
                 )
 
                 # WorkspacePlatformProfile + PlatformMembership (only when platform extension is installed)
+                profile = None
                 try:
                     from apps.platform.models import WorkspacePlatformProfile, PlatformMembership
                     profile, _ = WorkspacePlatformProfile.objects.get_or_create(
@@ -199,6 +204,14 @@ class UserService:
                     timeout=15,
                 )
                 resp.raise_for_status()
+
+                try:
+                    remote_uuid = resp.json().get("workspace_uuid")
+                    if remote_uuid and profile:
+                        profile.remote_workspace_uuid = remote_uuid
+                        profile.save(update_fields=["remote_workspace_uuid"])
+                except Exception:
+                    pass
 
             # Both steps succeeded — return the Platform metadata workspace
             return workspace, None

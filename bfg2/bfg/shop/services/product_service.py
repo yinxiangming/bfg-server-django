@@ -16,7 +16,7 @@ from bfg.common.models import Media, MediaLink
 from bfg.shop.models import (
     Product, ProductVariant, ProductCategory, ProductTag
 )
-from bfg.shop.services.product_identifier_service import ensure_product_identifiers
+from bfg.shop.services.product_identifier_service import ensure_product_identifiers, generate_barcode_from_product_id
 
 
 class ProductService(BaseService):
@@ -86,8 +86,13 @@ class ProductService(BaseService):
             'is_featured': kwargs.get('is_featured', False),
             'language': language,
         }, workspace=self.workspace)
+        barcode_prefix = product_data.pop('_barcode_prefix', 'BC-')
         product = Product.objects.create(**product_data)
-        
+
+        if not product.barcode:
+            product.barcode = generate_barcode_from_product_id(product.pk, barcode_prefix)
+            product.save(update_fields=['barcode'])
+
         # Add categories if provided
         if 'categories' in kwargs:
             product.categories.set(kwargs['categories'])

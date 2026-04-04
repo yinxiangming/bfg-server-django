@@ -13,8 +13,9 @@ bfg2_path = BASE_DIR / 'bfg2'
 if str(bfg2_path) not in sys.path:
     sys.path.insert(0, str(bfg2_path))
 
-# Set the default Django settings module for the 'celery' program.
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+from config.django_settings_env import setdefault_django_settings_module
+
+setdefault_django_settings_module()
 
 app = Celery('config')
 

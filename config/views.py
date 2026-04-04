@@ -3,6 +3,7 @@
 Custom views for API
 """
 
+import os
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.response import Response
@@ -14,6 +15,7 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
 from django.conf import settings
+from django.http import HttpResponse
 from .serializers import (
     RegisterSerializer,
     ForgotPasswordSerializer,
@@ -53,6 +55,7 @@ def provision_user(request):
 
     name = data.get("name", "")
     role_code = data.get("role", "staff")
+    workspace_uuid = data.get("workspace_uuid")
     workspace_slug = data.get("workspace_slug")
 
     try:
@@ -61,14 +64,15 @@ def provision_user(request):
             platform_user_id=platform_user_id,
             email=email,
             name=name,
-            role_code=role_code
+            role_code=role_code,
+            workspace_uuid=workspace_uuid,
         )
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"Failed to provision user: {e}")
         return Response({"detail": f"User provisioning failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    # Ensure the user is a StaffMember of the specific workspace (by slug)
+    # Ensure StaffMember for the specific workspace (by slug) and return its local id
     workspace_id = None
     if workspace_slug:
         try:
@@ -86,7 +90,9 @@ def provision_user(request):
                 )
         except Exception as e:
             import logging
-            logging.getLogger(__name__).warning(f"Could not assign workspace StaffMember for slug={workspace_slug}: {e}")
+            logging.getLogger(__name__).warning(
+                f"workspace StaffMember ensure failed slug={workspace_slug}: {e}"
+            )
 
     # Generate Workspace JWT
     refresh = RefreshToken.for_user(user)
@@ -155,6 +161,7 @@ def provision_workspace(request):
     return Response({
         "workspace_id": workspace.id,
         "workspace_slug": workspace.slug,
+        "workspace_uuid": str(workspace.uuid),
     }, status=status.HTTP_201_CREATED)
 
 
@@ -311,3 +318,30 @@ def verify_email(request):
         }, status=status.HTTP_200_OK)
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+def acme_challenge(request, path):
+    """
+    Serve ACME challenge responses for Let's Encrypt.
+    Looks for files in settings.BASE_DIR/.well-known/acme-challenge/
+    Also supports setting token/response via environment variables.
+    """
+    challenge_dir = os.path.join(settings.BASE_DIR, '.well-known', 'acme-challenge')
+    file_path = os.path.join(challenge_dir, path)
+
+    # Security: check that the file is indeed within the challenge_dir
+    if not os.path.abspath(file_path).startswith(os.path.abspath(challenge_dir)):
+        return HttpResponse("Forbidden", status=403)
+
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        with open(file_path, 'rb') as f:
+            return HttpResponse(f.read(), content_type='text/plain')
+
+    # Fallback: support via environment variables
+    acme_token = os.environ.get('ACME_CHALLENGE_TOKEN')
+    acme_response = os.environ.get('ACME_CHALLENGE_RESPONSE')
+
+    if acme_token and acme_response and path == acme_token:
+        return HttpResponse(acme_response, content_type='text/plain')
+
+    return HttpResponse("Not Found", status=404)

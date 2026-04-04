@@ -8,7 +8,8 @@ from .product_service import ProductService
 from .product_identifier_service import (
     DEFAULT_SKU_PREFIX,
     DEFAULT_BARCODE_PREFIX,
-    generate_identifier,
+    generate_sku,
+    generate_barcode_from_product_id,
     get_workspace_identifier_prefixes,
     ensure_product_identifiers,
 )
@@ -21,7 +22,8 @@ __all__ = [
     'ProductService',
     'DEFAULT_SKU_PREFIX',
     'DEFAULT_BARCODE_PREFIX',
-    'generate_identifier',
+    'generate_sku',
+    'generate_barcode_from_product_id',
     'get_workspace_identifier_prefixes',
     'ensure_product_identifiers',
     'CartService',

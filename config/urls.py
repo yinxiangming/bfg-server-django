@@ -11,7 +11,15 @@ from django.views.static import serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView, TokenVerifyView
 from config.serializers import CustomTokenObtainPairSerializer
-from config.views import register, forgot_password, reset_password_confirm, verify_email, provision_user, provision_workspace
+from config.views import (
+    register,
+    forgot_password,
+    reset_password_confirm,
+    verify_email,
+    provision_user,
+    provision_workspace,
+    acme_challenge,
+)
 from config.social_auth import (
     social_login_view,
     social_callback_view,
@@ -20,6 +28,7 @@ from config.social_auth import (
 
 urlpatterns = [
     re_path(r'^admin/', admin.site.urls),
+    re_path(r'^\.well-known/acme-challenge/(?P<path>.*)$', acme_challenge),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),

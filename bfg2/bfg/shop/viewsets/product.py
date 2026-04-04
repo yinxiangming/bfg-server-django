@@ -4,7 +4,18 @@ Product-related ViewSets
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.renderers import BaseRenderer
 from rest_framework.response import Response
+
+
+class PDFRenderer(BaseRenderer):
+    media_type = 'application/pdf'
+    format = 'pdf'
+    charset = None
+    render_style = 'binary'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return data
 from django.utils.text import slugify
 from django.db import transaction
 from django.db.models import Sum
@@ -18,6 +29,7 @@ from bfg.shop.serializers import (
     ProductVariantSerializer, ProductReviewSerializer, VariantInventorySerializer
 )
 from bfg.shop.services import ProductService, ensure_product_identifiers
+from bfg.shop.services.product_identifier_service import generate_barcode_from_product_id
 from bfg.delivery.models import Warehouse
 from bfg.shop.schemas import get_category_rules_form_schema
 
@@ -207,11 +219,16 @@ class ProductViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Create product using service"""
         ensure_product_identifiers(serializer.validated_data, workspace=self.request.workspace)
+        barcode_prefix = serializer.validated_data.pop('_barcode_prefix', 'BC-')
         category_ids = serializer.validated_data.pop('category_ids', None)
         tag_ids = serializer.validated_data.pop('tag_ids', None)
         tag_names = serializer.validated_data.pop('tag_names', None)
-        
+
         product = serializer.save(workspace=self.request.workspace)
+
+        if not product.barcode:
+            product.barcode = generate_barcode_from_product_id(product.pk, barcode_prefix)
+            product.save(update_fields=['barcode'])
         
         if category_ids:
             categories = ProductCategory.objects.filter(
@@ -397,6 +414,92 @@ class ProductViewSet(viewsets.ModelViewSet):
             
             serializer = VariantInventorySerializer(inventories, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='label',
+            permission_classes=[IsAuthenticated, IsWorkspaceStaff],
+            renderer_classes=[PDFRenderer])
+    def label(self, request, pk=None):
+        """Return a printable PDF label for the product (barcode + name + SKU)."""
+        product = self.get_object()
+        try:
+            pdf_bytes = _generate_product_label_pdf(product)
+        except Exception as exc:
+            logger.exception("Failed to generate product label for product %s: %s", pk, exc)
+            return Response({'detail': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        response = Response(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="product-{product.pk}-label.pdf"'
+        return response
+
+    @action(detail=True, methods=['get'], url_path='generate_identifiers',
+            permission_classes=[IsAuthenticated, IsWorkspaceStaff])
+    def generate_identifiers(self, request, pk=None):
+        """Return freshly generated SKU and barcode values without saving them.
+
+        Query params:
+          - name: product name to use for SKU generation (defaults to current product name)
+          - fields: comma-separated list of fields to regenerate, e.g. 'sku,barcode' (default: both)
+        """
+        from bfg.shop.services.product_identifier_service import (
+            generate_sku, generate_barcode_from_product_id,
+            get_workspace_identifier_prefixes,
+        )
+        product = self.get_object()
+        name = request.query_params.get('name', product.name or '')
+        fields_param = request.query_params.get('fields', 'sku,barcode')
+        fields = {f.strip() for f in fields_param.split(',')}
+
+        sku_prefix, barcode_prefix = get_workspace_identifier_prefixes(request.workspace)
+        result = {}
+        if 'sku' in fields:
+            result['sku'] = generate_sku(sku_prefix, name)
+        if 'barcode' in fields:
+            result['barcode'] = generate_barcode_from_product_id(product.pk, barcode_prefix)
+        return Response(result)
+
+
+def _generate_product_label_pdf(product) -> bytes:
+    """Generate a small label PDF using ReportLab with a Code128 barcode."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import mm
+    from reportlab.lib.units import mm as mm_unit
+    from reportlab.pdfgen import canvas
+    from reportlab.graphics.barcode import code128
+
+    label_w = 80 * mm_unit
+    label_h = 40 * mm_unit
+    margin = 4 * mm_unit
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=(label_w, label_h))
+
+    barcode_value = str(product.barcode or product.sku or str(product.pk))
+
+    # Draw barcode
+    bar = code128.Code128(
+        barcode_value,
+        barWidth=1.2,
+        barHeight=16 * mm_unit,
+        humanReadable=True,
+        fontSize=8,
+    )
+    bar_w = bar.width
+    bar_x = (label_w - bar_w) / 2
+    bar_y = margin + 6 * mm_unit
+    bar.drawOn(c, bar_x, bar_y)
+
+    # Product name (top area)
+    name = (product.name or '')[:40]
+    c.setFont('Helvetica-Bold', 9)
+    c.drawCentredString(label_w / 2, label_h - margin - 9, name)
+
+    # SKU line
+    sku_text = f"SKU: {product.sku}" if product.sku else ""
+    if sku_text:
+        c.setFont('Helvetica', 7)
+        c.drawCentredString(label_w / 2, label_h - margin - 19, sku_text)
+
+    c.save()
+    return buf.getvalue()
 
 
 class ProductVariantViewSet(viewsets.ModelViewSet):

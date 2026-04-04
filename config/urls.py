@@ -60,6 +60,7 @@ urlpatterns = [
         path('inbox/', include('bfg.inbox.urls')),
         path('', include('bfg.finance.urls')),
         path('store/', include('bfg.shop.urls_storefront')),
+        path('platform/', include('bfg.platform.urls')),
         *[path(f'{app}/', include(f'apps.{app}.urls')) for app in get_local_apps()],
     ])),
 ]

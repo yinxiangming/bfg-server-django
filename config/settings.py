@@ -73,6 +73,7 @@ INSTALLED_APPS = [
     'bfg.finance',
     'bfg.support',
     'bfg.inbox',
+    'bfg.platform',
     # Local apps (from env LOCAL_APPS or auto-discovered from apps dir)
     *get_local_app_dotted_names(),
 ]

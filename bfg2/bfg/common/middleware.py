@@ -156,7 +156,7 @@ class WorkspaceMiddleware(MiddlewareMixin):
     Middleware to identify and set the current workspace based on the request domain.
     Uses caching to reduce database queries.
     """
-    
+
     # Paths that operate outside any workspace context (Platform APIs, internal auth,
     # auth endpoints). Do NOT fallback to a random workspace for these — they either
     # work without a workspace or the caller must provide X-Workspace-ID explicitly.

@@ -90,7 +90,9 @@ def provision_user(request):
                 )
         except Exception as e:
             import logging
-            logging.getLogger(__name__).warning(f"workspace StaffMember ensure failed slug={workspace_slug}: {e}")
+            logging.getLogger(__name__).warning(
+                f"workspace StaffMember ensure failed slug={workspace_slug}: {e}"
+            )
 
     # Generate Workspace JWT
     refresh = RefreshToken.for_user(user)

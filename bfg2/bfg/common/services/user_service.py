@@ -172,16 +172,21 @@ class UserService:
                     defaults={'role': admin_role, 'is_active': True},
                 )
 
-                # WorkspacePlatformProfile (only available when platform extension is installed)
+                # WorkspacePlatformProfile + PlatformMembership (only when platform extension is installed)
                 profile = None
                 try:
-                    from apps.platform.models import WorkspacePlatformProfile
+                    from apps.platform.models import WorkspacePlatformProfile, PlatformMembership
                     profile, _ = WorkspacePlatformProfile.objects.get_or_create(
                         workspace=workspace,
                     )
                     if not profile.platform_api_key:
                         profile.generate_api_keys()
                         profile.save()
+                    PlatformMembership.objects.get_or_create(
+                        user=user,
+                        profile=profile,
+                        defaults={'role': 'owner', 'is_active': True},
+                    )
                 except ImportError:
                     pass
 
@@ -200,7 +205,6 @@ class UserService:
                 )
                 resp.raise_for_status()
 
-                # 如果 Workspace Server 返回了 workspace_uuid，更新 remote_workspace_uuid
                 try:
                     remote_uuid = resp.json().get("workspace_uuid")
                     if remote_uuid and profile:

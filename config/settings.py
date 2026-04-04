@@ -29,8 +29,13 @@ TESTING = sys.argv[1:2] == ['test']
 
 # Cross-instance configuration
 BFG_INSTANCE_TYPE = os.environ.get('BFG_INSTANCE_TYPE', 'workspace')
+WORKSPACE_API_URL = os.environ.get('WORKSPACE_API_URL', 'http://localhost:8000')
 PLATFORM_API_URL = os.environ.get('PLATFORM_API_URL', '')
 PLATFORM_API_KEY = os.environ.get('PLATFORM_API_KEY', '')
+
+# Embedded Platform mode: a single BFG instance acts as both Platform and Workspace.
+PLATFORM_WORKSPACE_SLUG = os.environ.get('PLATFORM_WORKSPACE_SLUG', '')
+PLATFORM_EMBEDDED = bool(PLATFORM_WORKSPACE_SLUG) and BFG_INSTANCE_TYPE == 'workspace'
 
 ALLOWED_HOSTS = ['*']
 

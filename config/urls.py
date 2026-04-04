@@ -12,8 +12,13 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, Sp
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView, TokenVerifyView
 from config.serializers import CustomTokenObtainPairSerializer
 from config.views import (
-    register, forgot_password, reset_password_confirm, verify_email, 
-    provision_user, provision_workspace, acme_challenge
+    register,
+    forgot_password,
+    reset_password_confirm,
+    verify_email,
+    provision_user,
+    provision_workspace,
+    acme_challenge,
 )
 from config.social_auth import (
     social_login_view,

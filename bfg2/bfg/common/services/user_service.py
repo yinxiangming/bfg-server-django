@@ -48,10 +48,16 @@ class UserService:
         # 3. Create a new user if still not found
         if not user:
             base_username = email.split("@")[0] if email else f"user_{platform_user_id}"
+            # Ensure unique username before create (avoid IntegrityError)
+            unique_username = base_username
+            counter = 1
+            while User.objects.filter(username=unique_username).exists():
+                unique_username = f"{base_username}{counter}"
+                counter += 1
             user = User.objects.create(
                 platform_user_id=platform_user_id,
                 email=email or "",
-                username=base_username,
+                username=unique_username,
                 first_name=first_name,
                 last_name=last_name,
                 is_active=True

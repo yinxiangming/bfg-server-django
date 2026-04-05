@@ -784,11 +784,19 @@ class SettingsViewSet(viewsets.ModelViewSet):
         except (ImportError, AttributeError):
             pass
 
+        # workspace_domain: try workspace.domain first, may be overridden by Site.domain below
+        ws_domain = (workspace.domain or '').split(':')[0].strip()
+        if ws_domain:
+            payload['workspace_domain'] = ws_domain
+
         # Prefer bfg.web Site for site_name (Site title), then Settings
         try:
             from bfg.web.models import Site
             site = Site.objects.filter(workspace=workspace, is_active=True).order_by('-is_default').select_related('theme').first()
             if site:
+                site_domain = (getattr(site, 'domain', '') or '').split(':')[0].strip()
+                if site_domain:
+                    payload['workspace_domain'] = site_domain
                 site_display_name = (getattr(site, 'name', None) or getattr(site, 'site_title', None) or '').strip()
                 if site_display_name:
                     payload['site_name'] = site_display_name

@@ -1065,12 +1065,21 @@ class UserViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        """Users can only see themselves unless admin"""
+        """Return users scoped to the current workspace for admin/staff."""
         user = self.request.user
-        if user.is_staff or user.is_superuser:
-            from bfg.common.models import User
-            return User.objects.all()
+        from django.db.models import Q
         from bfg.common.models import User
+
+        workspace = getattr(self.request, 'workspace', None)
+
+        if user.is_staff or user.is_superuser:
+            if not workspace:
+                return User.objects.none()
+            return User.objects.filter(
+                Q(default_workspace=workspace) |
+                Q(staff_memberships__workspace=workspace, staff_memberships__is_active=True)
+            ).distinct()
+
         return User.objects.filter(id=user.id)
 
 

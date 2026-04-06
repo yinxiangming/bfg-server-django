@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 Site config load and export for bfg.web.
-Load from JSON/YAML config (Site, Theme, Pages, Menus) or export current workspace site data.
+Load from JSON/YAML config (Site, Theme, Pages, Menus, Product categories) or export workspace site data.
 """
 
 from typing import Any, Dict, List, Optional
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from bfg.core.services import BaseService
-from bfg.common.models import Settings
+from bfg.common.models import Settings, Workspace
 from bfg.web.models import Site, Theme, Language, Page, Menu, MenuItem
 
 User = get_user_model()
@@ -22,17 +22,21 @@ class SiteConfigService(BaseService):
         config: Dict[str, Any],
         created_by_user=None,
         mode: str = "merge",
+        replace_shop_categories: bool = False,
     ) -> Dict[str, Any]:
         """
         Load site config into current workspace.
-        config: dict with keys site, theme (optional), pages, menus.
+        config: dict with keys site, theme (optional), pages, menus, categories (optional).
         mode: 'merge' (default) = create/update by slug; 'replace' = delete existing web data then import.
+        replace_shop_categories: if True and config contains 'categories', delete workspace ProductCategory rows before import.
         """
         if mode == "replace":
             self._clear_workspace_web_site_data()
         created_by_user = created_by_user or getattr(self, "user", None) or User.objects.filter(is_superuser=True).first()
         site_data = config.get("site")
         site_obj = self._upsert_site(site_data)
+        self._sync_workspace_primary_domain(site_data)
+        self._apply_workspace_bootstrap(config)
         self._apply_site_storefront_overrides(site_data)
         theme_obj = self._upsert_theme(config.get("theme")) if config.get("theme") else None
         if site_obj and theme_obj:
@@ -43,10 +47,25 @@ class SiteConfigService(BaseService):
             page = self._upsert_page(p, created_by_user or self.user, pages_by_slug)
             if page:
                 pages_by_slug[page.slug] = page
+        categories_count = 0
+        raw_categories = config.get("categories")
+        if raw_categories and isinstance(raw_categories, list):
+            lang = (site_data or {}).get("default_language") or "en"
+            if replace_shop_categories:
+                from bfg.shop.models import ProductCategory
+
+                ProductCategory.objects.filter(workspace=self.workspace).delete()
+            categories_count = self._upsert_product_categories(raw_categories, language=lang)
         menus_data = config.get("menus") or config.get("menu") or []
         for m in menus_data:
             self._upsert_menu(m, pages_by_slug)
-        return {"site": site_obj, "theme": theme_obj, "pages": list(pages_by_slug.values()), "menus_count": len(menus_data)}
+        return {
+            "site": site_obj,
+            "theme": theme_obj,
+            "pages": list(pages_by_slug.values()),
+            "menus_count": len(menus_data),
+            "categories_count": categories_count,
+        }
 
     def _clear_workspace_web_site_data(self) -> None:
         """Remove Site, Menu/MenuItem, Page for this workspace (Theme/Language kept)."""
@@ -81,12 +100,52 @@ class SiteConfigService(BaseService):
             site.save(update_fields=["name", "site_title", "site_description", "default_language", "languages", "updated_at"])
         return site
 
-    def _apply_site_storefront_overrides(self, data: Optional[Dict]) -> None:
-        """Apply site config keys that map to workspace Settings (e.g. footer_copyright)."""
+    def _sync_workspace_primary_domain(self, data: Optional[Dict]) -> None:
+        """Set Workspace.domain from site config hostname so middleware resolves without Site lookup."""
         if not data:
             return
-        footer_copyright = (data.get("footer_copyright") or "").strip()
-        if not footer_copyright:
+        raw = (data.get("domain") or "").strip()
+        if not raw:
+            return
+        host = raw.split(":")[0].strip()[:255]
+        if not host or self.workspace.domain == host:
+            return
+        self.workspace.domain = host
+        self.workspace.save(update_fields=["domain", "updated_at"])
+        from bfg.common.middleware import invalidate_workspace_cache
+
+        invalidate_workspace_cache(self.workspace)
+
+    def _apply_workspace_bootstrap(self, config: Dict[str, Any]) -> None:
+        """Apply optional workspace_bootstrap (name, slug, note) from site-config JSON."""
+        wb = config.get("workspace_bootstrap")
+        if not wb or not isinstance(wb, dict):
+            return
+        name = (wb.get("name") or "").strip()
+        if name:
+            self.workspace.name = name[:255]
+            self.workspace.save(update_fields=["name", "updated_at"])
+        slug = (wb.get("slug") or "").strip()
+        if slug and slug != self.workspace.slug:
+            if not Workspace.objects.filter(slug=slug).exclude(pk=self.workspace.pk).exists():
+                self.workspace.slug = slug[:100]
+                self.workspace.save(update_fields=["slug", "updated_at"])
+        note = (wb.get("note") or "").strip()
+        if note:
+            settings_obj, _ = Settings.objects.get_or_create(
+                workspace=self.workspace,
+                defaults={"default_language": "en", "default_currency": "NZD"},
+            )
+            custom = dict(settings_obj.custom_settings or {})
+            general = dict(custom.get("general") or {})
+            general["workspace_note"] = note
+            custom["general"] = general
+            settings_obj.custom_settings = custom
+            settings_obj.save(update_fields=["custom_settings", "updated_at"])
+
+    def _apply_site_storefront_overrides(self, data: Optional[Dict]) -> None:
+        """Map site config to workspace Settings (footer, site name/description for admin/storefront)."""
+        if not data:
             return
         settings_obj, _ = Settings.objects.get_or_create(
             workspace=self.workspace,
@@ -94,10 +153,31 @@ class SiteConfigService(BaseService):
         )
         custom = dict(settings_obj.custom_settings or {})
         general = dict(custom.get("general") or {})
-        general["footer_copyright"] = footer_copyright
-        custom["general"] = general
-        settings_obj.custom_settings = custom
-        settings_obj.save(update_fields=["custom_settings", "updated_at"])
+
+        footer_copyright = (data.get("footer_copyright") or "").strip()
+        if footer_copyright:
+            general["footer_copyright"] = footer_copyright
+
+        short_name = (data.get("name") or "").strip()
+        title = (data.get("site_title") or "").strip()
+        site_name_val = short_name or title
+        if site_name_val:
+            sn = site_name_val[:255]
+            settings_obj.site_name = sn
+            general["site_name"] = sn
+
+        site_description = (data.get("site_description") or "").strip()
+        if site_description:
+            settings_obj.site_description = site_description
+            general["site_description"] = site_description
+
+        settings_obj.custom_settings = {**custom, "general": general}
+        uf = ["custom_settings", "updated_at"]
+        if site_name_val:
+            uf.insert(0, "site_name")
+        if site_description:
+            uf.insert(0, "site_description")
+        settings_obj.save(update_fields=uf)
 
     def _upsert_theme(self, data: Optional[Dict]) -> Optional[Theme]:
         if not data:
@@ -164,6 +244,67 @@ class SiteConfigService(BaseService):
         pages_by_slug[slug] = page
         return page
 
+    def _upsert_product_categories(self, items: List[Dict[str, Any]], language: str = "en") -> int:
+        """Create or update ProductCategory rows from site-config JSON (multi-pass for parent_slug)."""
+        from bfg.shop.models import ProductCategory
+
+        category_map: Dict[str, Any] = {}
+        remaining: List[Dict[str, Any]] = list(items)
+        max_rounds = len(items) + 2
+        for _ in range(max_rounds):
+            if not remaining:
+                break
+            next_remaining: List[Dict[str, Any]] = []
+            for cat_data in remaining:
+                slug = (cat_data.get("slug") or "").strip()
+                if not slug:
+                    continue
+                parent_slug = (cat_data.get("parent_slug") or "").strip() or None
+                parent = None
+                if parent_slug:
+                    parent = category_map.get(parent_slug)
+                    if not parent:
+                        next_remaining.append(cat_data)
+                        continue
+                defaults = {
+                    "name": cat_data.get("name", slug),
+                    "description": (cat_data.get("description") or "")[:2000],
+                    "parent": parent,
+                    "order": int(cat_data.get("order", 100)),
+                    "icon": (cat_data.get("icon") or "")[:50],
+                    "is_active": True,
+                }
+                lang = (cat_data.get("language") or language or "en")[:10]
+                obj, _ = ProductCategory.objects.update_or_create(
+                    workspace=self.workspace,
+                    slug=slug,
+                    language=lang,
+                    defaults=defaults,
+                )
+                category_map[slug] = obj
+            remaining = next_remaining
+        # Orphans: create without parent (invalid parent_slug)
+        for cat_data in remaining:
+            slug = (cat_data.get("slug") or "").strip()
+            if not slug or slug in category_map:
+                continue
+            lang = (cat_data.get("language") or language or "en")[:10]
+            obj, _ = ProductCategory.objects.update_or_create(
+                workspace=self.workspace,
+                slug=slug,
+                language=lang,
+                defaults={
+                    "name": cat_data.get("name", slug),
+                    "description": (cat_data.get("description") or "")[:2000],
+                    "parent": None,
+                    "order": int(cat_data.get("order", 100)),
+                    "icon": (cat_data.get("icon") or "")[:50],
+                    "is_active": True,
+                },
+            )
+            category_map[slug] = obj
+        return len(category_map)
+
     def _upsert_menu(self, data: Dict, pages_by_slug: Dict[str, Page]) -> None:
         slug = (data.get("slug") or "menu").strip()
         language = data.get("language", "zh-hans")
@@ -184,13 +325,15 @@ class SiteConfigService(BaseService):
         items = data.get("items", [])
         for i, it in enumerate(items):
             url = (it.get("url") or "").strip()
+            page_obj = None
             if it.get("page_slug"):
-                page = pages_by_slug.get(it["page_slug"])
-                url = f"/{it['page_slug']}" if page else url or f"/{it['page_slug']}"
+                page_obj = pages_by_slug.get(it["page_slug"])
+                url = f"/{it['page_slug']}" if page_obj else (url or f"/{it['page_slug']}")
             MenuItem.objects.create(
                 menu=menu,
                 title=it.get("title", "Link"),
                 url=url or "/",
+                page=page_obj,
                 order=it.get("order", i + 1),
                 is_active=True,
             )

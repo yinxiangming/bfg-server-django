@@ -171,9 +171,10 @@ class PageViewSet(viewsets.ModelViewSet):
         if parent_id:
             queryset = queryset.filter(parent_id=parent_id)
 
-        # Filter by language only when ?lang= is provided; omit param to list all languages (e.g. admin)
+        # Filter by language only when ?lang= is provided; omit param to list all languages (e.g. admin).
+        # `rendered` resolves language fallbacks in PageService — do not narrow queryset by lang or get_object() misses en-only pages.
         lang_param = self.request.query_params.get('lang')
-        if lang_param is not None:
+        if lang_param is not None and getattr(self, 'action', None) != 'rendered':
             queryset = queryset.filter(language=lang_param)
 
         return queryset.order_by('order', 'title')

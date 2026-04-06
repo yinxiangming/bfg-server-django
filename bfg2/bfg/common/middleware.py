@@ -29,35 +29,46 @@ def set_current_workspace(workspace):
 def _get_workspace_by_domain(hostname):
     """
     Get workspace by domain with caching.
-    
-    Args:
-        hostname: Domain hostname
-        
-    Returns:
-        Workspace or None
+
+    Tries Workspace.domain first, then bfg.web.Site.domain. Seed/init often set
+    Workspace.domain to localhost while the storefront hostname lives on Site only.
     """
     cache_key = f'workspace:domain:{hostname}'
-    
-    # Try cache first
+
+    # Try cache first (positive hit only; miss returns None and we re-query)
     workspace = cache.get(cache_key)
     if workspace is not None:
         return workspace
-    
-    # Query database
+
     try:
-        # Use filter().first() instead of get() to handle multiple workspaces gracefully
         workspace = Workspace.objects.filter(domain=hostname, is_active=True).order_by('id').first()
         if workspace:
-            # Cache the result
             cache.set(cache_key, workspace, WORKSPACE_CACHE_TIMEOUT)
             return workspace
-        else:
-            # Cache None result to avoid repeated DB queries for non-existent domains
-            cache.set(cache_key, None, WORKSPACE_CACHE_TIMEOUT)
-            return None
+
+        # Storefront hostname may only exist on CMS Site (Workspace.domain still localhost)
+        try:
+            from bfg.web.models import Site
+
+            site = (
+                Site.objects.filter(domain=hostname, is_active=True)
+                .select_related('workspace')
+                .order_by('id')
+                .first()
+            )
+            if site and site.workspace_id:
+                w = site.workspace
+                if w and w.is_active:
+                    cache.set(cache_key, w, WORKSPACE_CACHE_TIMEOUT)
+                    return w
+        except Exception:
+            pass
+
+        cache.set(cache_key, None, WORKSPACE_CACHE_TIMEOUT)
+        return None
     except Exception as e:
-        # Log error but don't crash
         import logging
+
         logger = logging.getLogger(__name__)
         logger.error(f"Error getting workspace for domain {hostname}: {e}")
         cache.set(cache_key, None, WORKSPACE_CACHE_TIMEOUT)
@@ -142,8 +153,17 @@ def invalidate_workspace_cache(workspace):
     
     # Invalidate domain cache
     if workspace.domain:
-        cache.delete(f'workspace:domain:{workspace.domain}')
-    
+        cache.delete(f'workspace:domain:{workspace.domain.split(":")[0].strip()}')
+
+    try:
+        from bfg.web.models import Site
+
+        for d in Site.objects.filter(workspace=workspace).values_list('domain', flat=True):
+            if d:
+                cache.delete(f'workspace:domain:{d.split(":")[0].strip()}')
+    except Exception:
+        pass
+
     # Invalidate ID cache
     cache.delete(f'workspace:id:{workspace.id}')
     

@@ -138,6 +138,12 @@ def seed_data(workspace, stdout=None, style=None, **context):
 
 def create_product_categories(workspace, stdout=None, style=None):
     """Create product categories matching storefront frontend"""
+    if ProductCategory.objects.filter(workspace=workspace).exists():
+        categories = list(ProductCategory.objects.filter(workspace=workspace))
+        if stdout:
+            stdout.write(style.SUCCESS("Using existing product categories (skip default XMart category tree)."))
+        return categories
+
     # Define categories matching frontend HomePage categories
     # Format: {'name': str, 'slug': str, 'parent_slug': str or None, 'order': int, 'icon': str, 'description': str, 'image_path': str}
     categories_data = [
@@ -509,7 +515,15 @@ def create_products(workspace, categories, tags, admin_user, stdout=None, style=
     for prod_data in products_data:
         # Get category by slug
         category = category_map.get(prod_data.get('category_slug'))
-        
+        if not category:
+            if stdout:
+                stdout.write(
+                    style.WARNING(
+                        f"Skip product (no category slug {prod_data.get('category_slug')!r}): {prod_data.get('name')}"
+                    )
+                )
+            continue
+
         product, created = Product.objects.get_or_create(
             workspace=workspace,
             slug=prod_data['slug'],

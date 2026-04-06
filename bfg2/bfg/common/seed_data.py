@@ -435,11 +435,7 @@ def create_workspace_settings(workspace, stdout=None, style=None):
             'default_currency': 'NZD',
         }
     )
-    if not created:
-        if settings_obj.site_name != 'XMart' or settings_obj.site_description != 'XMart demo website':
-            settings_obj.site_name = 'XMart'
-            settings_obj.site_description = 'XMart demo website'
-            settings_obj.save(update_fields=['site_name', 'site_description'])
+    # Do not overwrite existing settings on re-seed; branding may come from load_site_config.
     if created and stdout:
         stdout.write(style.SUCCESS('✓ Created workspace settings (site name: XMart)'))
     return settings_obj

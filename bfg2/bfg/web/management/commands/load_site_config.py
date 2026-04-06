@@ -31,6 +31,11 @@ class Command(BaseCommand):
             help="Replace existing web site data before import (default: merge)",
         )
         parser.add_argument(
+            "--replace-shop-categories",
+            action="store_true",
+            help="When JSON includes 'categories', delete workspace ProductCategory rows before import (dev reset)",
+        )
+        parser.add_argument(
             "--user",
             type=int,
             default=None,
@@ -66,15 +71,23 @@ class Command(BaseCommand):
         if not user and config.get("pages"):
             self.stdout.write(self.style.WARNING("No user for created_by: pages require a user. Use --user=<id> or create a superuser."))
         mode = "replace" if options["replace"] else "merge"
+        replace_shop_categories = bool(options.get("replace_shop_categories"))
         service = SiteConfigService(workspace=workspace, user=user)
         try:
-            result = service.load_from_config(config, created_by_user=user, mode=mode)
+            result = service.load_from_config(
+                config,
+                created_by_user=user,
+                mode=mode,
+                replace_shop_categories=replace_shop_categories,
+            )
             from django.core.cache import cache
             for lang in ("en", "zh-hans"):
                 cache.delete(f"storefront_config:{workspace.id}:{lang}")
             self.stdout.write(self.style.SUCCESS(f"Loaded site: {result.get('site')}"))
             self.stdout.write(self.style.SUCCESS(f"Pages: {len(result.get('pages', []))}"))
             self.stdout.write(self.style.SUCCESS(f"Menus: {result.get('menus_count', 0)}"))
+            if result.get("categories_count"):
+                self.stdout.write(self.style.SUCCESS(f"Categories: {result.get('categories_count')}"))
         except Exception as e:
             self.stdout.write(self.style.ERROR(str(e)))
             raise

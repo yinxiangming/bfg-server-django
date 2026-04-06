@@ -195,16 +195,9 @@ def create_languages(workspace, stdout=None, style=None):
 
 
 def create_site(workspace, theme=None, stdout=None, style=None):
-    """Create or update default site. Default site name: XMart."""
+    """Create or update default site. Default site name: XMart (new site only; do not overwrite load_site_config)."""
     site = Site.objects.filter(workspace=workspace, is_default=True).first()
     if site:
-        if site.name != 'XMart' or site.site_title != 'XMart' or site.site_description != 'XMart demo website':
-            site.name = 'XMart'
-            site.site_title = 'XMart'
-            site.site_description = 'XMart demo website'
-            site.save(update_fields=['name', 'site_title', 'site_description'])
-            if stdout:
-                stdout.write(style.SUCCESS(f'✓ Updated site: {site.name}'))
         return site
     site = Site.objects.create(
         workspace=workspace,

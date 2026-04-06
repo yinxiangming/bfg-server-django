@@ -5,9 +5,11 @@ ViewSets for common module
 """
 
 import importlib
+import re
 
 from django.apps import apps
 from django.db import transaction
+from django.db.models import Prefetch
 from django.db.models.deletion import ProtectedError
 from rest_framework import viewsets, status, mixins
 from rest_framework.exceptions import APIException
@@ -48,6 +50,43 @@ def _strip_footer_menu_name_prefix(name: str) -> str:
             name = name[len(prefix):]
             break
     return name.title()
+
+
+def _serialize_storefront_menu_item(item) -> dict:
+    """
+    Storefront menu item for header/footer: includes kind and category_slug for store theme merged nav.
+    Precedence: post > page > /category/<slug> pattern > plain link.
+    """
+    post = item.post
+    page = item.page
+    url = (item.url or "").strip()
+    kind = "link"
+    category_slug = None
+    if item.post_id and post:
+        kind = "post"
+        url = f"/posts/{post.slug}"
+    elif item.post_id:
+        kind = "post"
+    elif item.page_id and page:
+        kind = "page"
+        url = f"/{page.slug}"
+    elif item.page_id:
+        kind = "page"
+    else:
+        m = re.match(r"^/?category/([^/?#]+)/?$", url)
+        if m:
+            kind = "category"
+            category_slug = m.group(1)
+    return {
+        "title": item.title,
+        "url": url or "/",
+        "order": item.order,
+        "open_in_new_tab": item.open_in_new_tab,
+        "kind": kind,
+        "category_slug": category_slug,
+        "page_slug": page.slug if page else None,
+        "post_slug": post.slug if post else None,
+    }
 
 
 class WorkspaceViewSet(viewsets.ModelViewSet):
@@ -669,12 +708,14 @@ class SettingsViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+        from django.conf import settings as django_settings
+
         lang = request.query_params.get('lang', 'en')
         cache_key = f"storefront_config:{workspace.id}:{lang}"
         STOREFRONT_CONFIG_TTL = 60 * 60  # 1 hour
 
         cached = cache.get(cache_key)
-        if cached is not None:
+        if cached is not None and not django_settings.DEBUG:
             return Response(cached)
 
         service = SettingsService(workspace=workspace, user=request.user)
@@ -718,19 +759,18 @@ class SettingsViewSet(viewsets.ModelViewSet):
         }
 
         try:
-            from bfg.web.models import Menu
+            from bfg.web.models import Menu, MenuItem
+
+            menu_items_qs = (
+                MenuItem.objects.filter(is_active=True, parent__isnull=True)
+                .select_related("page", "post")
+                .order_by("order")
+            )
+            menu_prefetch = Prefetch("items", queryset=menu_items_qs)
 
             def add_menu_items(queryset, only_if_empty_header=False, only_if_empty_footer=False, add_footer_groups=True):
-                for menu in queryset.prefetch_related('items').order_by('name'):
-                    items = [
-                        {
-                            'title': item.title,
-                            'url': item.url,
-                            'order': item.order,
-                            'open_in_new_tab': item.open_in_new_tab,
-                        }
-                        for item in menu.items.filter(is_active=True).order_by('order')
-                    ]
+                for menu in queryset.prefetch_related(menu_prefetch).order_by('name'):
+                    items = [_serialize_storefront_menu_item(item) for item in menu.items.all()]
                     if menu.location == 'header' and (not only_if_empty_header or not payload['header_menus']):
                         payload['header_menus'].extend(items)
                     elif menu.location == 'footer':
@@ -751,8 +791,9 @@ class SettingsViewSet(viewsets.ModelViewSet):
                 language=lang,
             )
             add_menu_items(qs)
-            # Fallback when requested lang has no menus: try other languages (en, zh-hans)
-            if not payload['header_menus'] and not payload['footer_menu_groups']:
+            # Fallback when header (or whole menu set) is missing in requested lang — do not require
+            # footer_menu_groups to be empty; zh-hans seed may have footer-only rows and block the old condition.
+            if not payload['header_menus'] and not payload['footer_menus'] and not payload['footer_menu_groups']:
                 for fallback_lang in ('en', 'zh-hans'):
                     if fallback_lang == lang:
                         continue
@@ -765,14 +806,26 @@ class SettingsViewSet(viewsets.ModelViewSet):
                     if fallback_qs.exists():
                         add_menu_items(fallback_qs)
                         break
-            if lang != 'en':
-                fallback_qs = Menu.objects.filter(
-                    workspace=workspace,
-                    location__in=['header', 'footer'],
-                    is_active=True,
-                    language='en',
-                )
-                add_menu_items(fallback_qs, only_if_empty_header=True, only_if_empty_footer=True, add_footer_groups=False)
+            if not payload['header_menus']:
+                for fallback_lang in ('en', 'zh-hans'):
+                    if fallback_lang == lang:
+                        continue
+                    fallback_qs = Menu.objects.filter(
+                        workspace=workspace,
+                        location__in=['header', 'footer'],
+                        is_active=True,
+                        language=fallback_lang,
+                    )
+                    if not fallback_qs.exists():
+                        continue
+                    add_menu_items(
+                        fallback_qs,
+                        only_if_empty_header=True,
+                        only_if_empty_footer=True,
+                        add_footer_groups=False,
+                    )
+                    if payload['header_menus']:
+                        break
 
             payload['header_menus'].sort(key=lambda x: x['order'])
             payload['footer_menus'].sort(key=lambda x: x['order'])
@@ -789,10 +842,19 @@ class SettingsViewSet(viewsets.ModelViewSet):
         if ws_domain:
             payload['workspace_domain'] = ws_domain
 
-        # Prefer bfg.web Site for site_name (Site title), then Settings
+        # Prefer bfg.web Site for site_name (Site title), then Settings.
+        # When multiple Sites exist (e.g. seed "localhost" + production domain), match request host first;
+        # otherwise order_by('-is_default', '-id') so newer rows win ties on is_default.
         try:
             from bfg.web.models import Site
-            site = Site.objects.filter(workspace=workspace, is_active=True).order_by('-is_default').select_related('theme').first()
+
+            req_host = (request.META.get('HTTP_X_FORWARDED_HOST') or request.get_host() or '').split(':')[0].strip()
+            if req_host.lower().startswith('www.'):
+                req_host = req_host[4:]
+            sites_qs = Site.objects.filter(workspace=workspace, is_active=True).select_related('theme')
+            site = sites_qs.filter(domain__iexact=req_host).first() if req_host else None
+            if not site:
+                site = sites_qs.order_by('-is_default', '-id').first()
             if site:
                 site_domain = (getattr(site, 'domain', '') or '').split(':')[0].strip()
                 if site_domain:
@@ -814,7 +876,8 @@ class SettingsViewSet(viewsets.ModelViewSet):
         if 'default_language' not in payload:
             payload['default_language'] = 'zh-hans'
 
-        cache.set(cache_key, payload, STOREFRONT_CONFIG_TTL)
+        if not django_settings.DEBUG:
+            cache.set(cache_key, payload, STOREFRONT_CONFIG_TTL)
         return Response(payload)
 
     @action(detail=False, methods=['get'])
@@ -1002,12 +1065,21 @@ class UserViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        """Users can only see themselves unless admin"""
+        """Return users scoped to the current workspace for admin/staff."""
         user = self.request.user
-        if user.is_staff or user.is_superuser:
-            from bfg.common.models import User
-            return User.objects.all()
+        from django.db.models import Q
         from bfg.common.models import User
+
+        workspace = getattr(self.request, 'workspace', None)
+
+        if user.is_staff or user.is_superuser:
+            if not workspace:
+                return User.objects.none()
+            return User.objects.filter(
+                Q(default_workspace=workspace) |
+                Q(staff_memberships__workspace=workspace, staff_memberships__is_active=True)
+            ).distinct()
+
         return User.objects.filter(id=user.id)
 
 

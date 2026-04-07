@@ -56,9 +56,7 @@ def create_staff_roles(workspace, roles):
             logger.error(f"Failed to create role {role_data.get('code')}: {e}")
     
     return created_count
-"""
-Utility functions for BFG Common module.
-"""
+
 
 import threading
 from django.utils.crypto import get_random_string
@@ -176,6 +174,22 @@ def get_admin_password_from_env():
     """Return ADMIN_PASSWORD from environment; no default. Single place for this env var."""
     import os
     return os.environ.get('ADMIN_PASSWORD', '')
+
+
+def first_staff_user_for_workspace(workspace):
+    """
+    Return any active StaffMember's user for a workspace (for seeds, site config attribution).
+    Tenant access is via StaffMember; this does not use Django superuser.
+    """
+    from bfg.common.models import StaffMember
+
+    sm = (
+        StaffMember.objects.filter(workspace=workspace, is_active=True)
+        .select_related('user')
+        .order_by('id')
+        .first()
+    )
+    return sm.user if sm else None
 
 
 def get_smtp_config_from_env():

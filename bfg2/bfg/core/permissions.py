@@ -4,7 +4,15 @@ BFG Permission Classes
 Permission control classes
 """
 
+from django.conf import settings
 from rest_framework import permissions
+
+
+def _superuser_bypasses_workspace_permissions(request) -> bool:
+    """When BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS is True, superuser skips StaffMember checks."""
+    if not request.user or not getattr(request.user, 'is_superuser', False):
+        return False
+    return getattr(settings, 'BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS', True)
 
 
 class IsWorkspaceAdmin(permissions.BasePermission):
@@ -21,10 +29,9 @@ class IsWorkspaceAdmin(permissions.BasePermission):
         if not workspace:
             return False
         
-        # Superuser can always access
-        if request.user.is_superuser:
+        if _superuser_bypasses_workspace_permissions(request):
             return True
-        
+
         # Check if user is admin of this workspace
         from bfg.common.models import StaffMember
         try:
@@ -52,10 +59,9 @@ class IsWorkspaceStaff(permissions.BasePermission):
         if not workspace:
             return False
         
-        # Superuser can always access
-        if request.user.is_superuser:
+        if _superuser_bypasses_workspace_permissions(request):
             return True
-        
+
         from bfg.common.models import StaffMember
         return StaffMember.objects.filter(
             workspace=workspace,
@@ -180,10 +186,9 @@ class CanManagePayments(permissions.BasePermission):
         if not workspace:
             return False
         
-        # Superuser can always access
-        if request.user.is_superuser:
+        if _superuser_bypasses_workspace_permissions(request):
             return True
-        
+
         # Get the required permission for this action
         action = getattr(view, 'action', None)
         required_perm = self.ACTION_PERMISSIONS.get(action, 'finance.payment.view')
@@ -257,10 +262,9 @@ class CanManageInvoices(permissions.BasePermission):
         if not workspace:
             return False
         
-        # Superuser can always access
-        if request.user.is_superuser:
+        if _superuser_bypasses_workspace_permissions(request):
             return True
-        
+
         # Get the required permission for this action
         action = getattr(view, 'action', None)
         required_perm = self.ACTION_PERMISSIONS.get(action, 'finance.invoice.view')

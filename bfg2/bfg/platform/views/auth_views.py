@@ -30,7 +30,7 @@ class AuthViewSet(viewsets.ViewSet):
     """
 
     def get_permissions(self):
-        if self.action == 'token_exchange':
+        if self.action in ('token_exchange', 'sso_start'):
             return [IsAuthenticated()]
         return [AllowAny()]
 
@@ -196,6 +196,241 @@ class AuthViewSet(viewsets.ViewSet):
             },
             'embedded': False,
         })
+
+    # ── SSO Code Bridge ────────────────────────────────────────────────────
+
+    @action(detail=False, methods=['post'], url_path='sso/start')
+    def sso_start(self, request):
+        """
+        POST /api/v1/platform/auth/sso/start/
+        Generate a one-time SSO code and return the redirect URL to the
+        target workspace domain.
+
+        Body: { "workspace_id": "slug-or-id", "next": "/admin", "domain": "" }
+        Returns: { "redirect_url": "https://domain/admin/sso?code=xxx" }
+        """
+        workspace_id = request.data.get('workspace_id')
+        if not workspace_id:
+            return Response(
+                {'error': 'workspace_id is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        next_url = request.data.get('next', '/admin')
+        override_domain = request.data.get('domain', '').strip()
+
+        Workspace = apps.get_model('common', 'Workspace')
+
+        # Resolve workspace
+        try:
+            workspace = Workspace.objects.get(slug=workspace_id)
+        except Workspace.DoesNotExist:
+            try:
+                workspace = Workspace.objects.get(id=workspace_id)
+            except (Workspace.DoesNotExist, ValueError):
+                return Response(
+                    {'error': 'Workspace not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+        # Verify access (embedded: StaffMember, standalone: PlatformMembership)
+        if is_embedded_mode():
+            StaffMember = apps.get_model('common', 'StaffMember')
+            has_access = StaffMember.objects.filter(
+                user=request.user, workspace=workspace, is_active=True,
+            ).exists()
+        else:
+            PlatformMembership = apps.get_model('platform', 'PlatformMembership')
+            has_access = PlatformMembership.objects.filter(
+                user=request.user,
+                profile__workspace=workspace,
+                is_active=True,
+            ).exists()
+
+        if not has_access:
+            return Response(
+                {'error': 'No access to this workspace'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Resolve target domain
+        target_domain = override_domain
+        if not target_domain:
+            profile = getattr(workspace, 'platform_profile', None)
+            custom = (str(profile.custom_domain).strip() if profile and profile.custom_domain else '')
+            if custom:
+                target_domain = custom
+            elif profile and profile.cluster and getattr(profile.cluster, 'frontend_base_url', None):
+                target_domain = (profile.cluster.frontend_base_url or '').strip()
+            else:
+                from django.conf import settings as django_settings
+                target_domain = (
+                    getattr(django_settings, 'WORKSPACE_FRONTEND_URL', '')
+                    or getattr(django_settings, 'FRONTEND_URL', '')
+                )
+                if isinstance(target_domain, str):
+                    target_domain = target_domain.strip()
+
+        if not target_domain:
+            return Response(
+                {'error': 'Cannot determine workspace frontend URL'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Ensure scheme
+        if not target_domain.startswith(('http://', 'https://')):
+            target_domain = f'https://{target_domain}'
+        target_domain = target_domain.rstrip('/')
+
+        # Create SSO code
+        PlatformSSOCode = apps.get_model('platform', 'PlatformSSOCode')
+        client_ip = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() \
+            or request.META.get('REMOTE_ADDR')
+
+        sso_code = PlatformSSOCode(
+            workspace=workspace,
+            user=request.user,
+            next_url=next_url,
+            redirect_domain=target_domain,
+            created_by_ip=client_ip or None,
+        )
+        sso_code.save()
+
+        redirect_url = f'{target_domain}/admin/sso?code={sso_code.code}'
+        if next_url and next_url != '/admin':
+            import urllib.parse
+            redirect_url += f'&next={urllib.parse.quote(next_url)}'
+
+        return Response({'redirect_url': redirect_url})
+
+    @action(detail=False, methods=['post'], url_path='sso/exchange')
+    def sso_exchange(self, request):
+        """
+        POST /api/v1/platform/auth/sso/exchange/
+        Exchange a one-time SSO code for workspace JWT tokens.
+
+        Body: { "code": "xxxxx" }
+        Returns: { "access": "...", "refresh": "...", "workspace": {...}, "next": "/admin" }
+        """
+        code_value = request.data.get('code', '').strip()
+        if not code_value:
+            return Response(
+                {'error': 'code is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        PlatformSSOCode = apps.get_model('platform', 'PlatformSSOCode')
+
+        try:
+            sso_code = PlatformSSOCode.objects.select_related(
+                'workspace', 'user',
+            ).get(code=code_value)
+        except PlatformSSOCode.DoesNotExist:
+            return Response(
+                {'error': 'Invalid SSO code'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if sso_code.is_used:
+            return Response(
+                {'error': 'SSO code has already been used'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if sso_code.is_expired:
+            return Response(
+                {'error': 'SSO code has expired'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Mark used immediately to prevent replay
+        sso_code.mark_used()
+
+        workspace = sso_code.workspace
+        user = sso_code.user
+
+        # Issue JWT — reuse the same logic as token_exchange
+        if is_embedded_mode():
+            from rest_framework_simplejwt.tokens import RefreshToken
+            refresh = RefreshToken.for_user(user)
+
+            return Response({
+                'access': str(refresh.access_token),
+                'refresh': str(refresh),
+                'workspace': {
+                    'id': workspace.id,
+                    'uuid': str(workspace.uuid) if getattr(workspace, 'uuid', None) else None,
+                    'name': workspace.name,
+                    'slug': workspace.slug,
+                },
+                'next': sso_code.next_url or '/admin',
+                'embedded': True,
+            })
+        else:
+            # Standalone: call workspace server to provision user + get JWT
+            profile = getattr(workspace, 'platform_profile', None)
+            if not profile or not profile.cluster:
+                return Response(
+                    {'error': 'Workspace cluster not configured'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            from django.conf import settings as django_settings
+            platform_api_key = getattr(django_settings, 'PLATFORM_API_KEY', 'local-dev-key')
+
+            workspace_api_url = profile.cluster.api_base_url
+            if django_settings.DEBUG and ('localhost' in (workspace.domain or '') or not workspace.domain):
+                workspace_api_url = 'http://localhost:8000'
+
+            # Resolve role from PlatformMembership
+            PlatformMembership = apps.get_model('platform', 'PlatformMembership')
+            membership = PlatformMembership.objects.filter(
+                user=user, profile=profile, is_active=True,
+            ).first()
+            role = membership.role if membership else 'staff'
+
+            try:
+                resp = http_requests.post(
+                    f'{workspace_api_url}/api/v1/internal/auth/provision-user/',
+                    json={
+                        'platform_user_id': str(user.id),
+                        'email': user.email,
+                        'name': user.get_full_name(),
+                        'role': role,
+                        'workspace_slug': workspace.slug,
+                    },
+                    headers={'Authorization': f'Bearer {platform_api_key}'},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+            except Exception as e:
+                return Response(
+                    {'error': f'Token exchange failed: {e}'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+            resp_data = resp.json()
+
+            workspace_frontend_url = (
+                profile.cluster.frontend_base_url
+                if getattr(profile.cluster, 'frontend_base_url', None)
+                else getattr(django_settings, 'WORKSPACE_FRONTEND_URL', '')
+            )
+
+            return Response({
+                'access': resp_data.get('token'),
+                'refresh': resp_data.get('refresh', ''),
+                'workspace_url': workspace_api_url,
+                'workspace_frontend_url': workspace_frontend_url,
+                'workspace': {
+                    'id': workspace.id,
+                    'uuid': str(workspace.uuid) if getattr(workspace, 'uuid', None) else None,
+                    'name': workspace.name,
+                    'slug': workspace.slug,
+                },
+                'next': sso_code.next_url or '/admin',
+                'embedded': False,
+            })
 
     @action(detail=False, methods=['get'], url_path='sso-check')
     def sso_check(self, request):

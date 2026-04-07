@@ -138,6 +138,8 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS('Added admin role to workspace'))
 
         # 2. Create or get admin user
+        # Only this command grants Django superuser/staff when *creating* the admin account.
+        # If the user already exists, we only refresh password / default_workspace — never elevate privileges.
         user, user_created = User.objects.get_or_create(
             username=admin_username,
             defaults={
@@ -155,10 +157,6 @@ class Command(BaseCommand):
             user.save()
             self.stdout.write(self.style.SUCCESS(f'Created admin: {user.username}'))
         else:
-            if not user.is_superuser:
-                user.is_superuser = True
-                user.is_staff = True
-                user.save(update_fields=['is_superuser', 'is_staff'])
             if user.default_workspace_id != workspace.id:
                 user.default_workspace = workspace
                 user.save(update_fields=['default_workspace'])

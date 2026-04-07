@@ -76,7 +76,7 @@ class Command(BaseCommand):
                 'email': 'webadmin@localhost',
                 'first_name': 'Web',
                 'last_name': 'Admin',
-                'is_staff': True,
+                'is_staff': False,
                 'is_superuser': False,
                 'is_active': True,
                 'default_workspace': workspace,

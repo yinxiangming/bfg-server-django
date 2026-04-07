@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.contrib.auth import get_user_model
 from bfg.core.services import BaseService
 from bfg.common.models import Settings, Workspace
+from bfg.common.utils import first_staff_user_for_workspace
 from bfg.web.models import Site, Theme, Language, Page, Menu, MenuItem
 
 User = get_user_model()
@@ -32,7 +33,7 @@ class SiteConfigService(BaseService):
         """
         if mode == "replace":
             self._clear_workspace_web_site_data()
-        created_by_user = created_by_user or getattr(self, "user", None) or User.objects.filter(is_superuser=True).first()
+        created_by_user = created_by_user or getattr(self, "user", None) or first_staff_user_for_workspace(self.workspace)
         site_data = config.get("site")
         site_obj = self._upsert_site(site_data)
         self._sync_workspace_primary_domain(site_data)
@@ -230,7 +231,7 @@ class SiteConfigService(BaseService):
             "order": data.get("order", 100),
             "parent": parent,
         }
-        page_creator = created_by_user or getattr(self, "user", None) or User.objects.filter(is_superuser=True).first()
+        page_creator = created_by_user or getattr(self, "user", None) or first_staff_user_for_workspace(self.workspace)
         if page_creator:
             defaults["created_by"] = page_creator
         if defaults["status"] == "published":

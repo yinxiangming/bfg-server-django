@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import secrets
+from datetime import timedelta
 from django.conf import settings
 from django.db import models
 from django.utils.translation import gettext_lazy as _
@@ -193,3 +194,75 @@ class PlatformMembership(models.Model):
     def __str__(self):
         label = self.profile.remote_workspace_uuid or f"profile #{self.profile_id}"
         return f"{self.user} → {label} ({self.role})"
+
+
+class PlatformSSOCode(models.Model):
+    """
+    One-time SSO code for cross-domain workspace login.
+
+    Flow:
+      1. Platform generates a short-lived code bound to a user + workspace
+      2. Browser is redirected to the workspace domain with ?code=...
+      3. Workspace frontend exchanges the code for a JWT via sso/exchange
+      4. Code is marked used immediately — replay is rejected
+    """
+    SSO_CODE_TTL = getattr(settings, "SSO_CODE_TTL_SECONDS", 300)
+
+    code = models.CharField(
+        _("SSO Code"), max_length=128, unique=True, db_index=True,
+    )
+    workspace = models.ForeignKey(
+        "common.Workspace",
+        verbose_name=_("Workspace"),
+        on_delete=models.CASCADE,
+        related_name="sso_codes",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name=_("User"),
+        on_delete=models.CASCADE,
+        related_name="sso_codes",
+    )
+    expires_at = models.DateTimeField(_("Expires At"), db_index=True)
+    used_at = models.DateTimeField(_("Used At"), null=True, blank=True)
+    created_at = models.DateTimeField(_("Created At"), default=timezone.now)
+    created_by_ip = models.GenericIPAddressField(_("Created By IP"), null=True, blank=True)
+    next_url = models.CharField(_("Next URL"), max_length=512, blank=True, default="/admin")
+    redirect_domain = models.CharField(
+        _("Redirect Domain"), max_length=255, blank=True,
+        help_text=_("Target domain used for the redirect URL"),
+    )
+
+    class Meta:
+        verbose_name = _("Platform SSO Code")
+        verbose_name_plural = _("Platform SSO Codes")
+        indexes = [
+            models.Index(fields=["workspace", "user"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    def __str__(self):
+        return f"SSO {self.code[:8]}… → {self.workspace} ({self.user})"
+
+    def save(self, *args, **kwargs):
+        if not self.code:
+            self.code = secrets.token_urlsafe(48)
+        if not self.expires_at:
+            self.expires_at = timezone.now() + timedelta(seconds=self.SSO_CODE_TTL)
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_used(self):
+        return self.used_at is not None
+
+    @property
+    def is_usable(self):
+        return not self.is_expired and not self.is_used
+
+    def mark_used(self):
+        self.used_at = timezone.now()
+        self.save(update_fields=["used_at"])

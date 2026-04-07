@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
+from bfg.common.utils import first_staff_user_for_workspace
 from bfg.common.models import Workspace
 from bfg.web.services import SiteConfigService
 
@@ -67,9 +68,13 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.ERROR(f"User id not found: {options['user']}"))
                 return
         else:
-            user = User.objects.filter(is_superuser=True).first()
+            user = first_staff_user_for_workspace(workspace)
         if not user and config.get("pages"):
-            self.stdout.write(self.style.WARNING("No user for created_by: pages require a user. Use --user=<id> or create a superuser."))
+            self.stdout.write(
+                self.style.WARNING(
+                    "No user for created_by: pages require a user. Use --user=<id> or add a StaffMember to this workspace."
+                )
+            )
         mode = "replace" if options["replace"] else "merge"
         replace_shop_categories = bool(options.get("replace_shop_categories"))
         service = SiteConfigService(workspace=workspace, user=user)

@@ -116,21 +116,15 @@ def create_admin_user(workspace, stdout=None, style=None):
             'first_name': 'Admin',
             'last_name': 'User',
             'phone': '+1-555-0001',
-            'is_staff': True,
-            'is_superuser': True,
+            'is_staff': False,
+            'is_superuser': False,
             'is_active': True,
             'default_workspace': workspace,
         }
     )
     
-    # Ensure admin user has correct properties even if already exists
+    # Ensure admin user has correct properties even if already exists (no Django superuser/staff; use StaffMember)
     updated = False
-    if not user.is_superuser:
-        user.is_superuser = True
-        updated = True
-    if not user.is_staff:
-        user.is_staff = True
-        updated = True
     if not user.is_active:
         user.is_active = True
         updated = True
@@ -166,7 +160,8 @@ def create_staff_users(workspace, stdout=None, style=None):
             defaults={
                 **data,
                 'phone': '+1-555-0002',
-                'is_staff': True,
+                'is_staff': False,
+                'is_superuser': False,
                 'is_active': True,
                 'default_workspace': workspace,
             }

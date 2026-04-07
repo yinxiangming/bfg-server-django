@@ -14,6 +14,7 @@ from .models import (
     ProductBatch, BatchMovement, SubscriptionPlan
 )
 from bfg.common.models import Address, Customer, Media, MediaLink
+from bfg.common.utils import first_staff_user_for_workspace
 
 
 def clear_data():
@@ -749,10 +750,8 @@ def create_product_media(workspace, products, stdout=None, style=None):
     """
     import os
     from django.conf import settings
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-    
-    admin_user = User.objects.filter(is_superuser=True).first()
+
+    admin_user = first_staff_user_for_workspace(workspace)
     seed_images_base = os.path.join(settings.MEDIA_ROOT, 'seed_images', 'store')
     
     for product in products:
@@ -1169,9 +1168,7 @@ def create_product_batches(workspace, products, variants, stdout=None, style=Non
     from bfg.delivery.models import Warehouse
     from datetime import timedelta
     from .models import BatchMovement
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-    
+
     if not variants:
         return []
     
@@ -1183,8 +1180,8 @@ def create_product_batches(workspace, products, variants, stdout=None, style=Non
     
     batches = []
     base_date = timezone.now().date()
-    admin_user = User.objects.filter(is_superuser=True).first()
-    
+    admin_user = first_staff_user_for_workspace(workspace)
+
     # Create multiple batches per variant/warehouse combination for realistic inventory tracking
     batch_configs = [
         {

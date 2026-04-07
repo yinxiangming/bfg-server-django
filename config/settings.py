@@ -12,13 +12,13 @@ import dj_database_url
 
 from config.local_apps import get_local_app_dotted_names
 
-# Load environment variables
+# Project root (src/server): must be defined before load_dotenv so .env is found regardless of cwd.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Load environment variables from src/server/.env (not only from process cwd).
 ENV = os.environ.get('ENV', 'dev').lower().strip()
 if ENV == 'local' or ENV == 'dev':
-    load_dotenv()
-
-# Build paths inside the project like this: os.path.join(BASE_DIR, ...)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-change-in-production')
@@ -36,6 +36,12 @@ PLATFORM_API_KEY = os.environ.get('PLATFORM_API_KEY', '')
 # Embedded Platform mode: a single BFG instance acts as both Platform and Workspace.
 PLATFORM_WORKSPACE_SLUG = os.environ.get('PLATFORM_WORKSPACE_SLUG', '')
 PLATFORM_EMBEDDED = bool(PLATFORM_WORKSPACE_SLUG) and BFG_INSTANCE_TYPE == 'workspace'
+
+# If True, Django superuser passes tenant permission checks (IsWorkspaceStaff/Admin) without StaffMember.
+# Set False for strict multi-tenant: superuser must have a StaffMember row per workspace (or use Django admin only).
+BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS = os.environ.get(
+    'BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS', 'true'
+).lower() in ('1', 'true', 'yes')
 
 ALLOWED_HOSTS = ['*']
 
@@ -231,6 +237,7 @@ SPECTACULAR_SETTINGS = {
 
 CORS_ALLOW_ALL_ORIGINS = True  # dev; use CORS_ALLOWED_ORIGINS in production
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_PRIVATE_NETWORK = True # dev; use CORS_ALLOW_PRIVATE_NETWORK in production
 CORS_ALLOW_HEADERS = [
     'accept', 'accept-language', 'accept-encoding', 'authorization',
     'content-type', 'dnt', 'origin', 'user-agent', 'x-csrftoken',
@@ -258,6 +265,9 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@example.com')
 
 # Frontend URL and site name (from env)
 FRONTEND_URL = os.environ.get('FRONTEND_URL', '')
+# Fallback for POST /platform/auth/sso/start/ when WorkspacePlatformProfile.custom_domain is empty.
+# Prefer setting custom_domain (or cluster.frontend_base_url) per workspace in production.
+WORKSPACE_FRONTEND_URL = os.environ.get('WORKSPACE_FRONTEND_URL', '').strip()
 SITE_NAME = os.environ.get('SITE_NAME', 'BFG')
 
 # Logging

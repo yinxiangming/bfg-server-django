@@ -3,11 +3,14 @@
 Middleware for BFG2 multi-tenancy support.
 """
 
+import logging
 import threading
 from django.utils.deprecation import MiddlewareMixin
 from django.http import Http404
 from django.core.cache import cache
-from .models import Workspace
+from .models import Workspace, WorkspaceDomain, get_workspace_domain_cache_key, normalize_hostname
+
+logger = logging.getLogger(__name__)
 
 # Thread-local storage for current workspace
 _thread_locals = threading.local()
@@ -27,50 +30,27 @@ def set_current_workspace(workspace):
 
 
 def _get_workspace_by_domain(hostname):
-    """
-    Get workspace by domain with caching.
+    """Get workspace by exact WorkspaceDomain hostname match with caching."""
+    normalized = normalize_hostname(hostname)
+    if not normalized:
+        return None
 
-    Tries Workspace.domain first, then bfg.web.Site.domain. Seed/init often set
-    Workspace.domain to localhost while the storefront hostname lives on Site only.
-    """
-    cache_key = f'workspace:domain:{hostname}'
-
-    # Try cache first (positive hit only; miss returns None and we re-query)
+    cache_key = get_workspace_domain_cache_key(normalized)
     workspace = cache.get(cache_key)
     if workspace is not None:
         return workspace
 
     try:
-        workspace = Workspace.objects.filter(domain=hostname, is_active=True).order_by('id').first()
-        if workspace:
-            cache.set(cache_key, workspace, WORKSPACE_CACHE_TIMEOUT)
-            return workspace
-
-        # Storefront hostname may only exist on CMS Site (Workspace.domain still localhost)
-        try:
-            from bfg.web.models import Site
-
-            site = (
-                Site.objects.filter(domain=hostname, is_active=True)
-                .select_related('workspace')
-                .order_by('id')
-                .first()
-            )
-            if site and site.workspace_id:
-                w = site.workspace
-                if w and w.is_active:
-                    cache.set(cache_key, w, WORKSPACE_CACHE_TIMEOUT)
-                    return w
-        except Exception:
-            pass
-
-        cache.set(cache_key, None, WORKSPACE_CACHE_TIMEOUT)
-        return None
+        domain = (
+            WorkspaceDomain.objects.filter(hostname=normalized, workspace__is_active=True)
+            .select_related('workspace')
+            .first()
+        )
+        workspace = domain.workspace if domain and domain.workspace_id else None
+        cache.set(cache_key, workspace, WORKSPACE_CACHE_TIMEOUT)
+        return workspace
     except Exception as e:
-        import logging
-
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error getting workspace for domain {hostname}: {e}")
+        logger.error(f"Error getting workspace for domain {normalized}: {e}")
         cache.set(cache_key, None, WORKSPACE_CACHE_TIMEOUT)
         return None
 
@@ -143,31 +123,17 @@ def _get_first_active_workspace():
 def invalidate_workspace_cache(workspace):
     """
     Invalidate all cache entries for a workspace.
-    Should be called when workspace is updated (domain, is_active, etc.).
-    
-    Args:
-        workspace: Workspace instance
+    Should be called when workspace or its domain routing changes.
     """
     if not workspace:
         return
-    
-    # Invalidate domain cache
-    if workspace.domain:
-        cache.delete(f'workspace:domain:{workspace.domain.split(":")[0].strip()}')
 
-    try:
-        from bfg.web.models import Site
+    for hostname in workspace.domains.values_list('hostname', flat=True):
+        if hostname:
+            cache.delete(get_workspace_domain_cache_key(hostname))
 
-        for d in Site.objects.filter(workspace=workspace).values_list('domain', flat=True):
-            if d:
-                cache.delete(f'workspace:domain:{d.split(":")[0].strip()}')
-    except Exception:
-        pass
-
-    # Invalidate ID cache
     cache.delete(f'workspace:id:{workspace.id}')
-    
-    # Invalidate first_active cache (since it might have changed)
+    cache.delete(f'workspace:frontend-base-url:{workspace.id}')
     cache.delete('workspace:first_active')
 
 

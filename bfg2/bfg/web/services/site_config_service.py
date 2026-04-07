@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from bfg.core.services import BaseService
-from bfg.common.models import Settings, Workspace
+from bfg.common.models import Settings, Workspace, normalize_hostname, upsert_custom_workspace_domain
+from bfg.common.utils import first_staff_user_for_workspace
 from bfg.web.models import Site, Theme, Language, Page, Menu, MenuItem
 
 User = get_user_model()
@@ -32,10 +33,10 @@ class SiteConfigService(BaseService):
         """
         if mode == "replace":
             self._clear_workspace_web_site_data()
-        created_by_user = created_by_user or getattr(self, "user", None) or User.objects.filter(is_superuser=True).first()
+        created_by_user = created_by_user or getattr(self, "user", None) or first_staff_user_for_workspace(self.workspace)
         site_data = config.get("site")
         site_obj = self._upsert_site(site_data)
-        self._sync_workspace_primary_domain(site_data)
+        self._sync_workspace_custom_domain(site_data)
         self._apply_workspace_bootstrap(config)
         self._apply_site_storefront_overrides(site_data)
         theme_obj = self._upsert_theme(config.get("theme")) if config.get("theme") else None
@@ -100,20 +101,23 @@ class SiteConfigService(BaseService):
             site.save(update_fields=["name", "site_title", "site_description", "default_language", "languages", "updated_at"])
         return site
 
-    def _sync_workspace_primary_domain(self, data: Optional[Dict]) -> None:
-        """Set Workspace.domain from site config hostname so middleware resolves without Site lookup."""
+    def _sync_workspace_custom_domain(self, data: Optional[Dict]) -> None:
+        """Sync externally reachable site hostname into WorkspaceDomain(kind=custom)."""
         if not data:
             return
         raw = (data.get("domain") or "").strip()
-        if not raw:
+        host = normalize_hostname(raw)
+        if not host:
             return
-        host = raw.split(":")[0].strip()[:255]
-        if not host or self.workspace.domain == host:
-            return
-        self.workspace.domain = host
-        self.workspace.save(update_fields=["domain", "updated_at"])
-        from bfg.common.middleware import invalidate_workspace_cache
+        upsert_custom_workspace_domain(
+            self.workspace,
+            host,
+            is_primary=True,
+            verification_status="verified",
+            ssl_status="none",
+        )
 
+        from bfg.common.middleware import invalidate_workspace_cache
         invalidate_workspace_cache(self.workspace)
 
     def _apply_workspace_bootstrap(self, config: Dict[str, Any]) -> None:
@@ -230,7 +234,7 @@ class SiteConfigService(BaseService):
             "order": data.get("order", 100),
             "parent": parent,
         }
-        page_creator = created_by_user or getattr(self, "user", None) or User.objects.filter(is_superuser=True).first()
+        page_creator = created_by_user or getattr(self, "user", None) or first_staff_user_for_workspace(self.workspace)
         if page_creator:
             defaults["created_by"] = page_creator
         if defaults["status"] == "published":

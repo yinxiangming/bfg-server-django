@@ -3,23 +3,25 @@
 Django admin configuration for BFG Common models.
 """
 
+from urllib.parse import urlparse
+
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.translation import gettext_lazy as _
-from .models import Workspace, User, Customer, Address, Settings, AuditLog, APIKey
+from .models import Workspace, User, Customer, Address, Settings, AuditLog, APIKey, resolve_workspace_public_frontend_base_url
 
 
 @admin.register(Workspace)
 class WorkspaceAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'domain', 'is_active', 'created_at')
+    list_display = ('name', 'slug', 'resolved_domain', 'is_active', 'created_at')
     list_filter = ('is_active', 'created_at')
-    search_fields = ('name', 'slug', 'domain', 'email')
+    search_fields = ('name', 'slug', 'email')
     prepopulated_fields = {'slug': ('name',)}
-    readonly_fields = ('created_at', 'updated_at')
+    readonly_fields = ('resolved_domain', 'created_at', 'updated_at')
     
     fieldsets = (
         (_('Basic Information'), {
-            'fields': ('name', 'slug', 'domain')
+            'fields': ('name', 'slug', 'resolved_domain')
         }),
         (_('Contact'), {
             'fields': ('email', 'phone')
@@ -32,6 +34,13 @@ class WorkspaceAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+    @admin.display(description='Domain')
+    def resolved_domain(self, obj):
+        try:
+            return urlparse(resolve_workspace_public_frontend_base_url(obj)).netloc
+        except Exception:
+            return ''
 
 
 @admin.register(User)

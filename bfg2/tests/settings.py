@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'bfg.support',
     'bfg.inbox',
     'bfg.marketing',
+    'bfg.platform',
 ] + _extension_apps()
 
 MIDDLEWARE = [

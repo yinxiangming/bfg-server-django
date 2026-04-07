@@ -5,6 +5,15 @@ Workspace serializers for Platform views.
 from rest_framework import serializers
 from django.apps import apps
 
+from bfg.common.models import normalize_hostname, resolve_workspace_public_frontend_base_url
+
+
+def _safe_workspace_domain(instance):
+    try:
+        return normalize_hostname(resolve_workspace_public_frontend_base_url(instance).split('://', 1)[-1])
+    except Exception:
+        return ""
+
 
 class WorkspaceListSerializer(serializers.Serializer):
     """Read-only workspace list item."""
@@ -42,9 +51,24 @@ class WorkspaceCreateSerializer(serializers.Serializer):
             name=validated_data.get('name'),
             slug=validated_data.get('slug'),
             owner_user=user,
-            domain=validated_data.get('domain', '')
+            region=region,
         )
-        
+
+        raw_domain = validated_data.get('domain', '')
+        hostname = normalize_hostname(raw_domain)
+        if hostname:
+            WorkspaceDomain = apps.get_model('common', 'WorkspaceDomain')
+            WorkspaceDomain.objects.update_or_create(
+                hostname=hostname,
+                defaults={
+                    'workspace': workspace,
+                    'kind': WorkspaceDomain.KIND_CUSTOM,
+                    'verification_status': WorkspaceDomain.VERIFICATION_VERIFIED,
+                    'ssl_status': WorkspaceDomain.SSL_NONE,
+                    'is_primary': True,
+                },
+            )
+
         # Attach region dynamically so the serializer can return it in .data if requested
         workspace.region = region
         return workspace
@@ -55,7 +79,7 @@ class WorkspaceCreateSerializer(serializers.Serializer):
             "uuid": str(instance.uuid) if hasattr(instance, "uuid") and instance.uuid else None,
             "name": instance.name,
             "slug": instance.slug,
-            "domain": getattr(instance, "domain", ""),
+            "domain": _safe_workspace_domain(instance),
             "region": getattr(instance, "region", "us"),
             "is_active": getattr(instance, "is_active", True),
         }
@@ -75,7 +99,24 @@ class WorkspaceDetailSerializer(serializers.Serializer):
     updated_at = serializers.DateTimeField(read_only=True)
 
     def update(self, instance, validated_data):
+        domain = validated_data.pop('domain', None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+
+        if domain is not None:
+            WorkspaceDomain = apps.get_model('common', 'WorkspaceDomain')
+            instance.domains.filter(kind=WorkspaceDomain.KIND_CUSTOM, is_primary=True).update(is_primary=False)
+            hostname = normalize_hostname(domain)
+            if hostname:
+                WorkspaceDomain.objects.update_or_create(
+                    hostname=hostname,
+                    defaults={
+                        'workspace': instance,
+                        'kind': WorkspaceDomain.KIND_CUSTOM,
+                        'verification_status': WorkspaceDomain.VERIFICATION_VERIFIED,
+                        'ssl_status': WorkspaceDomain.SSL_NONE,
+                        'is_primary': True,
+                    },
+                )
         return instance

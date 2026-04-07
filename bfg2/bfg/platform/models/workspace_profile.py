@@ -10,14 +10,8 @@ from django.utils import timezone
 class WorkspacePlatformProfile(models.Model):
     """
     Extended platform-level metadata for a Workspace.
-    Stores cluster assignment, API keys, custom domain, and suspension info.
+    Stores cluster assignment, API keys, and suspension info.
     """
-    SSL_STATUS_CHOICES = [
-        ("none", _("None")),
-        ("pending", _("Pending")),
-        ("active", _("Active")),
-        ("failed", _("Failed")),
-    ]
 
     workspace = models.OneToOneField(
         "common.Workspace",
@@ -52,12 +46,6 @@ class WorkspacePlatformProfile(models.Model):
     # Suspension / Deletion scheduling
     suspended_at = models.DateTimeField(_("Suspended At"), null=True, blank=True)
     scheduled_deletion_at = models.DateTimeField(_("Scheduled Deletion At"), null=True, blank=True)
-
-    # Custom domain
-    custom_domain = models.CharField(_("Custom Domain"), max_length=255, blank=True)
-    ssl_status = models.CharField(
-        _("SSL Status"), max_length=20, choices=SSL_STATUS_CHOICES, default="none"
-    )
 
     # Timestamps
     created_at = models.DateTimeField(_("Created At"), default=timezone.now)

@@ -249,7 +249,6 @@ class Command(BaseCommand):
             slug='demo',
             defaults={
                 'name': 'Demo Workspace',
-                'domain': 'localhost',
                 'email': 'demo@localhost',
                 'phone': '+64-21-555-0100',
                 'is_active': True,

@@ -4,12 +4,13 @@ BFG Common Module Services
 Workspace management service
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Any
 from django.db import transaction
+from django.apps import apps
 from django.utils.text import slugify
 from bfg.core.services import BaseService
 from bfg.common.exceptions import WorkspaceAlreadyExists
-from bfg.common.models import Workspace, StaffRole, StaffMember, User
+from bfg.common.models import Workspace, StaffRole, StaffMember, User, ensure_system_default_workspace_domain
 
 
 class WorkspaceService(BaseService):
@@ -51,12 +52,32 @@ class WorkspaceService(BaseService):
             raise WorkspaceAlreadyExists(f"Workspace with slug '{slug}' already exists")
         
         # Create workspace
+        region = kwargs.pop('region', None)
+        cluster = kwargs.pop('cluster', None)
+
         workspace = Workspace.objects.create(
             name=name,
             slug=slug,
             is_active=kwargs.get('is_active', True),
-            **{k: v for k, v in kwargs.items() if k != 'is_active'}
+            **{k: v for k, v in kwargs.items() if k not in {'is_active', 'domain'}}
         )
+
+        try:
+            WorkspacePlatformProfile = apps.get_model('platform', 'WorkspacePlatformProfile')
+            profile, _ = WorkspacePlatformProfile.objects.get_or_create(workspace=workspace)
+            update_fields = []
+            if region and profile.region != region:
+                profile.region = region
+                update_fields.append('region')
+            if cluster and profile.cluster_id != getattr(cluster, 'id', cluster):
+                profile.cluster = cluster
+                update_fields.append('cluster')
+            if update_fields:
+                update_fields.append('updated_at')
+                profile.save(update_fields=update_fields)
+            ensure_system_default_workspace_domain(workspace)
+        except LookupError:
+            pass
 
         # Emit workspace created event - modules will respond to initialize their data
         # This must happen before assigning owner, as owner assignment requires admin role

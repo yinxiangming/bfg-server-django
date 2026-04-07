@@ -10,7 +10,17 @@ Supports two modes:
 from django.conf import settings
 from django.apps import apps
 
+from bfg.common.models import resolve_workspace_public_frontend_base_url
 from bfg.platform.utils import is_embedded_mode
+
+
+def _safe_workspace_domain(workspace):
+    if not workspace:
+        return None
+    try:
+        return resolve_workspace_public_frontend_base_url(workspace).split('://', 1)[-1]
+    except Exception:
+        return None
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -49,7 +59,7 @@ def _get_user_workspaces_embedded(user) -> list:
             "remote_workspace_uuid": None,
             "name": ws.name,
             "slug": ws.slug,
-            "domain": ws.domain if ws.domain else None,
+            "domain": _safe_workspace_domain(ws),
             "is_active": ws.is_active,
             "role": m.role.code if m.role else "staff",
             "is_platform": ws.slug == platform_slug,
@@ -99,7 +109,7 @@ def _get_user_workspaces_standalone(user) -> list:
             "remote_workspace_uuid": str(profile.remote_workspace_uuid) if profile.remote_workspace_uuid else None,
             "name": ws.name if ws else None,
             "slug": ws.slug if ws else None,
-            "domain": ws.domain if ws else profile.custom_domain or None,
+            "domain": _safe_workspace_domain(ws),
             "is_active": ws.is_active if ws else not profile.is_suspended,
             "role": m.role,
             "is_platform": False,

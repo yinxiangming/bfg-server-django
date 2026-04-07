@@ -10,12 +10,15 @@ Supports embedded and standalone modes:
 """
 import requests as http_requests
 
+from urllib.parse import urlparse
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.apps import apps
 
+from bfg.common.models import resolve_workspace_public_frontend_base_url
 from bfg.platform.utils import is_embedded_mode
 
 
@@ -140,13 +143,15 @@ class AuthViewSet(viewsets.ViewSet):
 
         workspace_api_url = (
             profile.cluster.api_base_url
-            if profile and profile.cluster
-            else f'https://{workspace.domain}'
+            if profile and profile.cluster and profile.cluster.api_base_url
+            else None
         )
 
-        # Override workspace URL for local development if needed
-        if settings.DEBUG and ('localhost' in (workspace.domain or '') or not workspace.domain):
-            workspace_api_url = 'http://localhost:8000'
+        if not workspace_api_url:
+            return Response(
+                {'error': 'Workspace cluster API URL is not configured'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         try:
             resp = http_requests.post(
@@ -176,12 +181,7 @@ class AuthViewSet(viewsets.ViewSet):
             profile.remote_workspace_uuid = remote_uuid
             profile.save(update_fields=['remote_workspace_uuid'])
 
-        # Resolve workspace frontend URL from cluster, falling back to env/settings
-        workspace_frontend_url = (
-            profile.cluster.frontend_base_url
-            if profile and profile.cluster and getattr(profile.cluster, 'frontend_base_url', None)
-            else getattr(settings, 'WORKSPACE_FRONTEND_URL', '')
-        )
+        workspace_frontend_url = resolve_workspace_public_frontend_base_url(workspace)
 
         return Response({
             'workspace_token': resp_data.get('token'),
@@ -253,33 +253,17 @@ class AuthViewSet(viewsets.ViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Resolve target domain
-        target_domain = override_domain
-        if not target_domain:
-            profile = getattr(workspace, 'platform_profile', None)
-            custom = (str(profile.custom_domain).strip() if profile and profile.custom_domain else '')
-            if custom:
-                target_domain = custom
-            elif profile and profile.cluster and getattr(profile.cluster, 'frontend_base_url', None):
-                target_domain = (profile.cluster.frontend_base_url or '').strip()
-            else:
-                from django.conf import settings as django_settings
-                target_domain = (
-                    getattr(django_settings, 'WORKSPACE_FRONTEND_URL', '')
-                    or getattr(django_settings, 'FRONTEND_URL', '')
-                )
-                if isinstance(target_domain, str):
-                    target_domain = target_domain.strip()
-
-        if not target_domain:
+        try:
+            target_domain = resolve_workspace_public_frontend_base_url(
+                workspace,
+                override_domain=override_domain or None,
+            )
+        except ValueError as exc:
             return Response(
-                {'error': 'Cannot determine workspace frontend URL'},
+                {'error': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Ensure scheme
-        if not target_domain.startswith(('http://', 'https://')):
-            target_domain = f'https://{target_domain}'
         target_domain = target_domain.rstrip('/')
 
         # Create SSO code
@@ -379,8 +363,6 @@ class AuthViewSet(viewsets.ViewSet):
             platform_api_key = getattr(django_settings, 'PLATFORM_API_KEY', 'local-dev-key')
 
             workspace_api_url = profile.cluster.api_base_url
-            if django_settings.DEBUG and ('localhost' in (workspace.domain or '') or not workspace.domain):
-                workspace_api_url = 'http://localhost:8000'
 
             # Resolve role from PlatformMembership
             PlatformMembership = apps.get_model('platform', 'PlatformMembership')
@@ -411,11 +393,7 @@ class AuthViewSet(viewsets.ViewSet):
 
             resp_data = resp.json()
 
-            workspace_frontend_url = (
-                profile.cluster.frontend_base_url
-                if getattr(profile.cluster, 'frontend_base_url', None)
-                else getattr(django_settings, 'WORKSPACE_FRONTEND_URL', '')
-            )
+            workspace_frontend_url = resolve_workspace_public_frontend_base_url(workspace)
 
             return Response({
                 'access': resp_data.get('token'),

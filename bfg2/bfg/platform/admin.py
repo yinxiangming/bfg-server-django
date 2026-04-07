@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from django.contrib import admin
+from bfg.common.models import WorkspaceDomain
 from bfg.platform.models import (
     Cluster,
     FeatureDefinition,
@@ -36,15 +37,29 @@ class WorkspaceOperationAdmin(admin.ModelAdmin):
 class WorkspacePlatformProfileAdmin(admin.ModelAdmin):
     list_display = [
         "id",
+        "workspace",
         "remote_workspace_uuid",
         "region",
         "cluster",
-        "ssl_status",
         "suspended_at",
     ]
-    list_filter = ["region", "ssl_status"]
-    search_fields = ["custom_domain", "remote_workspace_uuid"]
+    list_filter = ["region"]
+    search_fields = ["workspace__name", "workspace__slug", "remote_workspace_uuid"]
     readonly_fields = ["platform_api_key", "agent_api_key"]
+
+
+@admin.register(WorkspaceDomain)
+class WorkspaceDomainAdmin(admin.ModelAdmin):
+    list_display = [
+        "hostname",
+        "workspace",
+        "kind",
+        "verification_status",
+        "ssl_status",
+        "is_primary",
+    ]
+    list_filter = ["kind", "verification_status", "ssl_status", "is_primary"]
+    search_fields = ["hostname", "workspace__name", "workspace__slug"]
 
 
 @admin.register(WorkspaceSSOConfig)

@@ -3,46 +3,46 @@
 Django signals for BFG Common module.
 """
 
-from django.db.models.signals import post_save, post_delete, pre_save
+from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.contrib.contenttypes.models import ContentType
-from .models import AuditLog, Workspace, Customer, User
+from .models import (
+    AuditLog,
+    Workspace,
+    WorkspaceDomain,
+    Customer,
+    User,
+    Settings,
+    ensure_system_default_workspace_domain,
+)
 from bfg.core.events import global_dispatcher
 
 import logging
 logger = logging.getLogger(__name__)
 
-# Store old domain before save to invalidate old cache key
-_workspace_old_domain = {}
-
-
-@receiver(pre_save, sender=Workspace)
-def store_workspace_old_domain(sender, instance, **kwargs):
-    """Store old domain before save to invalidate old cache key."""
-    if instance.pk:
-        try:
-            old_instance = Workspace.objects.get(pk=instance.pk)
-            _workspace_old_domain[instance.pk] = old_instance.domain
-        except Workspace.DoesNotExist:
-            pass
-
 
 @receiver(post_save, sender=Workspace)
 def create_workspace_settings(sender, instance, created, **kwargs):
-    """Create Settings object when a new Workspace is created."""
+    """Create Settings object when a new Workspace is created and keep routing cache fresh."""
     if created:
-        from .models import Settings
         Settings.objects.get_or_create(workspace=instance)
-    
-    # Invalidate workspace cache when domain or is_active changes
+
+    ensure_system_default_workspace_domain(instance)
+
     from .middleware import invalidate_workspace_cache
     invalidate_workspace_cache(instance)
-    
-    # Also invalidate old domain cache if domain changed
-    old_domain = _workspace_old_domain.pop(instance.pk, None)
-    if old_domain and old_domain != instance.domain:
-        from django.core.cache import cache
-        cache.delete(f'workspace:domain:{old_domain}')
+
+
+@receiver(post_save, sender=WorkspaceDomain)
+def invalidate_workspace_cache_on_domain_save(sender, instance, **kwargs):
+    from .middleware import invalidate_workspace_cache
+    invalidate_workspace_cache(instance.workspace)
+
+
+@receiver(post_delete, sender=WorkspaceDomain)
+def invalidate_workspace_cache_on_domain_delete(sender, instance, **kwargs):
+    from .middleware import invalidate_workspace_cache
+    invalidate_workspace_cache(instance.workspace)
 
 
 @receiver(post_delete, sender=Workspace)

@@ -101,11 +101,11 @@ class Migration(migrations.Migration):
                 "indexes": [
                     models.Index(
                         fields=["workspace", "user"],
-                        name="platform_pl_workspa_idx",
+                        name="platform_pl_workspa_373cb3_idx",
                     ),
                     models.Index(
                         fields=["expires_at"],
-                        name="platform_pl_expires_idx",
+                        name="platform_pl_expires_525065_idx",
                     ),
                 ],
             },

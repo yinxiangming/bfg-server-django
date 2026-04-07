@@ -8,6 +8,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.apps import apps
 
+from bfg.common.models import resolve_workspace_public_frontend_base_url
 from bfg.platform.services.feature_service import sync_plan_features
 
 
@@ -57,7 +58,12 @@ class SubscriptionService:
         if not price_id:
             raise ValueError(f"No Stripe price ID configured for plan {plan.id} ({billing_interval})")
 
-        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
+        frontend_url = getattr(settings, "FRONTEND_URL", "")
+        if not frontend_url:
+            try:
+                frontend_url = resolve_workspace_public_frontend_base_url(workspace)
+            except Exception:
+                frontend_url = "http://localhost:3000"
         session = stripe.checkout.Session.create(
             customer_email=user.email,
             mode="subscription",

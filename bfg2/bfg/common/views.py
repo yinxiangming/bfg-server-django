@@ -837,10 +837,11 @@ class SettingsViewSet(viewsets.ModelViewSet):
         except (ImportError, AttributeError):
             pass
 
-        # workspace_domain: try workspace.domain first, may be overridden by Site.domain below
-        ws_domain = (workspace.domain or '').split(':')[0].strip()
-        if ws_domain:
-            payload['workspace_domain'] = ws_domain
+        # workspace_domain: derive from WorkspaceDomain only
+        try:
+            payload['workspace_domain'] = urlparse(resolve_workspace_public_frontend_base_url(workspace)).netloc
+        except Exception:
+            pass
 
         # Prefer bfg.web Site for site_name (Site title), then Settings.
         # When multiple Sites exist (e.g. seed "localhost" + production domain), match request host first;
@@ -857,7 +858,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
                 site = sites_qs.order_by('-is_default', '-id').first()
             if site:
                 site_domain = (getattr(site, 'domain', '') or '').split(':')[0].strip()
-                if site_domain:
+                if site_domain and not payload.get('workspace_domain'):
                     payload['workspace_domain'] = site_domain
                 site_display_name = (getattr(site, 'name', None) or getattr(site, 'site_title', None) or '').strip()
                 if site_display_name:

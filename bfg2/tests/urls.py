@@ -33,6 +33,9 @@ urlpatterns = [
         
         # Inbox module
         path('inbox/', include('bfg.inbox.urls')),
+
+        # Platform module
+        path('platform/', include('bfg.platform.urls')),
     ])),
 ]
 

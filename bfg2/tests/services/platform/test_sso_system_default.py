@@ -34,4 +34,4 @@ def test_sso_start_uses_system_default_when_no_custom_primary(db, settings):
     )
 
     assert response.status_code == 200
-    assert response.data["redirect_url"].startswith("https://sd-workspace.shops.example.test/admin/sso?code=")
+    assert response.data["redirect_url"].startswith("https://sd-workspace.shops.example.test/auth/sso?code=")

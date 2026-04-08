@@ -32,7 +32,7 @@ def test_sso_start_uses_workspace_domain_resolver(db):
     )
 
     assert response.status_code == 200
-    assert response.data["redirect_url"].startswith("https://portal.acme.test/admin/sso?code=")
+    assert response.data["redirect_url"].startswith("https://portal.acme.test/auth/sso?code=")
 
 
 

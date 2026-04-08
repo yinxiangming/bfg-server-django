@@ -28,7 +28,14 @@ class Workspace(models.Model):
         help_text=_("Globally unique identifier for cross-instance workspace identification"),
     )
     slug = models.SlugField(_("Slug"), max_length=100, unique=True)
-    
+    domain = models.CharField(
+        _("Domain"),
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=_("Legacy display field; routing uses WorkspaceDomain rows."),
+    )
+
     # Contact
     email = models.EmailField(_("Email"), blank=True)
     phone = models.CharField(_("Phone"), max_length=50, blank=True)

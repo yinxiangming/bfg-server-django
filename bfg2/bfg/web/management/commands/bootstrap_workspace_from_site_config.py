@@ -86,6 +86,10 @@ class Command(BaseCommand):
                     "No superuser found; create one or pass --user=<id> for workspace owner / page author."
                 )
 
+        site_domain = ""
+        if isinstance(config.get("site"), dict):
+            site_domain = (config["site"].get("domain") or "").strip()[:255]
+
         workspace = Workspace.objects.filter(slug=slug).first()
         if workspace:
             self.stdout.write(self.style.NOTICE(f"Using existing workspace: {slug} (id={workspace.id})"))
@@ -94,7 +98,12 @@ class Command(BaseCommand):
                 raise CommandError("workspace_bootstrap.name is required when creating a new workspace")
             self.stdout.write(self.style.NOTICE(f"Creating workspace: {name} ({slug})"))
             ws_service = WorkspaceService(user=owner)
-            workspace = ws_service.create_workspace(name=name, slug=slug, owner_user=owner)
+            workspace = ws_service.create_workspace(
+                name=name,
+                slug=slug,
+                owner_user=owner,
+                domain=site_domain or "",
+            )
             self.stdout.write(self.style.SUCCESS(f"Created workspace id={workspace.id}"))
 
         user_for_pages = first_staff_user_for_workspace(workspace) or owner

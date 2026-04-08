@@ -10,7 +10,14 @@ from django.apps import apps
 from django.utils.text import slugify
 from bfg.core.services import BaseService
 from bfg.common.exceptions import WorkspaceAlreadyExists
-from bfg.common.models import Workspace, StaffRole, StaffMember, User, ensure_system_default_workspace_domain
+from bfg.common.models import (
+    Workspace,
+    StaffRole,
+    StaffMember,
+    User,
+    ensure_system_default_workspace_domain,
+    upsert_custom_workspace_domain,
+)
 
 
 class WorkspaceService(BaseService):
@@ -87,9 +94,12 @@ class WorkspaceService(BaseService):
             if update_fields:
                 update_fields.append('updated_at')
                 profile.save(update_fields=update_fields)
-            ensure_system_default_workspace_domain(workspace)
         except LookupError:
             pass
+
+        ensure_system_default_workspace_domain(workspace)
+        if domain_val:
+            upsert_custom_workspace_domain(workspace, domain_val, is_primary=True)
 
         # Emit workspace created event - modules will respond to initialize their data
         # This must happen before assigning owner, as owner assignment requires admin role

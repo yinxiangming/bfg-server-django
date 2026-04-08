@@ -12,7 +12,13 @@ from django.core.management.base import BaseCommand
 from django.core.management import call_command
 from django.contrib.auth import get_user_model
 
-from bfg.common.models import Workspace, StaffRole, StaffMember
+from bfg.common.models import (
+    Workspace,
+    StaffRole,
+    StaffMember,
+    ensure_system_default_workspace_domain,
+    upsert_custom_workspace_domain,
+)
 from bfg.common.utils import create_staff_roles
 from bfg.core.events import global_dispatcher
 from bfg.web.services import SiteConfigService
@@ -122,11 +128,12 @@ class Command(BaseCommand):
             slug=workspace_slug,
             defaults={
                 'name': workspace_name,
-                'domain': 'localhost',
                 'is_active': True,
             },
         )
         if ws_created:
+            ensure_system_default_workspace_domain(workspace)
+            upsert_custom_workspace_domain(workspace, 'localhost', is_primary=True)
             self.stdout.write(self.style.SUCCESS(f'Created workspace: {workspace.name} (slug={workspace_slug})'))
             global_dispatcher.dispatch('workspace.created', {'data': {'workspace': workspace}})
         else:

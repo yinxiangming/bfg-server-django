@@ -206,13 +206,11 @@ env_upsert "$SERVER_ENV" "BFG_INSTANCE_TYPE" "workspace"
 
 if [[ "$MODE_LABEL" == "embedded" ]]; then
   env_upsert "$SERVER_ENV" "LOCAL_APPS" ""
-  env_upsert "$SERVER_ENV" "BFG_EXTENSION_APPS" "bfg.platform"
   env_upsert "$SERVER_ENV" "PLATFORM_EMBEDDED" "True"
   env_upsert "$SERVER_ENV" "PLATFORM_WORKSPACE_SLUG" "admin"
   env_upsert "$SERVER_ENV" "PLATFORM_API_KEY" "$PLATFORM_API_KEY_VAL"
 else
   env_upsert "$SERVER_ENV" "LOCAL_APPS" ""
-  env_upsert "$SERVER_ENV" "BFG_EXTENSION_APPS" ""
   env_upsert "$SERVER_ENV" "PLATFORM_EMBEDDED" "False"
   env_upsert "$SERVER_ENV" "PLATFORM_WORKSPACE_SLUG" ""
 fi

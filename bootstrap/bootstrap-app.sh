@@ -380,7 +380,6 @@ env_upsert "$SERVER_ENV" "FRONTEND_URL" "http://127.0.0.1:${CLIENT_PORT}"
 env_upsert "$SERVER_ENV" "SITE_NAME" "$APP_TITLE"
 env_upsert "$SERVER_ENV" "BFG_INSTANCE_TYPE" "workspace"
 env_upsert "$SERVER_ENV" "LOCAL_APPS" "$APP_SLUG"
-env_upsert "$SERVER_ENV" "BFG_EXTENSION_APPS" "apps.${APP_SLUG}"
 env_upsert "$SERVER_ENV" "CELERY_BROKER_URL" "$REDIS_URL_EFFECTIVE"
 env_upsert "$SERVER_ENV" "CELERY_RESULT_BACKEND" "$REDIS_URL_EFFECTIVE"
 env_upsert "$SERVER_ENV" "EMAIL_BACKEND" "django.core.mail.backends.smtp.EmailBackend"
@@ -488,7 +487,7 @@ tasks = {
       "command": ".venv/bin/python manage.py runserver 0.0.0.0:" + sp,
       "options": {
         "cwd": "${workspaceFolder}/src/server",
-        "env": {"LOCAL_APPS": slug, "BFG_EXTENSION_APPS": f"apps.{slug}"},
+        "env": {"LOCAL_APPS": slug},
       },
       "isBackground": True,
       "problemMatcher": [],
@@ -499,7 +498,7 @@ tasks = {
       "command": ".venv/bin/celery -A config worker -l info",
       "options": {
         "cwd": "${workspaceFolder}/src/server",
-        "env": {"LOCAL_APPS": slug, "BFG_EXTENSION_APPS": f"apps.{slug}"},
+        "env": {"LOCAL_APPS": slug},
       },
       "isBackground": True,
       "problemMatcher": [],

@@ -9,7 +9,13 @@ import json
 from pathlib import Path
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
-from bfg.common.models import Workspace, StaffRole, StaffMember
+from bfg.common.models import (
+    Workspace,
+    StaffRole,
+    StaffMember,
+    ensure_system_default_workspace_domain,
+    upsert_custom_workspace_domain,
+)
 from bfg.common.utils import get_admin_password_from_env
 from bfg.core.events import global_dispatcher
 from bfg.web.services import SiteConfigService
@@ -54,11 +60,12 @@ class Command(BaseCommand):
             slug='web',
             defaults={
                 'name': 'Web',
-                'domain': 'localhost:3001',
                 'is_active': True,
             },
         )
         if ws_created:
+            ensure_system_default_workspace_domain(workspace)
+            upsert_custom_workspace_domain(workspace, 'localhost:3001', is_primary=True)
             self.stdout.write(self.style.SUCCESS(f'Created workspace: {workspace.name} (slug=web)'))
             global_dispatcher.dispatch('workspace.created', {'data': {'workspace': workspace}})
         else:

@@ -10,6 +10,7 @@ server/
 │   └── platform -> ../../bfg2/bfg-platform/platform  # Symlink: SaaS platform management app
 ├── bfg2/                        # BFG2 Framework (git submodule)
 │   ├── bfg/                     # Core modules
+│   │   ├── docs/                # English agent docs (deployment, architecture, API reference)
 │   │   ├── core/                # Agent API, permissions, middleware, PDF
 │   │   ├── common/              # Workspace, User, Customer, Address, APIKey, Settings
 │   │   ├── web/                 # CMS: pages, posts, media, sites, newsletter, bookings

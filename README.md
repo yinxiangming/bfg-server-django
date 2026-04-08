@@ -16,16 +16,34 @@ Django backend for the BFG open-source e-commerce and SaaS framework. Ships the 
 
 ## Quick Start
 
-### Prerequisites
+### Option A: Interactive bootstrap installer (recommended)
+
+If you want a guided setup that asks questions and configures a single BFG instance for you, use:
+
+```bash
+bash <(curl -fsSL "https://raw.githubusercontent.com/yinxiangming/bfg-server-django/main/bootstrap/install.sh")
+```
+
+This installer configures the **current BFG server repo** and will guide you through:
+
+- setup mode (`single workspace` or `embedded platform`)
+- site / instance name
+- database choice (SQLite / MySQL / PostgreSQL)
+- optional Docker-backed Redis / Mailpit services
+- dependency installation
+- migrations and initial setup
+
+> Do **not** use `curl ... | bash` for this installer. It is interactive and expects terminal input.
+
+### Option B: Manual setup
 
 - Python 3.11+
 - MySQL 8+ (or PostgreSQL)
 - Redis (for Celery)
 
-### Setup
+### Prerequisites
 
-```bash
-# 1. Clone and enter project
+### Setup
 git clone https://github.com/yinxiangming/bfg-framework.git
 cd bfg-framework/src/server
 
@@ -52,6 +70,11 @@ python manage.py createsuperuser
 # 8. Start server
 python manage.py runserver 0.0.0.0:8000
 ```
+
+See [bootstrap/docs/README.md](./bootstrap/docs/README.md) for more details on:
+
+- interactive bootstrap of the current server repo
+- app scaffolding based on BFG templates
 
 API docs: http://localhost:8000/api/docs/
 

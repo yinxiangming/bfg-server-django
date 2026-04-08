@@ -207,7 +207,7 @@ class AuthViewSet(viewsets.ViewSet):
         target workspace domain.
 
         Body: { "workspace_id": "slug-or-id", "next": "/admin", "domain": "" }
-        Returns: { "redirect_url": "https://domain/admin/sso?code=xxx" }
+        Returns: { "redirect_url": "https://domain/auth/sso?code=xxx" }
         """
         workspace_id = request.data.get('workspace_id')
         if not workspace_id:
@@ -280,7 +280,7 @@ class AuthViewSet(viewsets.ViewSet):
         )
         sso_code.save()
 
-        redirect_url = f'{target_domain}/admin/sso?code={sso_code.code}'
+        redirect_url = f'{target_domain}/auth/sso?code={sso_code.code}'
         if next_url and next_url != '/admin':
             import urllib.parse
             redirect_url += f'&next={urllib.parse.quote(next_url)}'

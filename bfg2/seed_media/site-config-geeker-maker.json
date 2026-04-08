@@ -1,0 +1,506 @@
+{
+  "version": "1.0",
+  "workspace_bootstrap": {
+    "name": "Geeker NZ",
+    "slug": "geeker",
+    "note": "Create this workspace first, then import this file into it. Unknown keys are ignored by load_site_config."
+  },
+  "site": {
+    "name": "Geeker NZ",
+    "domain": "geeker.co.nz",
+    "site_title": "Geeker — Arduino, Raspberry Pi & Maker Electronics (NZ)",
+    "site_description": "Shop Arduino boards, Raspberry Pi, sensors, HATs, kits and components. Fast shipping across New Zealand for hobbyists, students and professionals.",
+    "footer_copyright": "© 2026 Geeker NZ. All rights reserved.",
+    "default_language": "en",
+    "languages": [
+      "en",
+      "zh-hans"
+    ]
+  },
+  "theme": {
+    "code": "store",
+    "name": "Geeker Maker Store",
+    "template_path": "themes/store",
+    "primary_color": "#00979D",
+    "secondary_color": "#263238"
+  },
+  "categories": [
+    {
+      "name": "Arduino",
+      "slug": "arduino",
+      "parent_slug": null,
+      "order": 1,
+      "icon": "tabler-cpu",
+      "description": "Arduino-compatible boards, shields and accessories.",
+      "language": "en"
+    },
+    {
+      "name": "Arduino boards",
+      "slug": "arduino-boards",
+      "parent_slug": "arduino",
+      "order": 1,
+      "icon": "tabler-circuit-board",
+      "description": "Uno, Nano, Mega and compatible boards.",
+      "language": "en"
+    },
+    {
+      "name": "Shields & modules",
+      "slug": "arduino-shields",
+      "parent_slug": "arduino",
+      "order": 2,
+      "icon": "tabler-stack-2",
+      "description": "Shields and stackable modules.",
+      "language": "en"
+    },
+    {
+      "name": "Raspberry Pi",
+      "slug": "raspberry-pi",
+      "parent_slug": null,
+      "order": 2,
+      "icon": "tabler-device-desktop",
+      "description": "Raspberry Pi boards and official accessories.",
+      "language": "en"
+    },
+    {
+      "name": "Pi boards",
+      "slug": "raspberry-pi-boards",
+      "parent_slug": "raspberry-pi",
+      "order": 1,
+      "icon": "tabler-device-desktop",
+      "description": "Raspberry Pi 4, 5, Zero and kits.",
+      "language": "en"
+    },
+    {
+      "name": "Pi accessories",
+      "slug": "raspberry-pi-accessories",
+      "parent_slug": "raspberry-pi",
+      "order": 2,
+      "icon": "tabler-plug",
+      "description": "Cases, power, HATs and cables.",
+      "language": "en"
+    },
+    {
+      "name": "Sensors & modules",
+      "slug": "sensors",
+      "parent_slug": null,
+      "order": 3,
+      "icon": "tabler-antenna",
+      "description": "Sensors, breakout boards and modules.",
+      "language": "en"
+    },
+    {
+      "name": "Environmental",
+      "slug": "sensors-environmental",
+      "parent_slug": "sensors",
+      "order": 1,
+      "icon": "tabler-temperature",
+      "description": "Temperature, humidity, gas and light.",
+      "language": "en"
+    },
+    {
+      "name": "Motion & distance",
+      "slug": "sensors-motion",
+      "parent_slug": "sensors",
+      "order": 2,
+      "icon": "tabler-radar",
+      "description": "PIR, ultrasonic, IMU and encoders.",
+      "language": "en"
+    },
+    {
+      "name": "Kits & bundles",
+      "slug": "kits",
+      "parent_slug": null,
+      "order": 4,
+      "icon": "tabler-packages",
+      "description": "Starter kits and curated bundles.",
+      "language": "en"
+    },
+    {
+      "name": "Starter kits",
+      "slug": "kits-starter",
+      "parent_slug": "kits",
+      "order": 1,
+      "icon": "tabler-book",
+      "description": "Beginner-friendly kits.",
+      "language": "en"
+    },
+    {
+      "name": "Project kits",
+      "slug": "kits-project",
+      "parent_slug": "kits",
+      "order": 2,
+      "icon": "tabler-bulb",
+      "description": "Themed project and classroom packs.",
+      "language": "en"
+    },
+    {
+      "name": "Components",
+      "slug": "components",
+      "parent_slug": null,
+      "order": 5,
+      "icon": "tabler-components",
+      "description": "Passives, connectors, LEDs and prototyping parts.",
+      "language": "en"
+    },
+    {
+      "name": "Passives",
+      "slug": "components-passives",
+      "parent_slug": "components",
+      "order": 1,
+      "icon": "tabler-resistor",
+      "description": "Resistors, capacitors and inductors.",
+      "language": "en"
+    },
+    {
+      "name": "Connectors & wire",
+      "slug": "components-connectors",
+      "parent_slug": "components",
+      "order": 2,
+      "icon": "tabler-plug-connected",
+      "description": "Headers, jumper wire and terminals.",
+      "language": "en"
+    }
+  ],
+  "pages": [
+    {
+      "slug": "home",
+      "title": "Home",
+      "language": "en",
+      "status": "published",
+      "template": "default",
+      "order": 10,
+      "meta_title": "Geeker — Arduino, Raspberry Pi & Maker Electronics NZ",
+      "meta_description": "Arduino, Raspberry Pi, sensors, modules and maker kits shipped from New Zealand.",
+      "blocks": [
+        {
+          "id": "hero-carousel",
+          "type": "hero_carousel_v1",
+          "settings": {
+            "autoPlay": true,
+            "interval": 5000,
+            "showArrows": true,
+            "showDots": true,
+            "height": "500px"
+          },
+          "data": {
+            "source": "promo",
+            "slides": []
+          }
+        },
+        {
+          "id": "content-section",
+          "type": "section_v1",
+          "settings": {},
+          "data": {
+            "width": "container",
+            "children": [
+              {
+                "id": "category-grid",
+                "type": "category_grid_v1",
+                "settings": {
+                  "columns": 4,
+                  "limit": 8,
+                  "showCount": true,
+                  "imageHeight": "180px"
+                },
+                "data": {
+                  "source": "promo"
+                }
+              },
+              {
+                "id": "banner-grid",
+                "type": "banner_grid_v1",
+                "settings": {
+                  "columns": 3,
+                  "imageHeight": "240px",
+                  "showOverlay": true
+                },
+                "data": {
+                  "source": "promo",
+                  "banners": []
+                }
+              },
+              {
+                "id": "featured-products",
+                "type": "product_grid_v1",
+                "settings": {
+                  "columns": 4,
+                  "limit": 8,
+                  "showTitle": true,
+                  "altBackground": true
+                },
+                "data": {
+                  "source": "auto",
+                  "productType": "featured",
+                  "title": {
+                    "en": "Featured Maker Picks",
+                    "zh-hans": "精选创客好物"
+                  },
+                  "emptyMessage": {
+                    "en": "No featured products yet — add some in Admin.",
+                    "zh-hans": "暂无精选商品，请在后台添加。"
+                  }
+                }
+              },
+              {
+                "id": "new-products",
+                "type": "product_grid_v1",
+                "settings": {
+                  "columns": 4,
+                  "limit": 4,
+                  "showTitle": true,
+                  "altBackground": false
+                },
+                "data": {
+                  "source": "auto",
+                  "productType": "new",
+                  "title": {
+                    "en": "New Arrivals",
+                    "zh-hans": "新品上架"
+                  },
+                  "emptyMessage": {
+                    "en": "No new products yet.",
+                    "zh-hans": "暂无新品。"
+                  }
+                }
+              },
+              {
+                "id": "bestseller-products",
+                "type": "product_grid_v1",
+                "settings": {
+                  "columns": 4,
+                  "limit": 4,
+                  "showTitle": true,
+                  "altBackground": true
+                },
+                "data": {
+                  "source": "auto",
+                  "productType": "bestseller",
+                  "title": {
+                    "en": "Bestsellers",
+                    "zh-hans": "畅销榜"
+                  },
+                  "emptyMessage": {
+                    "en": "No bestsellers yet.",
+                    "zh-hans": "暂无畅销商品。"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "slug": "about",
+      "title": "About Us",
+      "language": "en",
+      "status": "published",
+      "order": 20,
+      "meta_title": "About Geeker — Maker electronics in New Zealand",
+      "meta_description": "We supply Arduino, Raspberry Pi and components to makers, schools and engineers across NZ.",
+      "blocks": [
+        {
+          "id": "about-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>About Geeker</h1><p>Geeker is a New Zealand–focused maker electronics store. We stock Arduino-compatible boards, Raspberry Pi single-board computers, sensors, HATs, prototyping parts and project kits for hobbyists, educators and professionals.</p><p>Whether you are building a home automation project, teaching STEM in the classroom, or prototyping the next IoT product, we aim to get reliable parts to you quickly with clear support.</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "contact",
+      "title": "Contact Us",
+      "language": "en",
+      "status": "published",
+      "order": 21,
+      "meta_title": "Contact — Geeker NZ",
+      "meta_description": "Reach the Geeker team for orders, stock and project questions.",
+      "blocks": [
+        {
+          "id": "contact-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Contact Us</h1><p>Questions about stock, compatibility or your order? We are happy to help.</p><p><strong>Email:</strong> support@geeker.co.nz</p><p><strong>Hours:</strong> Monday – Friday, 9:00 – 17:00 NZST</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "delivery",
+      "title": "Delivery",
+      "language": "en",
+      "status": "published",
+      "order": 30,
+      "meta_title": "Delivery — Geeker NZ",
+      "meta_description": "Shipping and delivery information for orders within New Zealand.",
+      "blocks": [
+        {
+          "id": "delivery-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Delivery</h1><p>We ship across New Zealand. Typical options:</p><ul><li><strong>Standard:</strong> 2–5 business days (urban)</li><li><strong>Rural:</strong> allow extra time per carrier schedules</li><li><strong>Tracking:</strong> provided by email when your order ships</li></ul><p>Cut-off times and free-shipping thresholds may apply — see checkout for current details.</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "legal-notice",
+      "title": "Legal Notice",
+      "language": "en",
+      "status": "published",
+      "order": 31,
+      "blocks": [
+        {
+          "id": "legal-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Legal Notice</h1><p>This page provides legal and company information for Geeker NZ. For formal inquiries, contact legal@geeker.co.nz.</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "terms",
+      "title": "Terms and Conditions",
+      "language": "en",
+      "status": "published",
+      "order": 32,
+      "blocks": [
+        {
+          "id": "terms-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Terms and Conditions</h1><p>By using this website and placing orders you agree to our terms of sale and use. Please read them before purchasing. Geeker NZ may update these terms; continued use constitutes acceptance.</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "secure-payment",
+      "title": "Secure Payment",
+      "language": "en",
+      "status": "published",
+      "order": 33,
+      "blocks": [
+        {
+          "id": "payment-content",
+          "type": "text_block_v1",
+          "settings": {
+            "align": "left",
+            "maxWidth": "800px"
+          },
+          "data": {
+            "content": {
+              "en": "<h1>Secure Payment</h1><p>Payments are processed securely. We do not store your full card details on our servers. Industry-standard encryption is used for checkout.</p>"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "menus": [
+    {
+      "slug": "main-menu",
+      "name": "Main Menu",
+      "location": "header",
+      "language": "en",
+      "items": [
+        {
+          "title": "Arduino",
+          "url": "/category/arduino",
+          "order": 1
+        },
+        {
+          "title": "Raspberry Pi",
+          "url": "/category/raspberry-pi",
+          "order": 2
+        },
+        {
+          "title": "Sensors & modules",
+          "url": "/category/sensors",
+          "order": 3
+        },
+        {
+          "title": "Kits & bundles",
+          "url": "/category/kits",
+          "order": 4
+        },
+        {
+          "title": "Components",
+          "url": "/category/components",
+          "order": 5
+        },
+        {
+          "title": "Contact",
+          "page_slug": "contact",
+          "order": 6
+        }
+      ]
+    },
+    {
+      "slug": "footer-menu",
+      "name": "Our company",
+      "location": "footer",
+      "language": "en",
+      "items": [
+        {
+          "title": "Delivery",
+          "page_slug": "delivery",
+          "order": 1
+        },
+        {
+          "title": "Legal notice",
+          "page_slug": "legal-notice",
+          "order": 2
+        },
+        {
+          "title": "Terms",
+          "page_slug": "terms",
+          "order": 3
+        },
+        {
+          "title": "About us",
+          "page_slug": "about",
+          "order": 4
+        },
+        {
+          "title": "Secure payment",
+          "page_slug": "secure-payment",
+          "order": 5
+        }
+      ]
+    }
+  ]
+}

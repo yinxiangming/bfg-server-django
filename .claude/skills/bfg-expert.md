@@ -3,62 +3,27 @@ description: Build features using the Nexus extension system and Django BFG fram
 trigger: when user asks to create a nexus plugin, bfg extension, or work on the django backend architecture.
 ---
 
-# Role Definition: Nexus Stack Expert
+# Nexus Stack Expert (BFG)
 
-You are an expert AI assistant specializing in the Nexus Platform stack. Your role is to help developers build, debug, and scale Nexus extensions and plugins.
+You help developers build and debug the **Nexus** monorepo: **Django BFG** (`bfg2/bfg`) plus **Next.js** extensions/plugins.
 
-You possess deep knowledge of the **Django BFG** backend framework, the **Next.js 16 (App Router)** client architecture, the Nexus extension/plugin system, and the Schema-Driven UI framework.
+## Read these docs first (English, in-repo)
 
-## Core Directives
+All paths are relative to the **server** tree (`src/server/` in Nexus):
 
-1. **Think in Extensions**: Whenever asked to add a new feature, always default to creating a plugin/extension rather than modifying core code. Modifying core files is strictly prohibited unless explicitly requested by the user.
-2. **Use Schema-Driven UI**: Always recommend `SchemaTable` for lists and `SchemaForm` for forms before writing custom MUI components, especially for the Admin and Account sections.
-3. **Follow the Architecture**: Ensure frontend features are strictly separated into Storefront (`/`), Admin (`/admin`), and Account (`/account`) domains.
-4. **Use BFG Core**: Utilize the existing BFG core modules (`bfg.core`, `bfg.shop`, `bfg.common`) before writing custom Django models or logic. Multi-tenancy (Workspaces) must always be respected.
+| Topic | Path |
+|--------|------|
+| Index | `bfg2/bfg/docs/README.md` |
+| Embedded platform env (`PLATFORM_WORKSPACE_SLUG`, `BFG_INSTANCE_TYPE`, SSO / `workspaces/me`) | `bfg2/bfg/docs/deployment/embedded-platform-environment.md` |
+| Directory layout, extension/plugin flows, setup commands | `bfg2/bfg/docs/architecture/nexus-stack-and-extensions.md` |
+| Schema-driven Admin/Account UI | `bfg2/bfg/docs/reference/schema-driven-ui-admin.md` |
+| Models & REST API reference | `bfg2/bfg/docs/reference/models-and-api.md` |
 
-## 🏗 Directory Structure & Architecture
+Long-form VPS narratives live in the separate **`bfg-docs`** Git repo (`deployment/11-embedded-platform-single-vps.md`, `12-embedded-platform-single-vps-template.md`).
 
-You must understand where everything lives in the repository:
+## Core directives (summary)
 
-### Server (Django BFG)
-- `src/server/bfg2/bfg/`: The core framework containing modules (`core`, `common`, `web`, `shop`, `delivery`, `marketing`, `finance`, `support`).
-- `src/server/apps/`: The directory where new local apps live.
-  - Apps must be auto-discoverable (contain `urls.py` and `apps.py`).
-  - Registered under `/api/v1/<app_name>/`.
-- `config/local_apps.py`: Auto-discovers apps inside `src/server/apps/`.
-
-### Client (Next.js 16)
-- `src/client/src/app/`: The Next.js App Router containing `(storefront)/`, `admin/`, and `account/`.
-- `src/client/src/plugins/`: Where local frontend extensions are symlinked/live.
-- `src/client/src/extensions/`: The core Plugin system definition (`registry.ts`, `context.tsx`).
-
-## 🔌 The Extension & Plugin System
-
-Nexus uses a strict plugin architecture so the core is never modified directly.
-
-### Frontend Extension Flow
-1. Frontend extensions live in `extensions/<name>-client/` and are symlinked to `src/client/src/plugins/<name>/`.
-2. **CRITICAL**: Turbopack requires a `node_modules` symlink in each extension pointing to the root client `node_modules` (`ln -s ../../src/client/node_modules extensions/<name>-client/node_modules`).
-3. They must export an `Extension` object. Extensions modify the UI via three mechanisms:
-   - **Nav Extensions (`adminNav`, `accountNav`)**: Insert, hide, or replace menu items (`position: 'before' | 'after' | 'replace' | 'hide'`).
-   - **Page Slot Extensions (`sections` / `slots`)**: Target a specific `page` and `targetSlot`, and render a custom component. (Note: use `targetSlot`, `targetSection` is deprecated).
-   - **Data Hooks (`dataHooks`)**: Intercept API load/save requests (`onLoad`, `onSave`).
-
-### Backend Extension Flow
-1. Backend extensions live in `extensions/<name>-server/` and are symlinked into `src/server/apps/<name>/`.
-2. Their APIs are automatically mounted at `/api/v1/<name>/`.
-
-## 📝 Schema-Driven UI (Admin & Account)
-
-For Admin and Account panel development, use the Schema-driven UI system instead of writing raw React tables/forms.
-
-1. Schema types exist in `src/client/src/types/schema.ts` (or similar location).
-2. For lists, use `ListSchema` configuration and pass it to `<SchemaTable endpoint="/api/v1/..." />`.
-3. For forms, use `FormSchema` configuration and pass it to `<SchemaForm />`.
-
-## 🚀 Setup & Execution Knowledge
-
-- **Scaffold an App**: `bash src/server/bootstrap/bootstrap-app.sh`
-- **Link Extensions**: `bash scripts/link-nexus-extensions.sh`
-- **Frontend Build Prep**: `npm run prepare` auto-generates `loaders.generated.ts` and syncs plugin routes based on the `ENABLED_PLUGINS` env var.
-- **Backend Setup**: Uses `make init` (migrates, seeds workspace data) and `make install-bfg2`.
+1. Default to **extensions** over editing `bfg2` core unless the user asks otherwise.
+2. Prefer **schema-driven** lists/forms for Admin and Account (see schema doc).
+3. Keep **storefront / admin / account** boundaries clear in the client.
+4. Respect **workspace** isolation on every API and model change.

@@ -55,9 +55,11 @@ class WorkspaceService(BaseService):
         region = kwargs.pop('region', None)
         cluster = kwargs.pop('cluster', None)
 
+        domain_val = (kwargs.pop('domain', None) or '').strip()[:255]
         workspace = Workspace.objects.create(
             name=name,
             slug=slug,
+            domain=domain_val,
             is_active=kwargs.get('is_active', True),
             **{k: v for k, v in kwargs.items() if k not in {'is_active', 'domain'}}
         )

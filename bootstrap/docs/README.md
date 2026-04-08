@@ -1,10 +1,26 @@
 # BFG app bootstrap
 
+There are now two bootstrap entry points:
+
+- `bootstrap/bootstrap-instance.sh` — configure the **current server repo** as a runnable single BFG instance (recommended for local/dev/self-hosted setup)
+- `bootstrap/bootstrap-app.sh` — generate a **new app scaffold** based on BFG submodules/templates
+
+## Bootstrap current server instance
+
+Run from a checkout of this repo:
+
+```bash
+cd /path/to/bfg-server-django/src/server
+bash bootstrap/bootstrap-instance.sh
+```
+
+## Scaffold a new app
+
 Run from a checkout of this repo (so templates ship with the script):
 
 ```bash
-cd /path/to/parent
-bash /path/to/resale/src/server/bootstrap/bootstrap-app.sh
+cd /path/to/bfg-server-django/src/server
+bash bootstrap/bootstrap-app.sh
 ```
 
 Optional:
@@ -27,6 +43,33 @@ Generated layout notes:
   - `src/client/src/_extension_template/client`
 - VS Code tasks include backend, client, celery worker, and `start all`.
 
+## Interactive installer
+
+The installer is designed to be **interactive**. It asks questions while running.
+
+Recommended usage:
+
+```bash
+bash <(curl -fsSL "https://raw.githubusercontent.com/yinxiangming/bfg-server-django/main/bootstrap/install.sh")
+```
+
+Optional custom bundle URL:
+
+```bash
+BUNDLE_URL="https://github.com/<org>/<repo>/archive/refs/heads/main.tar.gz" \
+  bash <(curl -fsSL "<raw-install-sh-url>")
+```
+
+### Why not `curl | bash`?
+
+Because this installer prompts for input. With `curl ... | bash`, bash stdin is consumed by the script body itself, so later prompts cannot read your answers correctly.
+
+Avoid:
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/yinxiangming/bfg-server-django/main/bootstrap/install.sh" | bash
+```
+
 ## curl install
 
 Pure `curl | bash` cannot access bundled `templates/` unless you download a tarball or clone the repo. Recommended:
@@ -39,14 +82,20 @@ bash src/server/bootstrap/bootstrap-app.sh
 One-line installer is available via `install.sh` (it downloads the bundle first):
 
 ```bash
-curl -fsSL "<raw-install-sh-url>" | \
-  BUNDLE_URL="https://github.com/<org>/<repo>/archive/refs/heads/main.tar.gz" bash
+bash <(curl -fsSL "<raw-install-sh-url>")
 ```
 
-For `yinxiangming/bfg-server-django` main branch (uses default BUNDLE_URL):
+With an explicit bundle URL:
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/yinxiangming/bfg-server-django/main/bootstrap/install.sh" | bash
+BUNDLE_URL="https://github.com/<org>/<repo>/archive/refs/heads/main.tar.gz" \
+  bash <(curl -fsSL "<raw-install-sh-url>")
+```
+
+For `yinxiangming/bfg-server-django` main branch (uses default `BUNDLE_URL`):
+
+```bash
+bash <(curl -fsSL "https://raw.githubusercontent.com/yinxiangming/bfg-server-django/main/bootstrap/install.sh")
 ```
 
 Password prompt behavior:

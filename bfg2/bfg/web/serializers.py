@@ -140,7 +140,16 @@ class PostListSerializer(serializers.ModelSerializer):
             'view_count', 'comment_count', 'language',
             'author', 'author_name', 'updated_at'
         ]
-        read_only_fields = ['id', 'view_count', 'comment_count', 'published_at', 'updated_at']
+        read_only_fields = [
+            'id',
+            'view_count',
+            'comment_count',
+            'published_at',
+            'updated_at',
+            'author',
+            'author_name',
+            'category_name',
+        ]
 
 
 class PostDetailSerializer(serializers.ModelSerializer):

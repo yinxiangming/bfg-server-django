@@ -8,6 +8,31 @@ from django.utils.translation import gettext_lazy as _
 
 
 CATEGORY_SCHEMA_TEMPLATES = {
+    'post': {
+        'name': 'Blog Post',
+        'name_zh': '文章',
+        'content_type_name': 'post',
+        'icon': 'article',
+        'description': 'Standard blog posts and articles',
+        'description_zh': '博客文章与资讯',
+        'fields_schema': {
+            'subtitle': {
+                'type': 'string',
+                'label': 'Subtitle',
+                'label_zh': '副标题',
+            },
+            'reading_time_minutes': {
+                'type': 'integer',
+                'label': 'Reading time (minutes)',
+                'label_zh': '阅读时长（分钟）',
+            },
+            'author_bio': {
+                'type': 'text',
+                'label': 'Author bio',
+                'label_zh': '作者简介',
+            },
+        },
+    },
     'case': {
         'name': 'Industry Case',
         'name_zh': '行业案例',

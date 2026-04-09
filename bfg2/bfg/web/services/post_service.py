@@ -60,6 +60,7 @@ class PostService(BaseService):
             excerpt=kwargs.get('excerpt', ''),
             featured_image=kwargs.get('featured_image'),
             category=kwargs.get('category'),
+            custom_fields=kwargs.get('custom_fields') or {},
             meta_title=kwargs.get('meta_title', title),
             meta_description=kwargs.get('meta_description', ''),
             status=kwargs.get('status', 'draft'),

@@ -194,17 +194,17 @@ class AddressSerializer(serializers.ModelSerializer):
 
 class SettingsSerializer(serializers.ModelSerializer):
     """Settings serializer. On update, syncs custom_settings.general to model fields."""
-    
+
     class Meta:
         model = Settings
         fields = [
-            'id', 'site_name', 'site_description', 'logo', 'favicon',
+            'id', 'workspace_id', 'site_name', 'site_description', 'logo', 'favicon',
             'default_language', 'supported_languages', 'default_currency',
             'default_timezone', 'contact_email', 'support_email',
             'contact_phone', 'facebook_url', 'twitter_url', 'instagram_url',
             'features', 'custom_settings', 'updated_at'
         ]
-        read_only_fields = ['id', 'updated_at']
+        read_only_fields = ['id', 'workspace_id', 'updated_at']
 
     def update(self, instance, validated_data):
         custom_settings = validated_data.pop('custom_settings', None)

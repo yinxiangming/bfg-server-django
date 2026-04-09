@@ -735,6 +735,8 @@ class SettingsViewSet(viewsets.ModelViewSet):
         if isinstance(header_options, dict):
             default_header_options = {**default_header_options, **header_options}
         payload = {
+            'workspace_id': workspace.id,
+            'workspace_slug': workspace.slug,
             'site_name': settings_obj.site_name or general_custom.get('site_name', '') or '',
             'site_description': settings_obj.site_description or general_custom.get('site_description', '') or '',
             'contact_email': settings_obj.contact_email or general_custom.get('contact_email', '') or '',

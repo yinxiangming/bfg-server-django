@@ -82,6 +82,8 @@ INSTALLED_APPS = [
     'bfg.platform',
     # Local apps (from env LOCAL_APPS or auto-discovered from apps dir)
     *get_local_app_dotted_names(),
+    # Project hooks (startup logging, etc.); must be last so ready() sees all apps
+    'config.apps.Config',
 ]
 
 MIDDLEWARE = [

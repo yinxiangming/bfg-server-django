@@ -18,12 +18,6 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
-def _extension_apps():
-    """Extension apps from env BFG_EXTENSION_APPS (comma-separated, e.g. BFG_EXTENSION_APPS=apps.resale)."""
-    raw = os.environ.get('BFG_EXTENSION_APPS', '')
-    return [s.strip() for s in raw.split(',') if s.strip()]
-
-
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -45,7 +39,7 @@ INSTALLED_APPS = [
     'bfg.inbox',
     'bfg.marketing',
     'bfg.platform',
-] + _extension_apps()
+]
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # Must be first so OPTIONS gets CORS headers

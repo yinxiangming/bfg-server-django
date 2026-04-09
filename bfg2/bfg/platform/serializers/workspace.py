@@ -20,9 +20,18 @@ class WorkspaceListSerializer(serializers.Serializer):
     id = serializers.IntegerField(read_only=True)
     name = serializers.CharField(read_only=True)
     slug = serializers.SlugField(read_only=True)
-    domain = serializers.CharField(read_only=True)
     is_active = serializers.BooleanField(read_only=True)
     created_at = serializers.DateTimeField(read_only=True)
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'slug': instance.slug,
+            'domain': _safe_workspace_domain(instance),
+            'is_active': instance.is_active,
+            'created_at': instance.created_at,
+        }
 
 
 class WorkspaceCreateSerializer(serializers.Serializer):
@@ -90,13 +99,29 @@ class WorkspaceDetailSerializer(serializers.Serializer):
     id = serializers.IntegerField(read_only=True)
     name = serializers.CharField(max_length=255)
     slug = serializers.SlugField(read_only=True)
-    domain = serializers.CharField(max_length=255, required=False)
+    domain = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, write_only=True
+    )
     email = serializers.EmailField(required=False)
     phone = serializers.CharField(max_length=50, required=False)
     is_active = serializers.BooleanField(read_only=True)
     settings = serializers.JSONField(read_only=True)
     created_at = serializers.DateTimeField(read_only=True)
     updated_at = serializers.DateTimeField(read_only=True)
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'slug': instance.slug,
+            'domain': _safe_workspace_domain(instance),
+            'email': instance.email,
+            'phone': instance.phone,
+            'is_active': instance.is_active,
+            'settings': instance.settings,
+            'created_at': instance.created_at,
+            'updated_at': instance.updated_at,
+        }
 
     def update(self, instance, validated_data):
         domain = validated_data.pop('domain', None)

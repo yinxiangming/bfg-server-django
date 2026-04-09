@@ -15,7 +15,9 @@ Tests the full lifecycle:
 """
 
 import pytest
+from django.test.utils import override_settings
 from rest_framework import status
+from rest_framework.settings import api_settings
 from rest_framework.test import APIClient
 
 from bfg.common.models import Workspace, User, APIKey, StaffRole, StaffMember
@@ -25,20 +27,39 @@ from bfg.common.models import Workspace, User, APIKey, StaffRole, StaffMember
 # Fixtures
 # ---------------------------------------------------------------------------
 
+_REST_FRAMEWORK_API_KEY = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'config.authentication.APIKeyAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'TEST_REQUEST_DEFAULT_FORMAT': 'json',
+}
+
+
 @pytest.fixture(autouse=True)
-def _enable_apikey_auth(settings):
-    """Inject APIKeyAuthentication into DRF for every test in this module."""
-    settings.REST_FRAMEWORK = {
-        'DEFAULT_AUTHENTICATION_CLASSES': (
-            'config.authentication.APIKeyAuthentication',
-            'rest_framework.authentication.SessionAuthentication',
-            'rest_framework.authentication.BasicAuthentication',
-        ),
-        'DEFAULT_PERMISSION_CLASSES': (
-            'rest_framework.permissions.IsAuthenticated',
-        ),
-        'TEST_REQUEST_DEFAULT_FORMAT': 'json',
-    }
+def _enable_apikey_auth():
+    """
+    Inject APIKeyAuthentication into DRF for every test in this module.
+
+    ``api_settings.reload()`` alone is not enough: ``APIView.authentication_classes``
+    is bound to the tuple from the first ``api_settings`` access at import time,
+    so we must re-point it after overriding REST_FRAMEWORK.
+    """
+    from rest_framework.views import APIView
+
+    prev_auth_classes = APIView.authentication_classes
+    with override_settings(REST_FRAMEWORK=_REST_FRAMEWORK_API_KEY):
+        api_settings.reload()
+        APIView.authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES
+        try:
+            yield
+        finally:
+            APIView.authentication_classes = prev_auth_classes
+            api_settings.reload()
 
 
 @pytest.fixture
@@ -85,6 +106,21 @@ def anon_client(workspace):
 API_KEYS_URL = '/api/v1/api-keys/'
 
 
+def _get_workspaces_with_api_key(client, api_key, api_secret):
+    """
+    Pass API key headers on the GET itself.
+
+    Stored ``credentials()`` are not reliably merged into GET requests after
+    other tests have used the Django/DRF test client (e.g. platform SSO);
+    explicit ``HTTP_*`` kwargs on ``get()`` keep auth headers on the WSGI environ.
+    """
+    return client.get(
+        '/api/v1/workspaces/',
+        HTTP_X_API_KEY=api_key,
+        HTTP_X_API_SECRET=api_secret,
+    )
+
+
 @pytest.mark.django_db
 class TestAPIKeyLifecycle:
     """Full CRUD + authentication lifecycle."""
@@ -124,7 +160,7 @@ class TestAPIKeyLifecycle:
             HTTP_X_API_KEY=api_key,
             HTTP_X_API_SECRET=api_secret,
         )
-        resp = anon_client.get('/api/v1/workspaces/')
+        resp = _get_workspaces_with_api_key(anon_client, api_key, api_secret)
         assert resp.status_code == status.HTTP_200_OK
 
     def test_last_used_at_updates(self, admin_client, anon_client):
@@ -140,7 +176,7 @@ class TestAPIKeyLifecycle:
 
         # Use the key
         anon_client.credentials(HTTP_X_API_KEY=api_key, HTTP_X_API_SECRET=api_secret)
-        anon_client.get('/api/v1/workspaces/')
+        _get_workspaces_with_api_key(anon_client, api_key, api_secret)
 
         # Verify last_used_at is now set
         detail = admin_client.get(f'{API_KEYS_URL}{key_id}/')
@@ -167,7 +203,7 @@ class TestAPIKeyLifecycle:
 
         # Try to use it
         anon_client.credentials(HTTP_X_API_KEY=api_key, HTTP_X_API_SECRET=api_secret)
-        resp = anon_client.get('/api/v1/workspaces/')
+        resp = _get_workspaces_with_api_key(anon_client, api_key, api_secret)
         assert resp.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
 
     def test_regenerate_secret(self, admin_client, anon_client):
@@ -187,12 +223,12 @@ class TestAPIKeyLifecycle:
 
         # Old secret should fail
         anon_client.credentials(HTTP_X_API_KEY=api_key, HTTP_X_API_SECRET=old_secret)
-        resp = anon_client.get('/api/v1/workspaces/')
+        resp = _get_workspaces_with_api_key(anon_client, api_key, old_secret)
         assert resp.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
 
         # New secret should work
         anon_client.credentials(HTTP_X_API_KEY=api_key, HTTP_X_API_SECRET=new_secret)
-        resp = anon_client.get('/api/v1/workspaces/')
+        resp = _get_workspaces_with_api_key(anon_client, api_key, new_secret)
         assert resp.status_code == status.HTTP_200_OK
 
     def test_delete_api_key(self, admin_client, anon_client):
@@ -213,7 +249,7 @@ class TestAPIKeyLifecycle:
 
         # Try to use it
         anon_client.credentials(HTTP_X_API_KEY=api_key, HTTP_X_API_SECRET=api_secret)
-        resp = anon_client.get('/api/v1/workspaces/')
+        resp = _get_workspaces_with_api_key(anon_client, api_key, api_secret)
         assert resp.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
 
     def test_invalid_key_rejected(self, anon_client):
@@ -222,7 +258,7 @@ class TestAPIKeyLifecycle:
             HTTP_X_API_KEY='nonexist',
             HTTP_X_API_SECRET='0' * 64,
         )
-        resp = anon_client.get('/api/v1/workspaces/')
+        resp = _get_workspaces_with_api_key(anon_client, 'nonexist', '0' * 64)
         assert resp.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
 
     def test_wrong_secret_rejected(self, admin_client, anon_client):
@@ -234,7 +270,7 @@ class TestAPIKeyLifecycle:
             HTTP_X_API_KEY=api_key,
             HTTP_X_API_SECRET='0' * 64,
         )
-        resp = anon_client.get('/api/v1/workspaces/')
+        resp = _get_workspaces_with_api_key(anon_client, api_key, '0' * 64)
         assert resp.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
 
 
@@ -251,5 +287,5 @@ class TestAPIKeyWorkspaceIsolation:
         # Use the key (without X-Workspace-ID header) — workspace should come from the key
         client = APIClient()
         client.credentials(HTTP_X_API_KEY=api_key, HTTP_X_API_SECRET=api_secret)
-        resp = client.get('/api/v1/workspaces/')
+        resp = _get_workspaces_with_api_key(client, api_key, api_secret)
         assert resp.status_code == status.HTTP_200_OK

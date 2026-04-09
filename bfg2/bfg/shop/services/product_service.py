@@ -90,8 +90,10 @@ class ProductService(BaseService):
         product = Product.objects.create(**product_data)
 
         if not product.barcode:
-            product.barcode = generate_barcode_from_product_id(product.pk, barcode_prefix)
-            product.save(update_fields=['barcode'])
+            product_pk = getattr(product, 'pk', None)
+            if product_pk is not None:
+                product.barcode = generate_barcode_from_product_id(product_pk, barcode_prefix)
+                product.save(update_fields=['barcode'])
 
         # Add categories if provided
         if 'categories' in kwargs:

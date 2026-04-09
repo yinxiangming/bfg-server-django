@@ -10,7 +10,7 @@ from rest_framework import exceptions
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from bfg.common.middleware import set_current_workspace, _hydrate_workspace_access
+import bfg.common.middleware as common_middleware
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -42,8 +42,8 @@ class BearerTokenAuthentication(JWTAuthentication):
         request.user = user
         workspace = getattr(request, 'workspace', None)
         if workspace:
-            set_current_workspace(workspace)
-            _hydrate_workspace_access(request, workspace)
+            common_middleware.set_current_workspace(workspace)
+            common_middleware._hydrate_workspace_access(request, workspace)
         
         return (user, validated_token)
 
@@ -67,8 +67,8 @@ class OptionalBearerTokenAuthentication(JWTAuthentication):
             request.user = user
             workspace = getattr(request, 'workspace', None)
             if workspace:
-                set_current_workspace(workspace)
-                _hydrate_workspace_access(request, workspace)
+                common_middleware.set_current_workspace(workspace)
+                common_middleware._hydrate_workspace_access(request, workspace)
             return (user, validated_token)
         except exceptions.APIException:
             return None
@@ -118,11 +118,11 @@ class APIKeyAuthentication(authentication.BaseAuthentication):
 
         # Bind workspace to request so WorkspaceMiddleware & views can use it
         request.workspace = key_obj.workspace
-        set_current_workspace(key_obj.workspace)
+        common_middleware.set_current_workspace(key_obj.workspace)
 
         # Use the key creator as the authenticated user, or AnonymousUser
         user = key_obj.created_by or AnonymousUser()
         request.user = user
-        _hydrate_workspace_access(request, key_obj.workspace)
+        common_middleware._hydrate_workspace_access(request, key_obj.workspace)
         return (user, key_obj)
 

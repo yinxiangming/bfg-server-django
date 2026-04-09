@@ -98,8 +98,8 @@ class WorkspaceService(BaseService):
             pass
 
         ensure_system_default_workspace_domain(workspace)
-        if domain_val:
-            upsert_custom_workspace_domain(workspace, domain_val, is_primary=True)
+        if legacy_domain:
+            upsert_custom_workspace_domain(workspace, legacy_domain, is_primary=True)
 
         # Emit workspace created event - modules will respond to initialize their data
         # This must happen before assigning owner, as owner assignment requires admin role

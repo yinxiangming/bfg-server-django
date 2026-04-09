@@ -292,12 +292,23 @@ class PostViewSet(viewsets.ModelViewSet):
     Public can view published posts, staff can manage all posts
     """
     lookup_field = 'slug'
+
+    def get_object(self):
+        """Resolve detail by numeric primary key (admin) or slug (public URLs)."""
+        lookup = self.kwargs.get(self.lookup_field)
+        queryset = self.filter_queryset(self.get_queryset())
+        if lookup is not None and str(lookup).isdigit():
+            obj = django_get_object_or_404(queryset, pk=int(lookup))
+        else:
+            obj = django_get_object_or_404(queryset, **{self.lookup_field: lookup})
+        self.check_object_permissions(self.request, obj)
+        return obj
     
     def get_serializer_class(self):
-        """Return appropriate serializer"""
-        if self.action == 'retrieve':
-            return PostDetailSerializer
-        return PostListSerializer
+        """List uses concise serializer; all writes and detail use full serializer (author read-only, etc.)."""
+        if self.action == 'list':
+            return PostListSerializer
+        return PostDetailSerializer
     
     def get_permissions(self):
         """Set permissions based on action"""
@@ -330,11 +341,21 @@ class PostViewSet(viewsets.ModelViewSet):
         tag_id = self.request.query_params.get('tag')
         if tag_id:
             queryset = queryset.filter(tags__id=tag_id)
-        
-        # Filter by language
-        language = self.request.query_params.get('lang', 'en')
-        queryset = queryset.filter(language=language)
-        
+
+        is_staff = getattr(self.request, 'is_staff_member', False)
+
+        # Filter by language: public list defaults to English; staff sees all languages unless ?lang= is set
+        if is_staff:
+            language = self.request.query_params.get('lang')
+            if language:
+                queryset = queryset.filter(language=language)
+        else:
+            language = self.request.query_params.get('lang', 'en')
+            queryset = queryset.filter(language=language)
+
+        # Staff/draft posts often have null published_at; order by recency so new items appear on page 1
+        if is_staff:
+            return queryset.order_by('-updated_at', '-id')
         return queryset.order_by('-published_at')
     
     def perform_create(self, serializer):
@@ -476,13 +497,14 @@ class CategoryViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Get categories for current workspace"""
         workspace = get_workspace(self.request)
-        language = self.request.query_params.get('lang', 'en')
         content_type = self.request.query_params.get('content_type', '')
-        
-        queryset = Category.objects.filter(
-            workspace=workspace,
-            language=language
-        ).select_related('parent')
+
+        queryset = Category.objects.filter(workspace=workspace).select_related('parent')
+
+        # Staff admin: all locales in one list unless ?lang= is set (aligns with PostViewSet list behavior)
+        language = self.request.query_params.get('lang')
+        if language:
+            queryset = queryset.filter(language=language)
         
         # Filter by content type if provided
         if content_type:
@@ -509,6 +531,22 @@ class CategoryViewSet(viewsets.ModelViewSet):
         """Get available category templates"""
         from bfg.web.category_templates import get_all_templates
         return Response(get_all_templates())
+
+    @action(detail=False, methods=['get'], url_path='schema-template')
+    def schema_template(self, request):
+        """Return full template payload including fields_schema for a template key."""
+        from bfg.web.category_templates import get_template
+
+        key = request.query_params.get('key')
+        if not key:
+            return Response(
+                {'detail': 'Query parameter "key" is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        template = get_template(key)
+        if not template:
+            return Response({'detail': 'Template not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'key': key, **template})
     
     @action(detail=False, methods=['post'], url_path='from-template')
     def from_template(self, request):

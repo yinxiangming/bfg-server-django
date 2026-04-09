@@ -140,7 +140,16 @@ class PostListSerializer(serializers.ModelSerializer):
             'view_count', 'comment_count', 'language',
             'author', 'author_name', 'updated_at'
         ]
-        read_only_fields = ['id', 'view_count', 'comment_count', 'published_at', 'updated_at']
+        read_only_fields = [
+            'id',
+            'view_count',
+            'comment_count',
+            'published_at',
+            'updated_at',
+            'author',
+            'author_name',
+            'category_name',
+        ]
 
 
 class PostDetailSerializer(serializers.ModelSerializer):
@@ -154,7 +163,21 @@ class PostDetailSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
-    
+    clear_featured_image = serializers.BooleanField(write_only=True, required=False, default=False)
+
+    def create(self, validated_data):
+        validated_data.pop('clear_featured_image', None)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        clear_flag = bool(validated_data.pop('clear_featured_image', False))
+        has_new_upload = 'featured_image' in validated_data
+        if clear_flag and not has_new_upload:
+            if instance.featured_image:
+                instance.featured_image.delete(save=False)
+            validated_data['featured_image'] = None
+        return super().update(instance, validated_data)
+
     class Meta:
         model = Post
         fields = [
@@ -163,7 +186,8 @@ class PostDetailSerializer(serializers.ModelSerializer):
             'tags', 'tag_ids',
             'meta_title', 'meta_description', 'status', 'published_at',
             'view_count', 'comment_count', 'allow_comments', 'language',
-            'created_at', 'updated_at', 'author', 'author_name'
+            'created_at', 'updated_at', 'author', 'author_name',
+            'clear_featured_image',
         ]
         read_only_fields = ['id', 'view_count', 'comment_count', 'created_at', 'updated_at', 'author', 'published_at', 'category_fields_schema']
 

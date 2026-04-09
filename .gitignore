@@ -15,6 +15,3 @@ __pycache__/
 # Extension apps (submodules or symlinks)
 apps/*
 !apps/__init__.py
-# channels: vendored from extensions/channels-server so Dokku/docker builds include /api/v1/channels/
-!apps/channels/
-!apps/channels/**

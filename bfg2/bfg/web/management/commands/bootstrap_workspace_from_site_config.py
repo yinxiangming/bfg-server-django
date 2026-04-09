@@ -102,7 +102,6 @@ class Command(BaseCommand):
                 name=name,
                 slug=slug,
                 owner_user=owner,
-                domain=site_domain or "",
             )
             self.stdout.write(self.style.SUCCESS(f"Created workspace id={workspace.id}"))
 

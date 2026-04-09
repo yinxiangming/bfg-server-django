@@ -5,6 +5,7 @@ Middleware for BFG2 multi-tenancy support.
 
 import logging
 import threading
+from django.conf import settings
 from django.utils.deprecation import MiddlewareMixin
 from django.http import Http404
 from django.core.cache import cache
@@ -137,6 +138,47 @@ def invalidate_workspace_cache(workspace):
     cache.delete('workspace:first_active')
 
 
+def _hydrate_workspace_access(request, workspace):
+    """Populate request.is_staff_member / request.is_customer for the current workspace."""
+    request.is_staff_member = False
+    request.is_customer = False
+
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'is_authenticated', False) or not workspace:
+        return
+
+    if getattr(user, 'is_superuser', False) and getattr(
+        settings, 'BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS', True
+    ):
+        request.is_staff_member = True
+        return
+
+    from bfg.common.models import StaffMember, Customer
+
+    cache_key = f"user_ws_access:{user.id}:{workspace.id}"
+    access_status = cache.get(cache_key)
+
+    if access_status is None:
+        is_staff = StaffMember.objects.filter(
+            workspace=workspace,
+            user=user,
+            is_active=True,
+        ).exists()
+        is_customer = Customer.objects.filter(
+            workspace=workspace,
+            user=user,
+            is_active=True,
+        ).exists()
+        access_status = {
+            'is_staff_member': is_staff,
+            'is_customer': is_customer,
+        }
+        cache.set(cache_key, access_status, WORKSPACE_CACHE_TIMEOUT)
+
+    request.is_staff_member = bool(access_status.get('is_staff_member', False))
+    request.is_customer = bool(access_status.get('is_customer', False))
+
+
 class WorkspaceMiddleware(MiddlewareMixin):
     """
     Middleware to identify and set the current workspace based on the request domain.
@@ -184,6 +226,9 @@ class WorkspaceMiddleware(MiddlewareMixin):
             # Clear thread-local if no workspace
             if hasattr(_thread_locals, 'workspace'):
                 delattr(_thread_locals, 'workspace')
+
+        # Populate workspace-scoped role flags for downstream views.
+        _hydrate_workspace_access(request, workspace)
         
         return None
     

@@ -54,17 +54,27 @@ class WorkspaceService(BaseService):
         # Create workspace
         region = kwargs.pop('region', None)
         cluster = kwargs.pop('cluster', None)
-
-        domain_val = (kwargs.pop('domain', None) or '').strip()[:255]
+        legacy_domain = (kwargs.pop('domain', None) or '').strip()[:255]
         workspace = Workspace.objects.create(
             name=name,
             slug=slug,
-            domain=domain_val,
             is_active=kwargs.get('is_active', True),
             **{k: v for k, v in kwargs.items() if k not in {'is_active', 'domain'}}
         )
 
         try:
+            WorkspaceDomain = apps.get_model('common', 'WorkspaceDomain')
+            if legacy_domain:
+                WorkspaceDomain.objects.update_or_create(
+                    hostname=legacy_domain,
+                    defaults={
+                        'workspace': workspace,
+                        'kind': WorkspaceDomain.KIND_CUSTOM,
+                        'verification_status': WorkspaceDomain.VERIFICATION_VERIFIED,
+                        'ssl_status': WorkspaceDomain.SSL_NONE,
+                        'is_primary': True,
+                    },
+                )
             WorkspacePlatformProfile = apps.get_model('platform', 'WorkspacePlatformProfile')
             profile, _ = WorkspacePlatformProfile.objects.get_or_create(workspace=workspace)
             update_fields = []

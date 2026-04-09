@@ -10,6 +10,7 @@ from rest_framework import exceptions
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from bfg.common.middleware import set_current_workspace, _hydrate_workspace_access
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -36,6 +37,13 @@ class BearerTokenAuthentication(JWTAuthentication):
         
         # Get user from token
         user = self.get_user(validated_token)
+
+        # Hydrate workspace-scoped access flags after authentication.
+        request.user = user
+        workspace = getattr(request, 'workspace', None)
+        if workspace:
+            set_current_workspace(workspace)
+            _hydrate_workspace_access(request, workspace)
         
         return (user, validated_token)
 
@@ -56,6 +64,11 @@ class OptionalBearerTokenAuthentication(JWTAuthentication):
         try:
             validated_token = self.get_validated_token(raw_token)
             user = self.get_user(validated_token)
+            request.user = user
+            workspace = getattr(request, 'workspace', None)
+            if workspace:
+                set_current_workspace(workspace)
+                _hydrate_workspace_access(request, workspace)
             return (user, validated_token)
         except exceptions.APIException:
             return None
@@ -104,11 +117,12 @@ class APIKeyAuthentication(authentication.BaseAuthentication):
         key_obj.record_usage()
 
         # Bind workspace to request so WorkspaceMiddleware & views can use it
-        from bfg.common.middleware import set_current_workspace
         request.workspace = key_obj.workspace
         set_current_workspace(key_obj.workspace)
 
         # Use the key creator as the authenticated user, or AnonymousUser
         user = key_obj.created_by or AnonymousUser()
+        request.user = user
+        _hydrate_workspace_access(request, key_obj.workspace)
         return (user, key_obj)
 

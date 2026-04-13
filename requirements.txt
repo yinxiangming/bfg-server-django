@@ -17,7 +17,7 @@ celery==5.4.0  # Replaces huey for better performance
 # Utilities
 python-dotenv==1.0.1
 pydantic>=2.0.0
-Pillow==11.0.0
+Pillow==12.2.0
 requests==2.32.3
 stripe>=7.0.0
 reportlab>=4.0.0  # PDF generation

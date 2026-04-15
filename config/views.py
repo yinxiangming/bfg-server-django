@@ -18,9 +18,10 @@ from django.conf import settings
 from django.http import HttpResponse
 from .serializers import (
     RegisterSerializer,
+    FinalizeOnboardingSerializer,
     ForgotPasswordSerializer,
     ResetPasswordConfirmSerializer,
-    VerifyEmailSerializer
+    VerifyEmailSerializer,
 )
 
 User = get_user_model()
@@ -214,6 +215,52 @@ def register(request):
             response_data['workspace_warning'] = workspace_error
 
         return Response(response_data, status=status.HTTP_201_CREATED)
+
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def finalize_onboarding(request):
+    """
+    Finalize deferred onboarding after email verification.
+    POST /api/v1/auth/finalize-onboarding/
+
+    Body:
+    {
+        "email": "user@example.com",
+        "store_name": "Acme Store",
+        "admin_name": "Jane Doe"
+    }
+    """
+    serializer = FinalizeOnboardingSerializer(data=request.data)
+    if serializer.is_valid():
+        try:
+            user, workspace, created = serializer.save()
+        except Exception as e:
+            return Response({
+                'detail': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        refresh = RefreshToken.for_user(user)
+        response_data = {
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+            },
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+            'workspace': {
+                'id': workspace.id,
+                'name': workspace.name,
+                'slug': workspace.slug,
+            },
+            'created': created,
+        }
+        return Response(response_data, status=status.HTTP_200_OK)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

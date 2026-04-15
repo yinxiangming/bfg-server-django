@@ -221,9 +221,12 @@ def upsert_custom_workspace_domain(workspace, hostname, *, is_primary=False, ver
         "kind": WorkspaceDomain.KIND_CUSTOM,
         "is_primary": bool(is_primary),
     }
-    if verification_status:
+    if verification_status is not None:
         defaults["verification_status"] = verification_status
-    if ssl_status:
+    elif is_primary:
+        # clean() requires verified status when is_primary; bootstrap paths (e.g. init localhost) omit this.
+        defaults["verification_status"] = WorkspaceDomain.VERIFICATION_VERIFIED
+    if ssl_status is not None:
         defaults["ssl_status"] = ssl_status
 
     domain, _ = WorkspaceDomain.objects.update_or_create(

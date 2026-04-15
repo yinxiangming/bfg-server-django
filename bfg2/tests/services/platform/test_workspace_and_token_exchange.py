@@ -6,6 +6,7 @@ from rest_framework.test import APIClient
 
 from bfg.common.models import Workspace, WorkspaceDomain
 from bfg.platform.models import Cluster, PlatformMembership, WorkspacePlatformProfile
+from bfg.platform.serializers.workspace import WorkspaceDetailSerializer
 
 
 User = get_user_model()
@@ -58,6 +59,41 @@ def test_platform_workspaces_me_returns_system_default_when_no_custom_primary(db
 
     assert response.status_code == 200
     assert response.data["workspaces"][0]["domain"] == "acme-two.shops.example.test"
+
+
+def test_workspace_detail_serializer_includes_workspace_profile_data(db):
+    workspace = Workspace.objects.create(name="Profile WS", slug="profile-ws", is_active=True)
+    cluster = Cluster.objects.create(
+        name="Cluster Profile",
+        region="apac",
+        api_base_url="http://api.profile.test",
+        frontend_base_url="https://shops.example.test",
+        max_workspaces=100,
+        current_workspaces=0,
+        is_active=True,
+    )
+    WorkspacePlatformProfile.objects.create(
+        workspace=workspace,
+        cluster=cluster,
+        region="apac",
+        remote_workspace_uuid=uuid.uuid4(),
+    )
+    WorkspaceDomain.objects.create(
+        workspace=workspace,
+        hostname="portal.profile.test",
+        kind=WorkspaceDomain.KIND_CUSTOM,
+        verification_status=WorkspaceDomain.VERIFICATION_VERIFIED,
+        ssl_status=WorkspaceDomain.SSL_ACTIVE,
+        is_primary=True,
+    )
+
+    data = WorkspaceDetailSerializer(workspace).data
+
+    assert data["workspace_profile"]["region"] == "apac"
+    assert data["workspace_profile"]["workspace_api_url"] == "http://api.profile.test"
+    assert data["workspace_profile"]["workspace_frontend_url"] == "https://portal.profile.test"
+    assert data["workspace_profile"]["cluster"]["id"] == cluster.id
+    assert data["workspace_profile"]["cluster"]["frontend_base_url"] == "https://shops.example.test"
 
 
 @patch("bfg.platform.views.auth_views.http_requests.post")

@@ -13,6 +13,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from config.serializers import CustomTokenObtainPairSerializer
 from config.views import (
     register,
+    finalize_onboarding,
     forgot_password,
     reset_password_confirm,
     verify_email,
@@ -38,6 +39,7 @@ urlpatterns = [
         path('internal/auth/provision-workspace/', provision_workspace, name='provision_workspace'),
         path('auth/', include([
             path('register/', register, name='register'),
+            path('finalize-onboarding/', finalize_onboarding, name='finalize-onboarding'),
             path('forgot-password/', forgot_password, name='forgot-password'),
             path('reset-password-confirm/', reset_password_confirm, name='reset-password-confirm'),
             path('verify-email/', verify_email, name='verify-email'),

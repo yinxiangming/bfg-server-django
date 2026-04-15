@@ -15,6 +15,37 @@ def _safe_workspace_domain(instance):
         return ""
 
 
+def _safe_workspace_frontend_url(instance):
+    try:
+        return resolve_workspace_public_frontend_base_url(instance)
+    except Exception:
+        return None
+
+
+def _serialize_workspace_profile(instance):
+    profile = getattr(instance, "platform_profile", None)
+    cluster = getattr(profile, "cluster", None) if profile else None
+    return {
+        "region": getattr(profile, "region", None),
+        "remote_workspace_uuid": (
+            str(profile.remote_workspace_uuid)
+            if profile and getattr(profile, "remote_workspace_uuid", None)
+            else None
+        ),
+        "suspended_at": getattr(profile, "suspended_at", None) if profile else None,
+        "workspace_api_url": getattr(cluster, "api_base_url", None) if cluster else None,
+        "workspace_frontend_url": _safe_workspace_frontend_url(instance),
+        "cluster": {
+            "id": cluster.id,
+            "name": cluster.name,
+            "region": cluster.region,
+            "api_base_url": cluster.api_base_url,
+            "frontend_base_url": cluster.frontend_base_url,
+            "is_active": cluster.is_active,
+        } if cluster else None,
+    }
+
+
 class WorkspaceListSerializer(serializers.Serializer):
     """Read-only workspace list item."""
     id = serializers.IntegerField(read_only=True)
@@ -121,6 +152,7 @@ class WorkspaceDetailSerializer(serializers.Serializer):
             'settings': instance.settings,
             'created_at': instance.created_at,
             'updated_at': instance.updated_at,
+            'workspace_profile': _serialize_workspace_profile(instance),
         }
 
     def update(self, instance, validated_data):

@@ -5,6 +5,7 @@ Custom serializers for API
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
+from django.utils.text import slugify
 from rest_framework import serializers
 
 User = get_user_model()
@@ -69,6 +70,95 @@ class RegisterSerializer(serializers.Serializer):
             user._temporary_store_name = store_name
 
         return user
+
+
+class FinalizeOnboardingSerializer(serializers.Serializer):
+    """Finalize deferred onboarding after email verification."""
+    email = serializers.EmailField(required=True)
+    store_name = serializers.CharField(required=True, allow_blank=False)
+    admin_name = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_email(self, value):
+        try:
+            user = User.objects.get(email=value)
+        except User.DoesNotExist:
+            raise serializers.ValidationError('No user found for this email.')
+
+        self.context['user_obj'] = user
+        return value
+
+    def validate_store_name(self, value):
+        cleaned = value.strip()
+        if len(cleaned) < 2:
+            raise serializers.ValidationError('Store name must be at least 2 characters long.')
+        return cleaned
+
+    def validate(self, attrs):
+        user = self.context.get('user_obj')
+        if not user:
+            return attrs
+
+        if not user.is_active:
+            raise serializers.ValidationError({
+                'email': ['Email must be verified before onboarding can be completed.']
+            })
+
+        try:
+            from allauth.account.models import EmailAddress
+            email_record = EmailAddress.objects.filter(user=user, email=user.email).first()
+            if email_record and not email_record.verified:
+                raise serializers.ValidationError({
+                    'email': ['Email must be verified before onboarding can be completed.']
+                })
+        except Exception:
+            # If allauth state is unavailable here, fall back to user.is_active gate above.
+            pass
+
+        return attrs
+
+    def save(self):
+        user = self.context['user_obj']
+        store_name = self.validated_data['store_name']
+        admin_name = (self.validated_data.get('admin_name') or '').strip()
+
+        if admin_name:
+            parts = admin_name.split()
+            first_name = parts[0]
+            last_name = ' '.join(parts[1:])
+            update_fields = []
+            if user.first_name != first_name:
+                user.first_name = first_name
+                update_fields.append('first_name')
+            if user.last_name != last_name:
+                user.last_name = last_name
+                update_fields.append('last_name')
+            if update_fields:
+                user.save(update_fields=update_fields)
+
+        from bfg.common.models import StaffMember
+        existing_staff = StaffMember.objects.filter(user=user).select_related('workspace').first()
+        if existing_staff:
+            workspace = existing_staff.workspace
+            return user, workspace, False
+
+        from bfg.common.services.workspace_service import WorkspaceService
+        from bfg.common.services import UserService
+
+        slug = slugify(store_name)
+        existing_workspace = None
+        if slug:
+            from bfg.common.models import Workspace
+            existing_workspace = Workspace.objects.filter(slug=slug).first()
+
+        if existing_workspace:
+            raise serializers.ValidationError({
+                'store_name': ['A workspace with a similar store name already exists.']
+            })
+
+        ws_service = WorkspaceService()
+        workspace = ws_service.create_workspace(name=store_name, owner_user=user)
+
+        return user, workspace, True
 
 
 class ForgotPasswordSerializer(serializers.Serializer):

@@ -281,24 +281,35 @@ class CartViewSet(viewsets.ModelViewSet):
             )
         
         store_id = request.data.get('store')
+        fulfillment_method = request.data.get('fulfillment_method', 'shipping')
         shipping_address_id = request.data.get('shipping_address')
         billing_address_id = request.data.get('billing_address')
         coupon_code = request.data.get('coupon_code')
         gift_card_code = request.data.get('gift_card_code')
         
-        if not store_id or not shipping_address_id:
+        if not store_id:
             return Response(
-                {'detail': 'store and shipping_address are required'},
+                {'detail': 'store is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if fulfillment_method == 'shipping' and not shipping_address_id:
+            return Response(
+                {'detail': 'shipping_address is required for shipping orders'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
             store = Store.objects.get(id=store_id, workspace=request.workspace)
-            shipping_address = Address.objects.get(id=shipping_address_id)
+            shipping_address = None
             billing_address = None
+            
+            if shipping_address_id:
+                shipping_address = Address.objects.get(id=shipping_address_id)
             
             if billing_address_id:
                 billing_address = Address.objects.get(id=billing_address_id)
+            elif fulfillment_method == 'shipping':
+                billing_address = shipping_address
             
             order_service = OrderService(
                 workspace=request.workspace,
@@ -310,6 +321,7 @@ class CartViewSet(viewsets.ModelViewSet):
                 store=store,
                 shipping_address=shipping_address,
                 billing_address=billing_address,
+                fulfillment_method=fulfillment_method,
                 customer_note=request.data.get('customer_note', ''),
                 coupon_code=coupon_code,
                 gift_card_code=gift_card_code,
@@ -529,15 +541,23 @@ class OrderViewSet(viewsets.ModelViewSet):
         )
         
         # Get or create shipping address
+        fulfillment_method = serializer.validated_data.get('fulfillment_method', 'shipping')
         shipping_address_id = serializer.validated_data.pop('shipping_address_id', None)
-        if not shipping_address_id:
-            from rest_framework.exceptions import ValidationError
-            raise ValidationError({'shipping_address_id': 'This field is required.'})
         from bfg.common.models import Address
-        shipping_address = Address.objects.get(
-            id=shipping_address_id,
-            workspace=self.request.workspace
-        )
+        shipping_address = None
+        if fulfillment_method == 'shipping':
+            if not shipping_address_id:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({'shipping_address_id': 'This field is required for shipping orders.'})
+            shipping_address = Address.objects.get(
+                id=shipping_address_id,
+                workspace=self.request.workspace
+            )
+        elif shipping_address_id:
+            shipping_address = Address.objects.get(
+                id=shipping_address_id,
+                workspace=self.request.workspace
+            )
         
         # Get billing address (optional, defaults to shipping)
         billing_address_id = serializer.validated_data.pop('billing_address_id', None)
@@ -589,6 +609,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             store=store,
             shipping_address=shipping_address,
             billing_address=billing_address,
+            fulfillment_method=fulfillment_method,
             status=status,
             payment_status=payment_status,
             customer_note=customer_note,

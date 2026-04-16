@@ -308,7 +308,7 @@ class OrderService(BaseService):
         self,
         cart: Cart,
         store: Store,
-        shipping_address: Address,
+        shipping_address: Optional[Address] = None,
         billing_address: Optional[Address] = None,
         **kwargs: Any
     ) -> Order:
@@ -337,6 +337,9 @@ class OrderService(BaseService):
             raise EmptyCart("Cannot create order from empty cart")
         
         # Use shipping address as billing if not provided
+        fulfillment_method = kwargs.get('fulfillment_method', 'shipping')
+        if fulfillment_method == 'shipping' and not shipping_address:
+            raise APIValidationError({'shipping_address': 'Shipping address is required for shipping orders.'})
         if not billing_address:
             billing_address = shipping_address
         
@@ -448,6 +451,7 @@ class OrderService(BaseService):
             order_number=order_number,
             status='pending',
             payment_status='pending',
+            fulfillment_method=fulfillment_method,
             subtotal=subtotal,
             shipping_cost=shipping_cost,
             tax=tax,
@@ -545,7 +549,7 @@ class OrderService(BaseService):
         self,
         customer: Customer,
         store: Store,
-        shipping_address: Address,
+        shipping_address: Optional[Address] = None,
         billing_address: Optional[Address] = None,
         **kwargs: Any
     ) -> Order:
@@ -576,6 +580,9 @@ class OrderService(BaseService):
         self.validate_workspace_access(store)
         
         # Use shipping address as billing if not provided
+        fulfillment_method = kwargs.get('fulfillment_method', 'shipping')
+        if fulfillment_method == 'shipping' and not shipping_address:
+            raise APIValidationError({'shipping_address': 'Shipping address is required for shipping orders.'})
         if not billing_address:
             billing_address = shipping_address
         
@@ -599,6 +606,7 @@ class OrderService(BaseService):
             order_number=order_number,
             status=status,
             payment_status=payment_status,
+            fulfillment_method=fulfillment_method,
             subtotal=subtotal,
             shipping_cost=shipping_cost,
             tax=tax,

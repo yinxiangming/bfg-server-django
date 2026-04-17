@@ -401,15 +401,14 @@ class ChannelCollectionSerializer(serializers.ModelSerializer):
 
 class ReturnLineItemSerializer(serializers.ModelSerializer):
     """Return line item serializer"""
+    return_request = serializers.IntegerField(write_only=True)
     product_name = serializers.CharField(source='order_item.product_name', read_only=True)
-    product_price = serializers.DecimalField(
-        source='order_item.price', max_digits=10, decimal_places=2, read_only=True
-    )
+    product_price = serializers.DecimalField(source='order_item.price', max_digits=10, decimal_places=2, read_only=True)
     
     class Meta:
         model = ReturnLineItem
         fields = [
-            'id', 'order_item', 'product_name', 'product_price',
+            'id', 'return_request', 'order_item', 'product_name', 'product_price',
             'quantity', 'reason', 'restock_action'
         ]
         read_only_fields = ['id']

@@ -67,6 +67,29 @@ class MessageService(BaseService):
             'message': msg,
             'recipient_count': len(recipients)
         })
+
+        if msg.send_email:
+            for recipient in recipients:
+                recipient_email = getattr(getattr(recipient, 'user', None), 'email', '')
+                if not recipient_email:
+                    continue
+                preferences = getattr(getattr(recipient, 'user', None), 'preferences', None)
+                if preferences and hasattr(preferences, 'email_notifications') and not preferences.email_notifications:
+                    continue
+                try:
+                    from bfg.common.services import EmailService
+                    EmailService.send_email(
+                        self.workspace,
+                        to_list=[recipient_email],
+                        subject=subject,
+                        body_plain=message,
+                    )
+                except ValueError:
+                    pass
+                except Exception:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.exception("Failed to send direct inbox email to customer %s", recipient.id)
         
         return msg
     

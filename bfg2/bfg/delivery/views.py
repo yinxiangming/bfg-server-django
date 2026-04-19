@@ -140,7 +140,7 @@ class CarrierViewSet(viewsets.ModelViewSet):
         """
         Get shipping options from carrier plugin for an order.
         
-        POST /api/v1/carriers/{id}/get_shipping_options/
+        POST /api/v1/delivery/carriers/{id}/get_shipping_options/
         Body: {
             "order_id": 123,
             "pickup_address": {  // optional, uses default warehouse if not provided
@@ -317,7 +317,7 @@ class CarrierViewSet(viewsets.ModelViewSet):
         """
         Create consignment for an order using selected shipping option.
         
-        POST /api/v1/carriers/{id}/ship_order/
+        POST /api/v1/delivery/carriers/{id}/ship_order/
         Body: {
             "order_id": 123,
             "service_code": "EXPRESS",
@@ -921,7 +921,7 @@ class ConsignmentViewSet(viewsets.ModelViewSet):
         """
         Delete consignment by ID.
         
-        DELETE /api/v1/consignments/by-id/{id}/
+        DELETE /api/v1/delivery/consignments/by-id/{id}/
         If consignment has a tracking_number, attempts to cancel it with carrier first.
         """
         from bfg.delivery.carriers import get_carrier_plugin
@@ -986,7 +986,7 @@ class ConsignmentViewSet(viewsets.ModelViewSet):
         """
         Add tracking event
         
-        POST /api/v1/consignments/{consignment_number}/add_tracking_event/
+        POST /api/v1/delivery/consignments/{consignment_number}/add_tracking_event/
         Body: {
             "event_type": "in_transit",
             "description": "Package in transit",
@@ -1029,7 +1029,7 @@ class ConsignmentViewSet(viewsets.ModelViewSet):
         """
         Update consignment status
         
-        POST /api/v1/consignments/{consignment_number}/update_status/
+        POST /api/v1/delivery/consignments/{consignment_number}/update_status/
         Body: {"status_id": 5}
         """
         consignment = self.get_object()
@@ -1069,7 +1069,7 @@ class ConsignmentViewSet(viewsets.ModelViewSet):
         """
         Generate shipping label for consignment
         
-        POST /api/v1/consignments/{consignment_number}/generate_label/
+        POST /api/v1/delivery/consignments/{consignment_number}/generate_label/
         """
         from bfg.common.services import AuditService
         from bfg.delivery.services import DeliveryService
@@ -1108,7 +1108,7 @@ class ConsignmentViewSet(viewsets.ModelViewSet):
         """
         Cancel consignment (and associated label)
         
-        POST /api/v1/consignments/{consignment_number}/cancel/
+        POST /api/v1/delivery/consignments/{consignment_number}/cancel/
         """
         from bfg.common.services import AuditService
         from bfg.delivery.models import FreightStatus, FreightState

@@ -428,7 +428,7 @@ class ReturnSerializer(serializers.ModelSerializer):
             'admin_note', 'closed_at', 'items',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'return_number', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'customer', 'return_number', 'created_at', 'updated_at']
     
     def get_customer_name(self, obj):
         """Get customer full name"""

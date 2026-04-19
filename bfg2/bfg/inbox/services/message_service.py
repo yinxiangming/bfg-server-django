@@ -68,30 +68,39 @@ class MessageService(BaseService):
             'recipient_count': len(recipients)
         })
 
-        if msg.send_email:
-            for recipient in recipients:
-                recipient_email = getattr(getattr(recipient, 'user', None), 'email', '')
-                if not recipient_email:
-                    continue
-                preferences = getattr(getattr(recipient, 'user', None), 'preferences', None)
-                if preferences and hasattr(preferences, 'email_notifications') and not preferences.email_notifications:
-                    continue
-                try:
-                    from bfg.common.services import EmailService
-                    EmailService.send_email(
-                        self.workspace,
-                        to_list=[recipient_email],
-                        subject=subject,
-                        body_plain=message,
-                    )
-                except ValueError:
-                    pass
-                except Exception:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.exception("Failed to send direct inbox email to customer %s", recipient.id)
+        self.deliver_existing_message(msg, recipients)
         
         return msg
+
+    def deliver_existing_message(
+        self,
+        message_obj: Message,
+        recipients: List[Customer],
+    ) -> None:
+        if not message_obj.send_email:
+            return
+
+        for recipient in recipients:
+            recipient_email = getattr(getattr(recipient, 'user', None), 'email', '')
+            if not recipient_email:
+                continue
+            preferences = getattr(getattr(recipient, 'user', None), 'preferences', None)
+            if preferences and hasattr(preferences, 'email_notifications') and not preferences.email_notifications:
+                continue
+            try:
+                from bfg.common.services import EmailService
+                EmailService.send_email(
+                    self.workspace,
+                    to_list=[recipient_email],
+                    subject=message_obj.subject,
+                    body_plain=message_obj.message,
+                )
+            except ValueError:
+                pass
+            except Exception:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.exception("Failed to send direct inbox email to customer %s", recipient.id)
     
     @transaction.atomic
     def send_from_template(

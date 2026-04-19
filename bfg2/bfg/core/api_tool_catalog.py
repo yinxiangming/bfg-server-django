@@ -13,26 +13,25 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Path prefixes allowed for agent (common, shop, delivery, support, finance).
-# Paths under api/v1/ without a prefix are flat (orders, customers, etc.).
+# Path prefixes allowed for agent.
 ALLOWED_PATH_PREFIXES = (
     "/api/v1/customers",
     "/api/v1/addresses",
-    "/api/v1/orders",
-    "/api/v1/products",
-    "/api/v1/categories",
-    "/api/v1/variants",
-    "/api/v1/stores",
-    "/api/v1/consignments",
-    "/api/v1/carriers",
-    "/api/v1/warehouses",
-    "/api/v1/manifests",
+    "/api/v1/shop/orders",
+    "/api/v1/shop/products",
+    "/api/v1/shop/categories",
+    "/api/v1/shop/variants",
+    "/api/v1/shop/stores",
+    "/api/v1/delivery/consignments",
+    "/api/v1/delivery/carriers",
+    "/api/v1/delivery/warehouses",
+    "/api/v1/delivery/manifests",
     "/api/v1/support/tickets",
     "/api/v1/support/options",
-    "/api/v1/invoices",
-    "/api/v1/payments",
-    "/api/v1/wallets",
-    "/api/v1/withdrawal-requests",
+    "/api/v1/finance/invoices",
+    "/api/v1/finance/payments",
+    "/api/v1/finance/wallets",
+    "/api/v1/finance/withdrawal-requests",
     "/api/v1/me/",
     "/api/v1/options",
     "/api/v1/countries",

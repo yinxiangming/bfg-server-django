@@ -228,4 +228,6 @@ def form_params_to_config(
 
     # Drop None values from config for cleaner storage
     config = {k: v for k, v in config.items() if v is not None}
+    # Persist template choice so admin UI can restore the editor without inferring from rules alone
+    config["template_id"] = template_id
     return config, base_price, price_per_kg

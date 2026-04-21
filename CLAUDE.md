@@ -6,8 +6,7 @@ Django backend for the Resale Website project, built on the **BFG2 Framework** �
 
 ```
 server/
-├── apps/                        # Local Django apps (auto-discovered)
-│   └── platform -> ../../bfg2/bfg-platform/platform  # Symlink: SaaS platform management app
+├── apps/                        # Local Django apps (auto-discovered), e.g. resale
 ├── bfg2/                        # BFG2 Framework (git submodule)
 │   ├── bfg/                     # Core modules
 │   │   ├── docs/                # English agent docs (deployment, architecture, API reference)
@@ -123,8 +122,8 @@ Pass `workspace_id` explicitly in API requests when using API keys from a platfo
 
 Apps in `apps/` are auto-discovered by `config/local_apps.py` if they have both `urls.py` and `apps.py`. They register as `apps.<name>` and route at `/api/v1/<name>/`. Override with `LOCAL_APPS=app1,app2` in `.env`.
 
-Currently installed local app:
-- **`apps.platform`** (symlink → `bfg-platform/platform`) — SaaS platform management: workspace clusters, feature flags, billing subscriptions, provisioning
+Example local app: **`apps.resale`** (symlink → `extensions/resale-server`).  
+SaaS platform APIs (**clusters, workspaces, billing, token exchange, SSO**) are provided by **`bfg.platform`**, registered in `config/urls.py` at `/api/v1/platform/`.
 
 ## Environment Variables
 

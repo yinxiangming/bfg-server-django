@@ -14,9 +14,8 @@ def _validate_app_package(apps_dir: Path, name: str) -> None:
     if not pkg.exists():
         raise ImproperlyConfigured(
             f'LOCAL_APPS includes "{name}" but {pkg} does not exist. '
-            f'Use a directory under apps/ (e.g. channels), or leave LOCAL_APPS empty for auto-discovery. '
-            f'Note: "platform" here is the optional apps.platform extension, not bfg.platform '
-            f'(bfg.platform is always installed).'
+            f'Use a directory under apps/ (e.g. resale), or leave LOCAL_APPS empty for auto-discovery. '
+            f'Platform APIs live in bfg.platform and are mounted from config/urls.py (not under apps/).'
         )
     target = pkg.resolve() if pkg.is_dir() or pkg.is_symlink() else pkg
     if not target.is_dir():

@@ -14,7 +14,7 @@ from bfg.shop.services.product_service import ProductService
 
 class QuickProductEntryView(APIView):
     """
-    POST /api/v1/products/quick-entry/
+    POST /api/v1/shop/products/quick-entry/
 
     Body (JSON):
         name          str   required  — product model / display name

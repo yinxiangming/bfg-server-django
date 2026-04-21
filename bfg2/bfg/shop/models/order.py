@@ -51,6 +51,17 @@ class Order(models.Model):
         related_name='orders',
         help_text=_("Freight service used for shipping this order")
     )
+
+    FULFILLMENT_METHOD_CHOICES = (
+        ('shipping', _('Shipping')),
+        ('pickup', _('Pickup')),
+    )
+    fulfillment_method = models.CharField(
+        _("Fulfillment Method"),
+        max_length=20,
+        choices=FULFILLMENT_METHOD_CHOICES,
+        default='shipping'
+    )
     
     # Order Info
     order_number = models.CharField(_("Order Number"), max_length=50, unique=True)
@@ -67,8 +78,8 @@ class Order(models.Model):
     total = models.DecimalField(_("Total"), max_digits=10, decimal_places=2)
     
     # Addresses
-    shipping_address = models.ForeignKey('common.Address', on_delete=models.PROTECT, related_name='shipping_orders')
-    billing_address = models.ForeignKey('common.Address', on_delete=models.PROTECT, related_name='billing_orders')
+    shipping_address = models.ForeignKey('common.Address', on_delete=models.PROTECT, related_name='shipping_orders', null=True, blank=True)
+    billing_address = models.ForeignKey('common.Address', on_delete=models.PROTECT, related_name='billing_orders', null=True, blank=True)
     
     # Notes
     customer_note = models.TextField(_("Customer Note"), blank=True)

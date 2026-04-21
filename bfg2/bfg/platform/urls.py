@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Platform Extension URL configuration.
+Platform URL configuration.
 
-自动装载：resale-website/server/config/urls.py 末尾的
-  *[path(f'{app}/', include(f'apps.{app}.urls')) for app in get_local_apps()]
-会将本文件挂载到 /api/v1/platform/，无需手动注册。
+Mounted in the host project as:
+  path('api/v1/', include([..., path('platform/', include('bfg.platform.urls')), ...]))
+See resale-website/server/config/urls.py.
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter

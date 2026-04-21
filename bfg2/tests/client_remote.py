@@ -29,9 +29,8 @@ class RemoteAPIClient:
         self._http = requests.Session()
         # Align with .NET storefront: isolate anonymous carts when API supports X-Bfg-Cart-Session
         self._storefront_cart_session = uuid.uuid4().hex if token is None else None
-        # Python server mounts module routes under /api/v1/ root.
-        # Node server keeps /api/v1/shop, /api/v1/delivery prefixes.
-        self._should_normalize = self.base_url.endswith(":8000")
+        # Tests now target the same grouped module routes as the live server.
+        self._should_normalize = False
 
     def _normalize_path(self, path: str) -> str:
         """

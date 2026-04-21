@@ -313,20 +313,21 @@ class StorefrontOrderItemSerializer(serializers.ModelSerializer):
 
 
 class StorefrontOrderSerializer(serializers.ModelSerializer):
-    """Storefront order serializer - simplified"""
-    items = StorefrontOrderItemSerializer(many=True, read_only=True)
+    """Storefront order serializer - includes nested details for customer account."""
     amounts = serializers.SerializerMethodField()
     addresses = serializers.SerializerMethodField()
+    items = StorefrontOrderItemSerializer(many=True, read_only=True)
     timestamps = serializers.SerializerMethodField()
     customer = serializers.SerializerMethodField()
     activities = serializers.SerializerMethodField()
     freight_service = serializers.SerializerMethodField()
     packages = serializers.SerializerMethodField()
-    
+    fulfillment_method = serializers.CharField(read_only=True)
+
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'status', 'payment_status',
+            'id', 'order_number', 'status', 'payment_status', 'fulfillment_method',
             'amounts', 'addresses', 'items', 'timestamps', 'customer', 'activities', 'freight_service', 'packages'
         ]
         read_only_fields = ['id', 'order_number']

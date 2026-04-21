@@ -401,15 +401,14 @@ class ChannelCollectionSerializer(serializers.ModelSerializer):
 
 class ReturnLineItemSerializer(serializers.ModelSerializer):
     """Return line item serializer"""
+    return_request = serializers.IntegerField(write_only=True)
     product_name = serializers.CharField(source='order_item.product_name', read_only=True)
-    product_price = serializers.DecimalField(
-        source='order_item.price', max_digits=10, decimal_places=2, read_only=True
-    )
+    product_price = serializers.DecimalField(source='order_item.price', max_digits=10, decimal_places=2, read_only=True)
     
     class Meta:
         model = ReturnLineItem
         fields = [
-            'id', 'order_item', 'product_name', 'product_price',
+            'id', 'return_request', 'order_item', 'product_name', 'product_price',
             'quantity', 'reason', 'restock_action'
         ]
         read_only_fields = ['id']
@@ -429,7 +428,7 @@ class ReturnSerializer(serializers.ModelSerializer):
             'admin_note', 'closed_at', 'items',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'return_number', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'customer', 'return_number', 'created_at', 'updated_at']
     
     def get_customer_name(self, obj):
         """Get customer full name"""
@@ -552,8 +551,9 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     """Order create serializer (for direct order creation)"""
     customer_id = serializers.IntegerField(write_only=True, required=False)
     store_id = serializers.IntegerField(write_only=True, required=True)
-    shipping_address_id = serializers.IntegerField(write_only=True, required=True)
-    billing_address_id = serializers.IntegerField(write_only=True, required=False)
+    fulfillment_method = serializers.ChoiceField(choices=['shipping', 'pickup'], required=False, default='shipping')
+    shipping_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    billing_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     
     # Read fields for response
     id = serializers.IntegerField(read_only=True)
@@ -572,7 +572,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'customer', 'customer_id', 'store', 'store_id',
-            'shipping_address_id', 'billing_address_id',
+            'fulfillment_method', 'shipping_address_id', 'billing_address_id',
             'subtotal', 'shipping_cost', 'tax', 'discount', 'total',
             'status', 'payment_status', 'customer_note', 'admin_note',
             'created_at'
@@ -590,6 +590,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     customer = serializers.SerializerMethodField()
     store_name = serializers.CharField(source='store.name', read_only=True)
     sales_channel_name = serializers.CharField(source='sales_channel.name', read_only=True, allow_null=True)
+    fulfillment_method = serializers.CharField(read_only=True)
     shipping_address = serializers.SerializerMethodField()
     billing_address = serializers.SerializerMethodField()
     shipping_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
@@ -605,7 +606,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'customer', 'customer_name',
             'store', 'store_name', 'sales_channel', 'sales_channel_name',
-            'status', 'payment_status',
+            'fulfillment_method', 'status', 'payment_status',
             'subtotal', 'shipping_cost', 'tax', 'discount', 'total',
             'shipping_address', 'billing_address', 'shipping_address_id', 'billing_address_id',
             'customer_note', 'admin_note', 'items', 'packages', 'invoices', 'payments', 'activities',

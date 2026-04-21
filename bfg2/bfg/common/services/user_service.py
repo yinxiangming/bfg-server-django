@@ -112,27 +112,47 @@ class UserService:
         """
         workspace = None
         workspace_error = None
-        
-        # Trigger allauth email verification
-        try:
-            from allauth.account.utils import send_email_confirmation
-            from django.http import HttpRequest
-            dummy_request = HttpRequest()
-            dummy_request.META['SERVER_NAME'] = 'localhost'
-            dummy_request.META['SERVER_PORT'] = '80'
-            send_email_confirmation(request=dummy_request, user=user, signup=True)
-        except Exception as e:
-            logger.error(f"Failed to send verification email for {user.email}: {e}")
-        
-        if store_name:
-            from django.conf import settings
+
+        from django.conf import settings
+        email_verification_required = getattr(settings, 'EMAIL_VERIFICATION_REQUIRED', True)
+        provision_on_register = getattr(settings, 'ONBOARDING_PROVISION_ON_REGISTER', True)
+
+        # Trigger allauth email verification when enabled
+        if email_verification_required:
+            user.is_active = False
+            user.save(update_fields=['is_active'])
+            try:
+                from django.http import HttpRequest
+                dummy_request = HttpRequest()
+                dummy_request.META['SERVER_NAME'] = 'localhost'
+                dummy_request.META['SERVER_PORT'] = '80'
+                try:
+                    from allauth.account.utils import send_email_confirmation
+                    send_email_confirmation(request=dummy_request, user=user, signup=True)
+                except ImportError:
+                    # allauth >= 0.60
+                    from allauth.account.models import EmailAddress
+                    try:
+                        # EmailAddress needs to exist to send confirmation
+                        email_address, _ = EmailAddress.objects.get_or_create(
+                            user=user,
+                            email=user.email,
+                            defaults={'primary': True, 'verified': False}
+                        )
+                        email_address.send_confirmation(dummy_request, signup=True)
+                    except Exception as email_err:
+                        logger.error(f"Failed to send confirmation via EmailAddress: {email_err}")
+            except Exception as e:
+                logger.error(f"Failed to send verification email for {user.email}: {e}")
+
+        if store_name and provision_on_register:
             instance_type = getattr(settings, 'BFG_INSTANCE_TYPE', 'workspace')
 
             if instance_type == 'platform':
                 workspace, workspace_error = cls._provision_workspace_remote(user, store_name)
             else:
                 workspace, workspace_error = cls._provision_workspace_local(user, store_name)
-                
+
         return workspace, workspace_error
 
     @classmethod
@@ -181,7 +201,7 @@ class UserService:
                 # WorkspacePlatformProfile + PlatformMembership (only when platform extension is installed)
                 profile = None
                 try:
-                    from apps.platform.models import WorkspacePlatformProfile, PlatformMembership
+                    from bfg.platform.models import PlatformMembership, WorkspacePlatformProfile
                     profile, _ = WorkspacePlatformProfile.objects.get_or_create(
                         workspace=workspace,
                     )
@@ -327,10 +347,20 @@ class UserService:
                     raise ValueError("Invalid or expired verification key.")
                     
             # Confirm it (marks EmailAddress as verified)
+            from django.contrib.messages.storage.fallback import FallbackStorage
             dummy_request = HttpRequest()
             dummy_request.META['SERVER_NAME'] = 'localhost'
             dummy_request.META['SERVER_PORT'] = '80'
+            setattr(dummy_request, 'session', 'session')
+            setattr(dummy_request, '_messages', FallbackStorage(dummy_request))
             confirmation.confirm(request=dummy_request)
+            
+            # Ensure the user account is made active
+            user = confirmation.email_address.user
+            if not user.is_active:
+                user.is_active = True
+                user.save(update_fields=['is_active'])
+                
             return True
             
         except Exception as e:

@@ -5,6 +5,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
 from django.utils import timezone
 import datetime
 
@@ -46,18 +47,29 @@ class ReturnViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Create return request"""
-        customer = Customer.objects.get(
-            workspace=self.request.workspace,
-            user=self.request.user
-        )
+        workspace = self.request.workspace
+        order = serializer.validated_data.get('order')
+        if not order or order.workspace_id != workspace.id:
+            raise ValidationError({'order': 'Invalid order.'})
+
+        if getattr(self.request, 'is_staff_member', False):
+            customer = order.customer
+        else:
+            customer = Customer.objects.get(
+                workspace=workspace,
+                user=self.request.user
+            )
+            if order.customer_id != customer.id:
+                raise ValidationError({'order': 'You can only create returns for your own orders.'})
         
-        return_number = f"RET-{datetime.date.today().strftime('%Y%m%d')}-{Return.objects.filter(workspace=self.request.workspace).count() + 1:04d}"
+        return_number = f"RET-{datetime.date.today().strftime('%Y%m%d')}-{Return.objects.filter(workspace=workspace).count() + 1:04d}"
         
         serializer.save(
-            workspace=self.request.workspace,
+            workspace=workspace,
             customer=customer,
             return_number=return_number,
-            status='open'
+            status='open',
+            created_by=self.request.user,
         )
     
     @action(detail=True, methods=['post'])

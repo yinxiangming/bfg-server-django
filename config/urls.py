@@ -13,6 +13,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from config.serializers import CustomTokenObtainPairSerializer
 from config.views import (
     register,
+    finalize_onboarding,
     forgot_password,
     reset_password_confirm,
     verify_email,
@@ -38,6 +39,7 @@ urlpatterns = [
         path('internal/auth/provision-workspace/', provision_workspace, name='provision_workspace'),
         path('auth/', include([
             path('register/', register, name='register'),
+            path('finalize-onboarding/', finalize_onboarding, name='finalize-onboarding'),
             path('forgot-password/', forgot_password, name='forgot-password'),
             path('reset-password-confirm/', reset_password_confirm, name='reset-password-confirm'),
             path('verify-email/', verify_email, name='verify-email'),
@@ -53,12 +55,12 @@ urlpatterns = [
         ])),
         path('', include('bfg.common.urls')),
         path('web/', include('bfg.web.urls')),
-        path('', include('bfg.shop.urls')),
-        path('', include('bfg.delivery.urls')),
-        path('', include('bfg.marketing.urls')),
+        path('shop/', include('bfg.shop.urls')),
+        path('delivery/', include('bfg.delivery.urls')),
+        path('marketing/', include('bfg.marketing.urls')),
         path('support/', include('bfg.support.urls')),
         path('inbox/', include('bfg.inbox.urls')),
-        path('', include('bfg.finance.urls')),
+        path('finance/', include('bfg.finance.urls')),
         path('store/', include('bfg.shop.urls_storefront')),
         path('platform/', include('bfg.platform.urls')),
         *[path(f'{app}/', include(f'apps.{app}.urls')) for app in get_local_apps()],

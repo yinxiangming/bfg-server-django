@@ -62,6 +62,9 @@ class MessageViewSet(viewsets.ModelViewSet):
                 message=message,
                 recipient=recipient
             )
+
+        service = MessageService(workspace=request.workspace, user=request.user)
+        service.deliver_existing_message(message, list(recipients))
         
         return Response({'status': 'sent', 'recipient_count': len(recipients)})
 

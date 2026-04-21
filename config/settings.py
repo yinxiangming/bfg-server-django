@@ -265,6 +265,11 @@ EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@example.com')
 
+# Onboarding / auth flow toggles
+EMAIL_VERIFICATION_REQUIRED = os.environ.get('EMAIL_VERIFICATION_REQUIRED', 'true').lower() in ('1', 'true', 'yes')
+ONBOARDING_PROVISION_ON_REGISTER = os.environ.get('ONBOARDING_PROVISION_ON_REGISTER', 'true').lower() in ('1', 'true', 'yes')
+FRONTEND_EMAIL_CONFIRM_PATH = os.environ.get('FRONTEND_EMAIL_CONFIRM_PATH', '/auth/verify-email').strip() or '/auth/verify-email'
+
 # Frontend URL and site name (from env)
 FRONTEND_URL = os.environ.get('FRONTEND_URL', '')
 # Fallback for POST /platform/auth/sso/start/ when WorkspacePlatformProfile.custom_domain is empty.

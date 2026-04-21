@@ -14,11 +14,11 @@ from django.conf import settings
 
 
 class UserSerializer(serializers.ModelSerializer):
-    """User serializer"""
+    """Basic user serializer"""
     
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone', 'is_active']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone', 'language', 'is_active']
         read_only_fields = ['id']
 
 

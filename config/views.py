@@ -4,6 +4,7 @@ Custom views for API
 """
 
 import os
+import logging
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.response import Response
@@ -25,6 +26,7 @@ from .serializers import (
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 @api_view(['POST'])
@@ -237,9 +239,10 @@ def finalize_onboarding(request):
     if serializer.is_valid():
         try:
             user, workspace, created = serializer.save()
-        except Exception as e:
+        except Exception:
+            logger.exception("Failed to finalize onboarding")
             return Response({
-                'detail': str(e)
+                'detail': 'Unable to finalize onboarding at this time.'
             }, status=status.HTTP_400_BAD_REQUEST)
 
         refresh = RefreshToken.for_user(user)

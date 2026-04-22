@@ -19,6 +19,7 @@ from config.views import (
     provision_user,
     provision_workspace,
     acme_challenge,
+    server_version,
 )
 from config.social_auth import (
     social_login_view,
@@ -36,6 +37,7 @@ urlpatterns = [
         path('agent/', include('bfg.core.agent_urls')),
         path('internal/auth/provision-user/', provision_user, name='provision_user'),
         path('internal/auth/provision-workspace/', provision_workspace, name='provision_workspace'),
+        path('system/version/', server_version, name='server_version'),
         path('auth/', include([
             path('register/', register, name='register'),
             path('forgot-password/', forgot_password, name='forgot-password'),

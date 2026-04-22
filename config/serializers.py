@@ -212,11 +212,29 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     @classmethod
     def get_token(cls, user):
-        """
-        Get token for user - override parent method
-        """
         token = super().get_token(user)
+        token['workspace_id'] = cls._resolve_workspace_id(user)
         return token
+
+    @staticmethod
+    def _resolve_workspace_id(user):
+        """Pick the best workspace for this user to embed in the JWT claim."""
+        from bfg.common.models import StaffMember, Customer
+        # Use all_objects (unscoped) — no thread-local workspace context here.
+        # 1. User's own default_workspace if they're an active member there
+        dw = getattr(user, 'default_workspace', None)
+        if dw and dw.is_active:
+            if StaffMember.all_objects.filter(workspace=dw, user=user, is_active=True).exists():
+                return dw.id
+        # 2. First active StaffMember workspace
+        staff = StaffMember.all_objects.filter(user=user, is_active=True).select_related('workspace').first()
+        if staff and staff.workspace.is_active:
+            return staff.workspace.id
+        # 3. First active Customer workspace
+        customer = Customer.all_objects.filter(user=user, is_active=True).select_related('workspace').first()
+        if customer and customer.workspace.is_active:
+            return customer.workspace.id
+        return None
 
     def validate(self, attrs):
         """

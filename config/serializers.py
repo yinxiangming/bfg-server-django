@@ -3,10 +3,12 @@
 Custom serializers for API
 """
 
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
+from rest_framework_simplejwt.settings import api_settings as jwt_api_settings
 from django.contrib.auth import get_user_model
 from django.utils.text import slugify
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
 
 User = get_user_model()
 
@@ -306,6 +308,48 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data = {}
         data['refresh'] = str(refresh)
         data['access'] = str(refresh.access_token)
+
+        return data
+
+
+class CustomTokenRefreshSerializer(TokenRefreshSerializer):
+    """
+    Refresh access tokens and re-embed ``workspace_id`` so WorkspaceMiddleware
+    (PR-10) can resolve the tenant for Bearer requests in production.
+    """
+
+    def validate(self, attrs):
+        refresh = self.token_class(attrs["refresh"])
+
+        user_id = refresh.payload.get(jwt_api_settings.USER_ID_CLAIM, None)
+        user = None
+        if user_id:
+            user = User.objects.get(**{jwt_api_settings.USER_ID_FIELD: user_id})
+            if not jwt_api_settings.USER_AUTHENTICATION_RULE(user):
+                raise AuthenticationFailed(
+                    self.error_messages["no_active_account"],
+                    "no_active_account",
+                )
+
+        access = refresh.access_token
+        if user is not None:
+            wid = CustomTokenObtainPairSerializer._resolve_workspace_id(user)
+            if wid is not None:
+                access["workspace_id"] = wid
+
+        data = {"access": str(access)}
+
+        if jwt_api_settings.ROTATE_REFRESH_TOKENS:
+            if jwt_api_settings.BLACKLIST_AFTER_ROTATION:
+                try:
+                    refresh.blacklist()
+                except AttributeError:
+                    pass
+            refresh.set_jti()
+            refresh.set_exp()
+            refresh.set_iat()
+            refresh.outstand()
+            data["refresh"] = str(refresh)
 
         return data
 

@@ -31,13 +31,6 @@ try:
 except ImportError:
     _JWT_AVAILABLE = False
 
-try:
-    from rest_framework_simplejwt.backends import TokenBackend
-    from rest_framework_simplejwt.exceptions import TokenBackendError
-    _JWT_AVAILABLE = True
-except ImportError:
-    _JWT_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
 
 # Thread-local storage for current workspace — read by TenantScopedManager

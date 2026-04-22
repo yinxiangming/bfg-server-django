@@ -20,6 +20,27 @@ ENV = os.environ.get('ENV', 'dev').lower().strip()
 if ENV == 'local' or ENV == 'dev':
     load_dotenv(os.path.join(BASE_DIR, '.env'))
 
+# ─── Environment helpers ──────────────────────────────────────────────
+# Single source of truth for "are we running in production?". Used by
+# every hardening flag below so a single env change flips them together.
+IS_PROD = ENV == 'prod'
+
+
+def _env_bool(name, default):
+    """Parse a truthy env var, returning ``default`` when unset."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _env_list(name, default=None):
+    """Parse a comma-separated env var into a ``list[str]``."""
+    raw = os.environ.get(name, '')
+    if not raw.strip():
+        return list(default or [])
+    return [item.strip() for item in raw.split(',') if item.strip()]
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-change-in-production')
 
@@ -39,9 +60,11 @@ PLATFORM_EMBEDDED = bool(PLATFORM_WORKSPACE_SLUG) and BFG_INSTANCE_TYPE == 'work
 
 # If True, Django superuser passes tenant permission checks (IsWorkspaceStaff/Admin) without StaffMember.
 # Set False for strict multi-tenant: superuser must have a StaffMember row per workspace (or use Django admin only).
-BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS = os.environ.get(
-    'BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS', 'true'
-).lower() in ('1', 'true', 'yes')
+# Default: off in production, on everywhere else. Explicit env var still wins.
+BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS = _env_bool(
+    'BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS',
+    default=not IS_PROD,
+)
 
 ALLOWED_HOSTS = ['*']
 
@@ -89,6 +112,10 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Phase-0 PR-02: defence-in-depth response headers (X-Frame-Options,
+    # Referrer-Policy, Permissions-Policy, CSP). Placed right after
+    # Django's SecurityMiddleware so HSTS + our static headers co-exist.
+    'bfg.common.security_headers.SecurityHeadersMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.locale.LocaleMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -237,15 +264,55 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
-CORS_ALLOW_ALL_ORIGINS = True  # dev; use CORS_ALLOWED_ORIGINS in production
+# ─── CORS ─────────────────────────────────────────────────────────────
+# Production: explicit whitelist only. Everywhere else: allow all so
+# local Next.js dev servers and Storybook can hit the API without ops
+# overhead. Every env can still override via CORS_ALLOW_ALL_ORIGINS.
+CORS_ALLOW_ALL_ORIGINS = _env_bool('CORS_ALLOW_ALL_ORIGINS', default=not IS_PROD)
+CORS_ALLOWED_ORIGINS = _env_list('CORS_ALLOWED_ORIGINS')
+CORS_ALLOWED_ORIGIN_REGEXES = _env_list('CORS_ALLOWED_ORIGIN_REGEXES')
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_PRIVATE_NETWORK = True # dev; use CORS_ALLOW_PRIVATE_NETWORK in production
+# Private-network requests stay on in non-prod so engineers can reach
+# the API from the local network; prod should never need this.
+CORS_ALLOW_PRIVATE_NETWORK = _env_bool('CORS_ALLOW_PRIVATE_NETWORK', default=not IS_PROD)
 CORS_ALLOW_HEADERS = [
     'accept', 'accept-language', 'accept-encoding', 'authorization',
     'content-type', 'dnt', 'origin', 'user-agent', 'x-csrftoken',
     'x-requested-with', 'x-workspace-id', 'x-forwarded-host',
     'x-api-key', 'x-api-secret',
 ]
+CORS_EXPOSE_HEADERS = [
+    'X-Request-Id',
+    'X-RateLimit-Limit',
+    'X-RateLimit-Remaining',
+    'X-RateLimit-Reset',
+]
+
+# ─── Transport / cookie security ──────────────────────────────────────
+# Prod flips every hardening flag on; dev/staging stays lenient so
+# developers don't have to run the whole stack over HTTPS.
+if IS_PROD:
+    SECURE_SSL_REDIRECT = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    CSRF_COOKIE_SAMESITE = 'Lax'
+else:
+    SECURE_SSL_REDIRECT = False
+    SECURE_HSTS_SECONDS = 0
+
+# ─── Content Security Policy origin lists ─────────────────────────────
+# Consumed by bfg.common.security_headers.SecurityHeadersMiddleware.
+# CSP_API_ORIGINS widens ``connect-src``; CSP_FRONTEND_ORIGINS is
+# declared here for a follow-up PR that wires it into frame-src /
+# form-action once the frontend deploy topology is finalised.
+CSP_FRONTEND_ORIGINS = _env_list('CSP_FRONTEND_ORIGINS', default=["'self'"])
+CSP_API_ORIGINS = _env_list('CSP_API_ORIGINS', default=["'self'"])
 
 # Celery
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')

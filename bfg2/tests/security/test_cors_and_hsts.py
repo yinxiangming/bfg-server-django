@@ -21,7 +21,7 @@ class TestCorsWhitelist:
         settings.CORS_ALLOW_ALL_ORIGINS = False
         settings.CORS_ALLOWED_ORIGINS = [ALLOWED_ORIGIN]
         response = Client().options(
-            "/__cors_probe__/",
+            "/api/v1/health/__cors_probe__/",
             HTTP_ORIGIN=ALLOWED_ORIGIN,
             HTTP_ACCESS_CONTROL_REQUEST_METHOD="GET",
         )
@@ -31,7 +31,7 @@ class TestCorsWhitelist:
         settings.CORS_ALLOW_ALL_ORIGINS = False
         settings.CORS_ALLOWED_ORIGINS = [ALLOWED_ORIGIN]
         response = Client().options(
-            "/__cors_probe__/",
+            "/api/v1/health/__cors_probe__/",
             HTTP_ORIGIN=DISALLOWED_ORIGIN,
             HTTP_ACCESS_CONTROL_REQUEST_METHOD="GET",
         )
@@ -48,7 +48,7 @@ class TestHstsHeader:
         settings.SECURE_HSTS_SECONDS = 31536000
         settings.SECURE_HSTS_INCLUDE_SUBDOMAINS = True
         settings.SECURE_HSTS_PRELOAD = True
-        response = Client().get("/__hsts_probe__/", secure=True)
+        response = Client().get("/api/v1/health/__hsts_probe__/", secure=True)
         sts = response.get("Strict-Transport-Security", "")
         assert "max-age=31536000" in sts
         assert "includeSubDomains" in sts
@@ -58,7 +58,7 @@ class TestHstsHeader:
         # SecurityMiddleware only emits HSTS on an already-HTTPS request
         # (anything else would be a no-op that tricks auditors).
         settings.SECURE_HSTS_SECONDS = 31536000
-        response = Client().get("/__hsts_probe__/", secure=False)
+        response = Client().get("/api/v1/health/__hsts_probe__/", secure=False)
         assert "Strict-Transport-Security" not in response
 
 

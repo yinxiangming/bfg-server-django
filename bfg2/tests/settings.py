@@ -76,7 +76,10 @@ MIDDLEWARE = [
     'allauth.account.middleware.AccountMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'bfg.core.middleware.WorkspaceMiddleware',
+    # Phase-0 PR-04: was ``bfg.core.middleware.WorkspaceMiddleware``
+    # (legacy 11-line shim); swap in the real strict-mode middleware so
+    # tests exercise the production behaviour.
+    'bfg.common.middleware.WorkspaceMiddleware',
 ]
 
 ROOT_URLCONF = 'tests.urls'

@@ -69,6 +69,14 @@ PROD_CHECKS = (
         "ALLOWED_HOSTS must be explicit (no wildcard) and non-empty",
         lambda s: bool(s.ALLOWED_HOSTS) and "*" not in s.ALLOWED_HOSTS,
     ),
+    (
+        "CACHES['default'] must use django.core.cache.backends.redis.RedisCache "
+        "(set DJANGO_CACHE_URL in prod so all workers share cache)",
+        lambda s: getattr(s, "CACHES", {})
+        .get("default", {})
+        .get("BACKEND", "")
+        == "django.core.cache.backends.redis.RedisCache",
+    ),
 )
 
 

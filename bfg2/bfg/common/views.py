@@ -631,8 +631,9 @@ class SettingsViewSet(viewsets.ModelViewSet):
         # Invalidate storefront config cache so footer/header reflect new settings
         wid = getattr(settings.workspace, 'id', None) or getattr(settings, 'workspace_id', None)
         if wid is not None:
-            for lang in ('en', 'zh-hans', 'zh-hant'):
-                cache.delete(f"storefront_config:{wid}:{lang}")
+            from bfg.common.storefront_cache import invalidate_storefront_config_cache
+
+            invalidate_storefront_config_cache(wid)
     
     @action(detail=False, methods=['post'])
     def enable_feature(self, request):
@@ -709,9 +710,10 @@ class SettingsViewSet(viewsets.ModelViewSet):
             )
 
         from django.conf import settings as django_settings
+        from bfg.common.storefront_cache import storefront_config_cache_key
 
         lang = request.query_params.get('lang', 'en')
-        cache_key = f"storefront_config:{workspace.id}:{lang}"
+        cache_key = storefront_config_cache_key(workspace.id, lang)
         STOREFRONT_CONFIG_TTL = 60 * 60  # 1 hour
 
         cached = cache.get(cache_key)
@@ -845,9 +847,9 @@ class SettingsViewSet(viewsets.ModelViewSet):
         except Exception:
             pass
 
-        # Prefer bfg.web Site for site_name (Site title), then Settings.
-        # When multiple Sites exist (e.g. seed "localhost" + production domain), match request host first;
-        # otherwise order_by('-is_default', '-id') so newer rows win ties on is_default.
+        # Prefer bfg.web Site for site_name, theme, default_language — not for workspace_domain
+        # (public hostname is WorkspaceDomain-only, same as workspace middleware for API/account/admin).
+        # When multiple Sites exist, match request host via Site.domain if present; else default row wins.
         try:
             from bfg.web.models import Site
 
@@ -859,9 +861,6 @@ class SettingsViewSet(viewsets.ModelViewSet):
             if not site:
                 site = sites_qs.order_by('-is_default', '-id').first()
             if site:
-                site_domain = (getattr(site, 'domain', '') or '').split(':')[0].strip()
-                if site_domain and not payload.get('workspace_domain'):
-                    payload['workspace_domain'] = site_domain
                 site_display_name = (getattr(site, 'name', None) or getattr(site, 'site_title', None) or '').strip()
                 if site_display_name:
                     payload['site_name'] = site_display_name

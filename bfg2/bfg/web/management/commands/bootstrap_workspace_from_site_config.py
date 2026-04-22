@@ -15,7 +15,6 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 from django.contrib.auth import get_user_model
-from django.core.cache import cache
 
 from bfg.common.models import Workspace
 from bfg.common.services.workspace_service import WorkspaceService
@@ -123,8 +122,9 @@ class Command(BaseCommand):
                 mode=mode,
                 replace_shop_categories=replace_shop_categories,
             )
-            for lang in ("en", "zh-hans"):
-                cache.delete(f"storefront_config:{workspace.id}:{lang}")
+            from bfg.common.storefront_cache import invalidate_storefront_config_cache
+
+            invalidate_storefront_config_cache(workspace.id)
             self.stdout.write(self.style.SUCCESS(f"Loaded site: {result.get('site')}"))
             self.stdout.write(self.style.SUCCESS(f"Pages: {len(result.get('pages', []))}"))
             self.stdout.write(self.style.SUCCESS(f"Menus: {result.get('menus_count', 0)}"))

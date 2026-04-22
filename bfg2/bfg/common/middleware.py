@@ -22,6 +22,7 @@ from .models import (
     get_workspace_domain_cache_key,
     normalize_hostname,
 )
+from .storefront_cache import invalidate_storefront_config_cache
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,7 @@ def invalidate_workspace_cache(workspace):
             cache.delete(get_workspace_domain_cache_key(hostname))
     cache.delete(f'workspace:id:{workspace.id}')
     cache.delete(f'workspace:frontend-base-url:{workspace.id}')
+    invalidate_storefront_config_cache(workspace.id)
 
 
 def _hydrate_workspace_access(request, workspace):

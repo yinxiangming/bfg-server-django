@@ -26,6 +26,13 @@ PROD_READY = {
     "SECRET_KEY": "X" * 60,
     "SENTRY_DSN": "https://key@o0.ingest.sentry.io/0",
     "ALLOWED_HOSTS": ["api.example.com"],
+    "CACHES": {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": "redis://127.0.0.1:6379/15",
+            "KEY_PREFIX": "prod_check",
+        }
+    },
 }
 
 
@@ -38,10 +45,9 @@ def _apply_prod_ready(settings):
 
 
 class TestChecksRegistry:
-    def test_eleven_checks_registered(self):
-        # Plan §2.6 committed to exactly 11 assertions; if this changes,
-        # the SRE runbook docs need to change too.
-        assert len(PROD_CHECKS) == 11
+    def test_twelve_checks_registered(self):
+        # If this count changes, update deploy docs that reference bfg_prod_check.
+        assert len(PROD_CHECKS) == 12
 
     def test_each_check_is_a_description_plus_callable(self):
         for item in PROD_CHECKS:
@@ -99,6 +105,14 @@ class TestEachViolationCaught:
             ({"SENTRY_DSN": ""}, "SENTRY_DSN"),
             ({"ALLOWED_HOSTS": ["*"]}, "ALLOWED_HOSTS"),
             ({"ALLOWED_HOSTS": []}, "ALLOWED_HOSTS"),
+            (
+                {
+                    "CACHES": {
+                        "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+                    }
+                },
+                "RedisCache",
+            ),
         ],
     )
     def test_violation_raises_command_error(self, settings, override, expected_fragment):

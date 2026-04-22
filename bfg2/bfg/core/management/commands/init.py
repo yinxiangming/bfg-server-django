@@ -203,9 +203,9 @@ class Command(BaseCommand):
                     config = json.load(f)
                 service = SiteConfigService(workspace=workspace, user=user)
                 service.load_from_config(config, created_by_user=user, mode='merge')
-                from django.core.cache import cache
-                for lang in ('en', 'zh-hans'):
-                    cache.delete(f'storefront_config:{workspace.id}:{lang}')
+                from bfg.common.storefront_cache import invalidate_storefront_config_cache
+
+                invalidate_storefront_config_cache(workspace.id)
                 self.stdout.write(self.style.SUCCESS('Loaded site config (Site, Pages, Menus).'))
             else:
                 self.stdout.write(

@@ -233,7 +233,8 @@ class WorkspaceMiddleware:
 
     1. JWT claim ``workspace_id`` (Bearer token, verified)
     2. ``request.session['workspace_id']`` (reserved for future cookie flows)
-    3. ``X-Workspace-ID`` header — **only** when not IS_PROD or user is anonymous
+    3. ``X-Workspace-ID`` header — **only** in non-prod and for anonymous requests
+       (prod + authenticated + no JWT claim → rejected before domain fallback)
        (prod authenticated requests must use JWT to prevent header spoofing)
     4. Hostname (optionally from ``X-Forwarded-Host``) via WorkspaceDomain
     5. PUBLIC_PATHS / WORKSPACE_DELEGATING_HEADERS → let through, workspace=None
@@ -322,10 +323,13 @@ class WorkspaceMiddleware:
         is_prod = getattr(settings, 'IS_PROD', False)
         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
         header_is_authenticated = bool(auth_header.startswith('Bearer ') or auth_header.startswith('Token '))
-        if not (is_prod and header_is_authenticated):
-            ws_id = request.headers.get('X-Workspace-ID')
-            if ws_id:
-                return _get_workspace_by_id(ws_id)
+        if is_prod and header_is_authenticated:
+            # JWT claim absent on an authenticated prod request — reject before domain
+            # fallback to prevent accidental cross-tenant resolution via hostname.
+            return None
+        ws_id = request.headers.get('X-Workspace-ID')
+        if ws_id:
+            return _get_workspace_by_id(ws_id)
 
         # 4. Domain-based lookup (storefront / anonymous)
         forwarded_host = request.META.get('HTTP_X_FORWARDED_HOST')

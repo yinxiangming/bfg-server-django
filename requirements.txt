@@ -8,7 +8,7 @@ drf-spectacular==0.27.2  # OpenAPI/Swagger documentation
 # Database
 PyMySQL==1.1.1
 dj-database-url==2.3.0
-cryptography==43.0.3  # Often needed for modern DB connections
+cryptography==46.0.7  # Often needed for modern DB connections
 
 # Background Tasks
 redis==5.2.0

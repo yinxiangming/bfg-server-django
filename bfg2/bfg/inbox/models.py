@@ -11,8 +11,10 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from django.conf import settings
 
+from bfg.common.managers import TenantScopedModel
 
-class Message(models.Model):
+
+class Message(TenantScopedModel):
     """
     Message/notification sent to users.
     """
@@ -65,6 +67,8 @@ class Message(models.Model):
         indexes = [
             models.Index(fields=['workspace', '-created_at']),
         ]
+        # Phase-0 PR-07: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return self.subject

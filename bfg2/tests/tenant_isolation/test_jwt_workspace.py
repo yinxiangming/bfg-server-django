@@ -212,6 +212,37 @@ class TestProdModeHeaderSpoofing:
         )
         assert response.status_code != 400
 
+    @override_settings(IS_PROD=True)
+    def test_prod_jwt_claim_wins_over_x_workspace_id(self, staff_user, ws, ws2):
+        """In prod: JWT claim=ws beats a forged X-Workspace-ID=ws2 (PR-12 assertion)."""
+        token = _mint_token(staff_user, workspace_id=ws.id)
+        response = Client().get(
+            '/api/v1/__strict_probe__/',
+            HTTP_X_WORKSPACE_ID=str(ws2.id),
+            **_bearer(token),
+        )
+        # ws resolved via JWT claim; ws2 header is ignored
+        assert response.status_code != 400
+
+    @override_settings(IS_PROD=True)
+    def test_prod_bearer_no_claim_rejected_before_domain_lookup(self, user, ws):
+        """In prod: Bearer token without workspace_id claim → 400, no domain fallback (PR-12)."""
+        WorkspaceDomain.objects.create(
+            workspace=ws,
+            hostname='testserver',
+            kind=WorkspaceDomain.KIND_CUSTOM,
+            verification_status=WorkspaceDomain.VERIFICATION_VERIFIED,
+        )
+        refresh = RefreshToken.for_user(user)
+        token = str(refresh.access_token)  # no workspace_id claim
+        response = Client().get(
+            '/api/v1/__strict_probe__/',
+            **_bearer(token),
+        )
+        # Domain 'testserver' exists but must not be used for prod+authenticated+no-claim
+        assert response.status_code == 400
+        assert response.json()['code'] == 'workspace_required'
+
     def test_non_prod_auth_request_honours_x_workspace_id(self, user, ws):
         """IS_PROD=False (test default): X-Workspace-ID header still accepted."""
         refresh = RefreshToken.for_user(user)

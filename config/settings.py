@@ -250,6 +250,7 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM': 'user_id',
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
     'TOKEN_TYPE_CLAIM': 'token_type',
+    'TOKEN_REFRESH_SERIALIZER': 'config.serializers.CustomTokenRefreshSerializer',
 }
 
 SPECTACULAR_SETTINGS = {

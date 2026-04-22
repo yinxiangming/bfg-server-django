@@ -25,23 +25,23 @@ def clear_data():
     ProductBatch.objects.all().delete()
     VariantInventory.objects.all().delete()
     CartItem.objects.all().delete()
-    Cart.objects.all().delete()
+    Cart.all_objects.all().delete()
     ReturnLineItem.objects.all().delete()
     Return.objects.all().delete()
     ProductChannelListing.objects.all().delete()
     ChannelCollection.objects.all().delete()
-    SalesChannel.objects.all().delete()
+    SalesChannel.all_objects.all().delete()
     # Delete MediaLinks for products (via GenericForeignKey)
     product_content_type = ContentType.objects.get_for_model(Product)
     MediaLink.objects.filter(content_type=product_content_type).delete()
     OrderItem.objects.all().delete()
-    Order.objects.all().delete()
+    Order.all_objects.all().delete()
     ProductReview.objects.all().delete()
     ProductVariant.objects.all().delete()
-    Product.objects.all().delete()
-    ProductTag.objects.all().delete()
-    ProductCategory.objects.all().delete()
-    Store.objects.all().delete()
+    Product.all_objects.all().delete()
+    ProductTag.all_objects.all().delete()
+    ProductCategory.all_objects.all().delete()
+    Store.all_objects.all().delete()
     SubscriptionPlan.objects.all().delete()
     # 3. Invalidate caches (none for shop)
 
@@ -117,7 +117,7 @@ def seed_data(workspace, stdout=None, style=None, **context):
     templates = create_order_notification_templates(workspace, stdout, style)
     
     summary = [
-        {'label': 'Orders', 'count': Order.objects.count()},
+        {'label': 'Orders', 'count': Order.all_objects.count()},
     ]
     return {
         'categories': categories,
@@ -139,8 +139,8 @@ def seed_data(workspace, stdout=None, style=None, **context):
 
 def create_product_categories(workspace, stdout=None, style=None):
     """Create product categories matching storefront frontend"""
-    if ProductCategory.objects.filter(workspace=workspace).exists():
-        categories = list(ProductCategory.objects.filter(workspace=workspace))
+    if ProductCategory.all_objects.filter(workspace=workspace).exists():
+        categories = list(ProductCategory.all_objects.filter(workspace=workspace))
         if stdout:
             stdout.write(style.SUCCESS("Using existing product categories (skip default XMart category tree)."))
         return categories
@@ -188,7 +188,7 @@ def create_product_categories(workspace, stdout=None, style=None):
         if cat_data['parent_slug']:
             parent = category_map.get(cat_data['parent_slug'])
         
-        category, created = ProductCategory.objects.get_or_create(
+        category, created = ProductCategory.all_objects.get_or_create(
             workspace=workspace,
             slug=cat_data['slug'],
             language='en',
@@ -232,7 +232,7 @@ def create_product_categories(workspace, stdout=None, style=None):
 
 def create_store(workspace, stdout=None, style=None):
     """Create store"""
-    store, created = Store.objects.get_or_create(
+    store, created = Store.all_objects.get_or_create(
         workspace=workspace,
         code='MAIN-STORE',
         defaults={
@@ -525,7 +525,7 @@ def create_products(workspace, categories, tags, admin_user, stdout=None, style=
                 )
             continue
 
-        product, created = Product.objects.get_or_create(
+        product, created = Product.all_objects.get_or_create(
             workspace=workspace,
             slug=prod_data['slug'],
             defaults={
@@ -614,7 +614,7 @@ def create_orders(workspace, customer_users, customers, addresses, store, produc
     # Get addresses if not provided
     if not addresses:
         customer_content_type = ContentType.objects.get_for_model(CustomerModel)
-        addresses = Address.objects.filter(
+        addresses = Address.all_objects.filter(
             workspace=workspace,
             content_type=customer_content_type
         )
@@ -628,7 +628,7 @@ def create_orders(workspace, customer_users, customers, addresses, store, produc
     for i, customer in enumerate(customer_list, 1):
         # Get customer addresses
         customer_content_type = ContentType.objects.get_for_model(CustomerModel)
-        customer_addresses = Address.objects.filter(
+        customer_addresses = Address.all_objects.filter(
             workspace=workspace,
             content_type=customer_content_type,
             object_id=customer.id
@@ -639,7 +639,7 @@ def create_orders(workspace, customer_users, customers, addresses, store, produc
         
         # Create address if none exists
         if not shipping_addr:
-            shipping_addr = Address.objects.create(
+            shipping_addr = Address.all_objects.create(
                 workspace=workspace,
                 content_type=customer_content_type,
                 object_id=customer.id,
@@ -662,7 +662,7 @@ def create_orders(workspace, customer_users, customers, addresses, store, produc
         order_number = f'ORD-{timezone.now().strftime("%Y%m%d")}-{i:04d}'
         
         # Check if order already exists with different number
-        existing_order = Order.objects.filter(
+        existing_order = Order.all_objects.filter(
             workspace=workspace,
             customer=customer,
             store=store
@@ -675,7 +675,7 @@ def create_orders(workspace, customer_users, customers, addresses, store, produc
             continue
         
         try:
-            order, created = Order.objects.get_or_create(
+            order, created = Order.all_objects.get_or_create(
                 workspace=workspace,
                 order_number=order_number,
                 defaults={
@@ -826,7 +826,7 @@ def create_sales_channels(workspace, stdout=None, style=None):
     ]
     channels = []
     for data in channels_data:
-        channel, created = SalesChannel.objects.get_or_create(
+        channel, created = SalesChannel.all_objects.get_or_create(
             workspace=workspace,
             code=data['code'],
             defaults={
@@ -909,7 +909,7 @@ def create_product_tags(workspace, stdout=None, style=None):
     ]
     tags = []
     for tag_data in tags_data:
-        tag, created = ProductTag.objects.get_or_create(
+        tag, created = ProductTag.all_objects.get_or_create(
             workspace=workspace,
             slug=tag_data['slug'],
             language='en',
@@ -1033,11 +1033,11 @@ def create_carts(workspace, customer_users, products, variants, stdout=None, sty
     
     carts = []
     for i, customer_user in enumerate(customer_users[:2]):  # Create carts for first 2 customers
-        customer = Customer.objects.filter(workspace=workspace, user=customer_user).first()
+        customer = Customer.all_objects.filter(workspace=workspace, user=customer_user).first()
         if not customer:
             continue
         
-        cart, created = Cart.objects.get_or_create(
+        cart, created = Cart.all_objects.get_or_create(
             workspace=workspace,
             customer=customer,
             defaults={}
@@ -1068,7 +1068,7 @@ def create_variant_inventory(workspace, variants, stdout=None, style=None):
     if not variants:
         return
     
-    warehouses = Warehouse.objects.filter(workspace=workspace)
+    warehouses = Warehouse.all_objects.filter(workspace=workspace)
     if not warehouses.exists():
         if stdout:
             stdout.write(style.WARNING('⚠️  No warehouses found, skipping inventory creation'))
@@ -1172,7 +1172,7 @@ def create_product_batches(workspace, products, variants, stdout=None, style=Non
     if not variants:
         return []
     
-    warehouses = Warehouse.objects.filter(workspace=workspace)
+    warehouses = Warehouse.all_objects.filter(workspace=workspace)
     if not warehouses.exists():
         if stdout:
             stdout.write(style.WARNING('⚠️  No warehouses found, skipping batch creation'))

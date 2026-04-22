@@ -22,11 +22,11 @@ def clear_data():
     BillingStatement.objects.all().delete()
     BillingCycle.objects.all().delete()
     Transaction.objects.all().delete()
-    Wallet.objects.all().delete()
+    Wallet.all_objects.all().delete()
     Refund.objects.all().delete()
-    Payment.objects.all().delete()
+    Payment.all_objects.all().delete()
     InvoiceItem.objects.all().delete()
-    Invoice.objects.all().delete()
+    Invoice.all_objects.all().delete()
     FinancialCode.objects.all().delete()
     Brand.objects.all().delete()
     PaymentMethod.objects.all().delete()
@@ -98,7 +98,7 @@ def seed_data(workspace, stdout=None, style=None, **context):
     
     # Get orders for invoices
     from bfg.shop.models import Order
-    orders_qs = Order.objects.filter(workspace=workspace)
+    orders_qs = Order.all_objects.filter(workspace=workspace)
     orders_list = list(orders_qs[:10])
     
     if stdout:
@@ -124,8 +124,8 @@ def seed_data(workspace, stdout=None, style=None, **context):
     create_billing_statements(billing_cycles, stdout, style)
     
     summary = [
-        {'label': 'Invoices', 'count': Invoice.objects.count()},
-        {'label': 'Payments', 'count': Payment.objects.count()},
+        {'label': 'Invoices', 'count': Invoice.all_objects.count()},
+        {'label': 'Payments', 'count': Payment.all_objects.count()},
     ]
     return {
         'currencies': currencies,
@@ -450,7 +450,7 @@ def create_wallets(customers, currencies, stdout=None, style=None):
         workspace = getattr(customer, 'workspace', None)
         if not workspace:
             continue
-        wallet, created = Wallet.objects.get_or_create(
+        wallet, created = Wallet.all_objects.get_or_create(
             workspace=workspace,
             customer=customer,
             defaults={
@@ -511,7 +511,7 @@ def create_invoices(workspace, customers, orders, currencies, tax_rates, brands,
             statuses = ['draft', 'sent', 'paid', 'overdue']
             status = statuses[i % len(statuses)]
             
-            invoice, created = Invoice.objects.get_or_create(
+            invoice, created = Invoice.all_objects.get_or_create(
                 workspace=workspace,
                 invoice_number=invoice_number,
                 defaults={
@@ -567,7 +567,7 @@ def create_invoices(workspace, customers, orders, currencies, tax_rates, brands,
             statuses = ['draft', 'sent', 'paid', 'overdue']
             status = statuses[i % len(statuses)]
             
-            invoice, created = Invoice.objects.get_or_create(
+            invoice, created = Invoice.all_objects.get_or_create(
                 workspace=workspace,
                 invoice_number=invoice_number,
                 defaults={
@@ -635,7 +635,7 @@ def create_payments(workspace, customers, invoices, orders, payment_gateways, pa
                 gateway = payment_gateways[i % len(payment_gateways)]
                 payment_method = payment_methods[i % len(payment_methods)] if payment_methods else None
                 
-                payment, created = Payment.objects.get_or_create(
+                payment, created = Payment.all_objects.get_or_create(
                     payment_number=payment_number,
                     defaults={
                         'workspace': workspace,
@@ -666,7 +666,7 @@ def create_payments(workspace, customers, invoices, orders, payment_gateways, pa
             gateway = payment_gateways[(i + len(paid_invoices)) % len(payment_gateways)]
             payment_method = payment_methods[(i + len(paid_invoices)) % len(payment_methods)] if payment_methods else None
             
-            payment, created = Payment.objects.get_or_create(
+            payment, created = Payment.all_objects.get_or_create(
                 payment_number=payment_number,
                 defaults={
                     'workspace': workspace,
@@ -701,7 +701,7 @@ def create_payments(workspace, customers, invoices, orders, payment_gateways, pa
             
             amount = Decimal('100.00') * (i + 1)
             
-            payment, created = Payment.objects.get_or_create(
+            payment, created = Payment.all_objects.get_or_create(
                 payment_number=payment_number,
                 defaults={
                     'workspace': workspace,

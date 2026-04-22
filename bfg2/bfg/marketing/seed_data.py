@@ -314,7 +314,7 @@ def create_campaign_displays(workspace, campaigns, stdout=None, style=None, **co
         try:
             from bfg.shop.models import ProductCategory
             categories = list(
-                ProductCategory.objects.filter(workspace=workspace, parent__isnull=True)
+                ProductCategory.all_objects.filter(workspace=workspace, parent__isnull=True)
                 .order_by('order', 'name')[:8]
             )
         except Exception:

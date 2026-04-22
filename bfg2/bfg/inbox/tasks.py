@@ -39,7 +39,7 @@ def send_notification(
         
         # Get workspace and customer
         workspace = Workspace.objects.get(id=workspace_id)
-        customer = Customer.objects.select_related('user').get(
+        customer = Customer.all_objects.select_related('user').get(
             id=customer_id,
             workspace=workspace
         )
@@ -63,7 +63,10 @@ def send_notification(
         if order_id:
             from bfg.shop.models import Order
             try:
-                order = Order.objects.select_related(
+                # Phase-0 PR-06: use unscoped manager since tasks run
+                # outside any request context; workspace_id filter below
+                # still enforces tenant isolation.
+                order = Order.all_objects.select_related(
                     'customer', 'workspace', 'store'
                 ).prefetch_related('items').get(
                     id=order_id,

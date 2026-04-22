@@ -20,7 +20,7 @@ def clear_data():
     # 2. Delete in dependency order
     TicketAssignment.objects.all().delete()
     SupportTicketMessage.objects.all().delete()
-    SupportTicket.objects.all().delete()
+    SupportTicket.all_objects.all().delete()
     TicketTemplate.objects.all().delete()
     TicketTag.objects.all().delete()
     UserFeedback.objects.all().delete()
@@ -97,7 +97,7 @@ def seed_data(workspace, stdout=None, style=None, **context):
     templates = create_ticket_templates(workspace, categories, stdout, style)
     
     summary = [
-        {'label': 'Support Tickets', 'count': SupportTicket.objects.count()},
+        {'label': 'Support Tickets', 'count': SupportTicket.all_objects.count()},
     ]
     return {
         'categories': categories,
@@ -249,7 +249,7 @@ def create_support_tickets(workspace, customers, categories, priorities, teams, 
     ]
     
     # Get some orders for related_order
-    orders = Order.objects.filter(workspace=workspace)[:5]
+    orders = Order.all_objects.filter(workspace=workspace)[:5]
     
     for i, subject in enumerate(ticket_subjects):
         customer = customers[i % len(customers)]
@@ -268,7 +268,7 @@ def create_support_tickets(workspace, customers, categories, priorities, teams, 
         related_order = orders[i % len(orders)] if orders and i < len(orders) else None
         
         try:
-            ticket, created = SupportTicket.objects.get_or_create(
+            ticket, created = SupportTicket.all_objects.get_or_create(
                 ticket_number=ticket_number,
                 defaults={
                     'workspace': workspace,

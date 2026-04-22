@@ -23,6 +23,13 @@ from .models import (
     normalize_hostname,
 )
 
+try:
+    from rest_framework_simplejwt.backends import TokenBackend
+    from rest_framework_simplejwt.exceptions import TokenBackendError
+    _JWT_AVAILABLE = True
+except ImportError:
+    _JWT_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # Thread-local storage for current workspace — read by TenantScopedManager
@@ -184,30 +191,57 @@ def _hydrate_workspace_access(request, workspace):
     request.is_customer = bool(access_status.get('is_customer', False))
 
 
+WORKSPACE_ACCESS_DENIED_RESPONSE = {
+    'detail': 'You are not a member of this workspace.',
+    'code': 'workspace_access_denied',
+}
+
+
+def _decode_jwt_workspace_id(request):
+    """Extract workspace_id from Bearer JWT claim without full DRF auth stack."""
+    if not _JWT_AVAILABLE:
+        return None
+    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+    if not auth_header.startswith('Bearer '):
+        return None
+    raw_token = auth_header[len('Bearer '):]
+    try:
+        backend = TokenBackend(
+            algorithm=getattr(settings, 'SIMPLE_JWT', {}).get('ALGORITHM', 'HS256'),
+            signing_key=getattr(settings, 'SIMPLE_JWT', {}).get('SIGNING_KEY', settings.SECRET_KEY),
+        )
+        payload = backend.decode(raw_token, verify=True)
+        ws_id = payload.get('workspace_id')
+        return int(ws_id) if ws_id is not None else None
+    except (TokenBackendError, ValueError, TypeError):
+        return None
+
+
 class WorkspaceMiddleware:
     """Bind every request to exactly one workspace.
 
-    Resolution order:
+    Resolution order (PR-10):
 
-    1. ``X-Workspace-ID`` header (explicit API client)
-    2. Hostname (optionally from ``X-Forwarded-Host``) via WorkspaceDomain
-    3. If the path is in :data:`PUBLIC_PATHS`, or the request carries one
-       of :data:`WORKSPACE_DELEGATING_HEADERS` (``X-API-Key``) — let it
-       through with ``request.workspace = None``; the view layer will
-       populate workspace from the auth credential.
-    4. Otherwise: respond with ``400 workspace_required``.
+    1. JWT claim ``workspace_id`` (Bearer token, verified)
+    2. ``request.session['workspace_id']`` (reserved for future cookie flows)
+    3. ``X-Workspace-ID`` header — **only** when not IS_PROD or user is anonymous
+       (prod authenticated requests must use JWT to prevent header spoofing)
+    4. Hostname (optionally from ``X-Forwarded-Host``) via WorkspaceDomain
+    5. PUBLIC_PATHS / WORKSPACE_DELEGATING_HEADERS → let through, workspace=None
+    6. Otherwise: 400 workspace_required
+
+    After workspace binding, authenticated users with no membership → 403.
 
     A try/finally clears the thread-local in every code path so a
     Gunicorn/uvicorn worker reusing the same OS thread across requests
-    can never inherit another tenant's workspace. This was a real leak
-    in the legacy ``MiddlewareMixin`` implementation.
+    can never inherit another tenant's workspace.
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        set_current_workspace(None)  # defensive — previous request may have panicked
+        set_current_workspace(None)
         try:
             return self._dispatch(request)
         finally:
@@ -216,7 +250,6 @@ class WorkspaceMiddleware:
     def _dispatch(self, request):
         path = request.path
 
-        # Public paths never need workspace context.
         if self._is_public(path):
             request.workspace = None
             return self.get_response(request)
@@ -224,8 +257,6 @@ class WorkspaceMiddleware:
         workspace = self._resolve_workspace(request)
 
         if workspace is None:
-            # Delegation headers defer to view-layer auth to resolve the
-            # workspace — we can't see it from middleware alone.
             if self._delegates_to_view_auth(request):
                 request.workspace = None
                 return self.get_response(request)
@@ -235,10 +266,24 @@ class WorkspaceMiddleware:
             )
             return JsonResponse(MISSING_WORKSPACE_RESPONSE, status=400)
 
-        # Happy path: bind to request + thread-local, hydrate role flags.
         request.workspace = workspace
         set_current_workspace(workspace)
         _hydrate_workspace_access(request, workspace)
+
+        # Defense-in-depth: authenticated user with no membership → 403.
+        user = getattr(request, 'user', None)
+        if (
+            user and getattr(user, 'is_authenticated', False)
+            and not getattr(user, 'is_superuser', False)
+            and not request.is_staff_member
+            and not request.is_customer
+        ):
+            logger.warning(
+                "tenant_isolation: authenticated user %s has no membership in workspace %s",
+                user.id, workspace.id,
+            )
+            return JsonResponse(WORKSPACE_ACCESS_DENIED_RESPONSE, status=403)
+
         return self.get_response(request)
 
     # ─── helpers ─────────────────────────────────────────────────────
@@ -253,10 +298,27 @@ class WorkspaceMiddleware:
 
     @staticmethod
     def _resolve_workspace(request):
-        ws_id = request.headers.get('X-Workspace-ID')
-        if ws_id:
-            return _get_workspace_by_id(ws_id)
+        # 1. JWT claim (authenticated requests in prod — prevents header spoofing)
+        jwt_ws_id = _decode_jwt_workspace_id(request)
+        if jwt_ws_id is not None:
+            return _get_workspace_by_id(jwt_ws_id)
 
+        # 2. Session (reserved for cookie-based flows)
+        session_ws_id = request.session.get('workspace_id') if hasattr(request, 'session') else None
+        if session_ws_id is not None:
+            return _get_workspace_by_id(session_ws_id)
+
+        # 3. X-Workspace-ID header — only trusted in non-prod or for anonymous users.
+        #    In prod, authenticated callers must use JWT (claim already checked above).
+        is_prod = getattr(settings, 'IS_PROD', False)
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+        header_is_authenticated = bool(auth_header.startswith('Bearer ') or auth_header.startswith('Token '))
+        if not (is_prod and header_is_authenticated):
+            ws_id = request.headers.get('X-Workspace-ID')
+            if ws_id:
+                return _get_workspace_by_id(ws_id)
+
+        # 4. Domain-based lookup (storefront / anonymous)
         forwarded_host = request.META.get('HTTP_X_FORWARDED_HOST')
         host = (forwarded_host or request.get_host()).split(':')[0]
         hostname = host.strip()

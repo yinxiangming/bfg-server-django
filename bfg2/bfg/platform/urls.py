@@ -12,6 +12,7 @@ from rest_framework.routers import DefaultRouter
 from bfg.platform.views.workspace_views import WorkspaceViewSet, PlanViewSet, SSOConfigViewSet
 from bfg.platform.views.auth_views import AuthViewSet, InternalAuthViewSet
 from bfg.platform.views.subscription_views import WebhookViewSet
+from bfg.platform.views.switch_workspace_view import switch_workspace
 
 router = DefaultRouter()
 router.register(r'workspaces', WorkspaceViewSet, basename='platform-workspace')
@@ -23,4 +24,5 @@ router.register(r'webhooks',   WebhookViewSet,   basename='platform-webhook')
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('switch-workspace/', switch_workspace, name='platform-switch-workspace'),
 ]

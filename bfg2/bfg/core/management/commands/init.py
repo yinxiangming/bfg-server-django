@@ -133,7 +133,9 @@ class Command(BaseCommand):
         )
         if ws_created:
             ensure_system_default_workspace_domain(workspace)
-            upsert_custom_workspace_domain(workspace, 'localhost', is_primary=True)
+            from django.conf import settings as _settings
+            if not getattr(_settings, 'IS_PROD', False):
+                upsert_custom_workspace_domain(workspace, 'localhost', is_primary=True)
             self.stdout.write(self.style.SUCCESS(f'Created workspace: {workspace.name} (slug={workspace_slug})'))
             global_dispatcher.dispatch('workspace.created', {'data': {'workspace': workspace}})
         else:

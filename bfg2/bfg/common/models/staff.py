@@ -4,6 +4,9 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from django.conf import settings
 
+from bfg.common.managers import TenantScopedModel
+
+
 class StaffRole(models.Model):
     """
     Staff role definition for a workspace.
@@ -37,7 +40,7 @@ class StaffRole(models.Model):
         return f"{self.workspace.name} - {self.name}"
 
 
-class StaffMember(models.Model):
+class StaffMember(TenantScopedModel):
     """
     Staff member linking a User to a Workspace with a specific role.
     Users can be staff members of multiple workspaces.
@@ -69,6 +72,8 @@ class StaffMember(models.Model):
             models.Index(fields=['workspace', 'is_active']),
             models.Index(fields=['user', 'is_active']),
         ]
+        # Phase-0 PR-08: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return f"{self.user.get_full_name()} @ {self.workspace.name} ({self.role.name})"

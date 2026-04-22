@@ -27,11 +27,11 @@ def clear_data():
     """Clear common module data. Process: (1) collect cache keys if any, (2) delete in dependency order, (3) invalidate caches if any."""
     # 1. Collect cache keys before delete (this module has no cache)
     # 2. Delete in dependency order
-    Address.objects.all().delete()
+    Address.all_objects.all().delete()
     CustomerTag.objects.all().delete()
     CustomerSegment.objects.all().delete()
-    Customer.objects.all().delete()
-    StaffMember.objects.all().delete()
+    Customer.all_objects.all().delete()
+    StaffMember.all_objects.all().delete()
     StaffRole.objects.all().delete()
     # Keep workspace and users for now
     # 3. Invalidate caches (none for common)
@@ -81,13 +81,13 @@ def seed_data(workspace, stdout=None, style=None, **context):
     
     summary = [
         {'label': 'Users', 'count': User.objects.count()},
-        {'label': 'Customers', 'count': Customer.objects.count()},
-        {'label': 'Addresses', 'count': Address.objects.count()},
+        {'label': 'Customers', 'count': Customer.all_objects.count()},
+        {'label': 'Addresses', 'count': Address.all_objects.count()},
         {'label': 'Customer Segments', 'count': CustomerSegment.objects.count()},
         {'label': 'Customer Tags', 'count': CustomerTag.objects.count()},
         {'label': 'Email Configs', 'count': EmailConfig.objects.count()},
         {'label': 'Staff Roles', 'count': StaffRole.objects.count()},
-        {'label': 'Staff Members', 'count': StaffMember.objects.count()},
+        {'label': 'Staff Members', 'count': StaffMember.all_objects.count()},
     ]
     return {
         'workspace': workspace,
@@ -262,7 +262,7 @@ def create_staff_members(workspace, admin_user, staff_users, stdout=None, style=
     staff_role = StaffRole.objects.get(workspace=workspace, code='staff')
     
     # Create or update admin staff member - ensure admin user is workspace admin
-    admin_staff, created = StaffMember.objects.get_or_create(
+    admin_staff, created = StaffMember.all_objects.get_or_create(
         workspace=workspace,
         user=admin_user,
         defaults={
@@ -286,7 +286,7 @@ def create_staff_members(workspace, admin_user, staff_users, stdout=None, style=
     
     # Create staff members for other staff users
     for user in staff_users:
-        staff_member, created = StaffMember.objects.get_or_create(
+        staff_member, created = StaffMember.all_objects.get_or_create(
             workspace=workspace,
             user=user,
             defaults={
@@ -302,7 +302,7 @@ def create_customers(workspace, customer_users, stdout=None, style=None):
     """Create customer profiles"""
     customers = []
     for i, user in enumerate(customer_users, 1):
-        customer, created = Customer.objects.get_or_create(
+        customer, created = Customer.all_objects.get_or_create(
             workspace=workspace,
             user=user,
             defaults={
@@ -340,7 +340,7 @@ def create_addresses(workspace, customers, stdout=None, style=None):
     
     for customer, template in zip(customers, address_templates):
         content_type = ContentType.objects.get_for_model(customer)
-        shipping_addr = Address.objects.filter(
+        shipping_addr = Address.all_objects.filter(
             workspace=workspace,
             content_type=content_type,
             object_id=customer.id,
@@ -351,7 +351,7 @@ def create_addresses(workspace, customers, stdout=None, style=None):
         
         if not shipping_addr:
             try:
-                shipping_addr = Address.objects.create(
+                shipping_addr = Address.all_objects.create(
                     workspace=workspace,
                     content_type=content_type,
                     object_id=customer.id,
@@ -362,14 +362,14 @@ def create_addresses(workspace, customers, stdout=None, style=None):
                 )
                 addresses.append(shipping_addr)
             except IntegrityError:
-                shipping_addr = Address.objects.filter(
+                shipping_addr = Address.all_objects.filter(
                     workspace=workspace,
                     content_type=content_type,
                     object_id=customer.id,
                 ).first()
         
         # Billing address
-        billing_addr = Address.objects.filter(
+        billing_addr = Address.all_objects.filter(
             workspace=workspace,
             content_type=content_type,
             object_id=customer.id,
@@ -378,7 +378,7 @@ def create_addresses(workspace, customers, stdout=None, style=None):
         
         if not billing_addr:
             try:
-                billing_addr = Address.objects.create(
+                billing_addr = Address.all_objects.create(
                     workspace=workspace,
                     content_type=content_type,
                     object_id=customer.id,

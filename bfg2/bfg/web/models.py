@@ -11,8 +11,10 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from django.conf import settings
 
+from bfg.common.managers import TenantScopedModel
 
-class Site(models.Model):
+
+class Site(TenantScopedModel):
     """
     Multi-site configuration.
     Each site can have its own domain, theme, and content.
@@ -70,6 +72,11 @@ class Site(models.Model):
             models.Index(fields=['domain']),
             models.Index(fields=['workspace', 'is_active']),
         ]
+        # Phase-0 PR-08: keep reverse FK / migration access unscoped.
+        # Site.objects.filter(domain=...) runs on the request path
+        # *before* WorkspaceMiddleware resolves the workspace, so
+        # storefront lookups must use all_objects.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return f"{self.name} ({self.domain})"

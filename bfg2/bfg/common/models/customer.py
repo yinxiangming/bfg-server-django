@@ -10,7 +10,10 @@ from django.utils import timezone
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 
-class Customer(models.Model):
+from bfg.common.managers import TenantScopedModel
+
+
+class Customer(TenantScopedModel):
     """
     Customer profile linking User to Workspace.
     A user can be a customer of multiple workspaces.
@@ -60,6 +63,8 @@ class Customer(models.Model):
             ('workspace', 'customer_number'),
         ]
         ordering = ['-created_at']
+        # Phase-0 PR-08: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return f"{self.user.get_full_name()} ({self.workspace.name})"

@@ -5,6 +5,7 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 
 from bfg.common.constants import DEFAULT_CURRENCY_CODE
+from bfg.common.managers import TenantScopedModel
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.utils.translation import gettext_lazy as _
@@ -95,7 +96,7 @@ class User(AbstractUser):
         return self.get_full_name() or self.username
 
 
-class Address(models.Model):
+class Address(TenantScopedModel):
     """
     Generic address model that can be used by any object.
     Uses GenericForeignKey for flexible associations.
@@ -145,6 +146,8 @@ class Address(models.Model):
             models.Index(fields=['content_type', 'object_id']),
             models.Index(fields=['content_type', 'object_id', 'is_default']),
         ]
+        # Phase-0 PR-08: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return f"{self.full_name} - {self.city}, {self.country}"

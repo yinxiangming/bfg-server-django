@@ -10,6 +10,8 @@ from django.utils import timezone
 from django.conf import settings
 from decimal import Decimal
 
+from bfg.common.managers import TenantScopedModel
+
 
 class Currency(models.Model):
     """Currency configuration."""
@@ -337,7 +339,7 @@ class FinancialCode(models.Model):
         return f"{self.code} - {self.name}"
 
 
-class Invoice(models.Model):
+class Invoice(TenantScopedModel):
     """Invoice."""
     STATUS_CHOICES = (
         ('draft', _('Draft')),
@@ -392,6 +394,8 @@ class Invoice(models.Model):
             models.Index(fields=['invoice_number']),
             models.Index(fields=['status']),
         ]
+        # Phase-0 PR-08: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return self.invoice_number
@@ -465,7 +469,7 @@ class InvoiceItem(models.Model):
         return f"{self.invoice.invoice_number} - {self.description}"
 
 
-class Payment(models.Model):
+class Payment(TenantScopedModel):
     """Payment transaction."""
     STATUS_CHOICES = (
         ('pending', _('Pending')),
@@ -524,6 +528,8 @@ class Payment(models.Model):
             models.Index(fields=['payment_number']),
             models.Index(fields=['status']),
         ]
+        # Phase-0 PR-08: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return f"{self.payment_number} - {self.amount} {self.currency.code}"
@@ -663,7 +669,7 @@ class Transaction(models.Model):
         return f"{self.get_transaction_type_display()} - {self.amount} {self.currency.code}"
 
 
-class Wallet(models.Model):
+class Wallet(TenantScopedModel):
     """
     Customer wallet per workspace. Cash (gold) = withdrawable; credit (silver) = in-store only.
     """
@@ -696,6 +702,8 @@ class Wallet(models.Model):
         indexes = [
             models.Index(fields=['workspace', 'customer']),
         ]
+        # Phase-0 PR-08: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
 
     def __str__(self):
         return f"{self.customer} (ws={self.workspace_id}) - {self.balance} {self.currency.code}"

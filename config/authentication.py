@@ -99,7 +99,12 @@ class APIKeyAuthentication(authentication.BaseAuthentication):
         from bfg.common.models import APIKey as APIKeyModel
 
         try:
-            key_obj = APIKeyModel.objects.select_related('workspace', 'created_by').get(
+            # Phase-0 PR-08: use unscoped manager — the WorkspaceMiddleware
+            # lets X-API-Key requests through without resolving a workspace,
+            # so when this auth class runs the thread-local workspace is
+            # still None. The prefix is globally unique so there's no
+            # cross-tenant ambiguity to resolve.
+            key_obj = APIKeyModel.all_objects.select_related('workspace', 'created_by').get(
                 prefix=api_key,
             )
         except APIKeyModel.DoesNotExist:

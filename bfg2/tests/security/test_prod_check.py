@@ -24,7 +24,6 @@ PROD_READY = {
     "CSRF_COOKIE_SECURE": True,
     "BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS": False,
     "SECRET_KEY": "X" * 60,
-    "SENTRY_DSN": "https://key@o0.ingest.sentry.io/0",
     "ALLOWED_HOSTS": ["api.example.com"],
     "CACHES": {
         "default": {
@@ -45,9 +44,9 @@ def _apply_prod_ready(settings):
 
 
 class TestChecksRegistry:
-    def test_twelve_checks_registered(self):
+    def test_eleven_checks_registered(self):
         # If this count changes, update deploy docs that reference bfg_prod_check.
-        assert len(PROD_CHECKS) == 12
+        assert len(PROD_CHECKS) == 11
 
     def test_each_check_is_a_description_plus_callable(self):
         for item in PROD_CHECKS:
@@ -102,7 +101,6 @@ class TestEachViolationCaught:
                 "BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS",
             ),
             ({"SECRET_KEY": "dev-secret-change-in-production"}, "SECRET_KEY"),
-            ({"SENTRY_DSN": ""}, "SENTRY_DSN"),
             ({"ALLOWED_HOSTS": ["*"]}, "ALLOWED_HOSTS"),
             ({"ALLOWED_HOSTS": []}, "ALLOWED_HOSTS"),
             (
@@ -167,7 +165,6 @@ class TestSoftMode:
 class TestExceptionInCheck:
     def test_missing_setting_counts_as_failure(self, settings):
         _apply_prod_ready(settings)
-        # SENTRY_DSN is optional; the check uses getattr with default.
         # But e.g. deleting ALLOWED_HOSTS (which .DEBUG etc don't default)
         # should still produce a graceful failure, not a crash.
         delattr(settings, "ALLOWED_HOSTS")

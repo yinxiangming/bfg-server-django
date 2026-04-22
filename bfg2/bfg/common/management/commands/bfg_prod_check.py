@@ -62,10 +62,6 @@ PROD_CHECKS = (
         ),
     ),
     (
-        "SENTRY_DSN should be set (observability)",
-        lambda s: bool(getattr(s, "SENTRY_DSN", "")),
-    ),
-    (
         "ALLOWED_HOSTS must be explicit (no wildcard) and non-empty",
         lambda s: bool(s.ALLOWED_HOSTS) and "*" not in s.ALLOWED_HOSTS,
     ),

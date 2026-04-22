@@ -8,7 +8,10 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 
-class SalesChannel(models.Model):
+from bfg.common.managers import TenantScopedModel
+
+
+class SalesChannel(TenantScopedModel):
     """
     A sales channel where products are sold.
     Examples: Online Store, POS, Mobile App, Facebook, Instagram.
@@ -52,6 +55,8 @@ class SalesChannel(models.Model):
         verbose_name_plural = _("Sales Channels")
         ordering = ['name']
         unique_together = ('workspace', 'code')
+        # Phase-0 PR-06: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return self.name

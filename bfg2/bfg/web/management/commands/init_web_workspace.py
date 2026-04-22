@@ -98,7 +98,7 @@ class Command(BaseCommand):
                 user.default_workspace = workspace
                 user.save(update_fields=['default_workspace'])
         admin_role = StaffRole.objects.get(workspace=workspace, code='admin')
-        _, sm_created = StaffMember.objects.get_or_create(
+        _, sm_created = StaffMember.all_objects.get_or_create(
             workspace=workspace,
             user=user,
             defaults={'role': admin_role, 'is_active': True},

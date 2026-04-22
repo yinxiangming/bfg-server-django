@@ -17,7 +17,7 @@ def send_payment_received_notification(self, workspace_id: int, payment_id: int)
         from bfg.finance.models import Payment
         from bfg.inbox.tasks import send_notification
         
-        payment = Payment.objects.select_related(
+        payment = Payment.all_objects.select_related(
             'customer', 'order', 'currency', 'workspace'
         ).get(
             id=payment_id,
@@ -59,7 +59,7 @@ def send_payment_failed_notification(
         from bfg.finance.models import Payment
         from bfg.inbox.tasks import send_notification
         
-        payment = Payment.objects.select_related(
+        payment = Payment.all_objects.select_related(
             'customer', 'order', 'currency', 'workspace'
         ).get(
             id=payment_id,

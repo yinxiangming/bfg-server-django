@@ -27,7 +27,7 @@ def clear_data():
     Page.objects.all().delete()
     Category.objects.all().delete()
     Tag.objects.all().delete()
-    Site.objects.all().delete()
+    Site.all_objects.all().delete()
     Theme.objects.all().delete()
     Language.objects.all().delete()
 
@@ -93,7 +93,7 @@ def seed_data(workspace, stdout=None, style=None, **context):
         stdout.write(style.WARNING('↻ Media files skipped (require actual file uploads)'))
     
     summary = [
-        {'label': 'Sites', 'count': Site.objects.count()},
+        {'label': 'Sites', 'count': Site.all_objects.count()},
         {'label': 'Pages', 'count': Page.objects.count()},
         {'label': 'Posts', 'count': Post.objects.count()},
         {'label': 'Menus', 'count': Menu.objects.count()},
@@ -196,10 +196,10 @@ def create_languages(workspace, stdout=None, style=None):
 
 def create_site(workspace, theme=None, stdout=None, style=None):
     """Create or update default site. Default site name: XMart (new site only; do not overwrite load_site_config)."""
-    site = Site.objects.filter(workspace=workspace, is_default=True).first()
+    site = Site.all_objects.filter(workspace=workspace, is_default=True).first()
     if site:
         return site
-    site = Site.objects.create(
+    site = Site.all_objects.create(
         workspace=workspace,
         domain='localhost',
         name='XMart',

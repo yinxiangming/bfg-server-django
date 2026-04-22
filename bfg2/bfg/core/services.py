@@ -19,14 +19,26 @@ class BaseService:
     def __init__(self, workspace=None, user=None):
         """
         Initialize Service
-        
+
         Args:
             workspace: Workspace object
             user: Current user object
+
+        Side effect — Phase-0 PR-08: when ``workspace`` is provided we
+        also bind it to the request-scoped thread-local so any
+        :class:`TenantScopedModel` queryset created inside the service
+        auto-filters to the right tenant. In a request context this is
+        a no-op because :class:`WorkspaceMiddleware` has already set
+        the same value; in Celery tasks / management commands / unit
+        tests it ensures services work without every caller having to
+        remember ``set_current_workspace``.
         """
         self.workspace = workspace
         self.user = user
         self.events = global_dispatcher
+        if workspace is not None:
+            from bfg.common.middleware import set_current_workspace
+            set_current_workspace(workspace)
     
     @transaction.atomic
     def execute_in_transaction(self, func, *args, **kwargs):

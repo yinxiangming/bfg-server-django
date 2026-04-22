@@ -39,7 +39,7 @@ def send_inquiry_email(self, inquiry_id: int):
     if inquiry.site:
         notification_config = inquiry.site.notification_config or {}
     else:
-        default_site = Site.objects.filter(
+        default_site = Site.all_objects.filter(
             workspace=inquiry.workspace,
             is_default=True
         ).first()
@@ -125,7 +125,7 @@ def send_inquiry_webhook(self, inquiry_id: int):
     if inquiry.site:
         notification_config = inquiry.site.notification_config or {}
     else:
-        default_site = Site.objects.filter(
+        default_site = Site.all_objects.filter(
             workspace=inquiry.workspace,
             is_default=True
         ).first()
@@ -222,7 +222,7 @@ def invalidate_page_cache(page_id: int):
 def _get_staff_emails(workspace_id: int):
     """Return list of email addresses for active staff in the workspace."""
     from bfg.common.models import StaffMember
-    staff = StaffMember.objects.filter(
+    staff = StaffMember.all_objects.filter(
         workspace_id=workspace_id,
         is_active=True
     ).select_related('user')
@@ -238,11 +238,11 @@ def _get_staff_emails(workspace_id: int):
 def _get_staff_customers(workspace_id: int):
     """Return Customers linked to staff users in this workspace (for inbox)."""
     from bfg.common.models import StaffMember, Customer
-    staff_user_ids = StaffMember.objects.filter(
+    staff_user_ids = StaffMember.all_objects.filter(
         workspace_id=workspace_id,
         is_active=True
     ).values_list('user_id', flat=True)
-    return list(Customer.objects.filter(
+    return list(Customer.all_objects.filter(
         workspace_id=workspace_id,
         user_id__in=staff_user_ids
     ))

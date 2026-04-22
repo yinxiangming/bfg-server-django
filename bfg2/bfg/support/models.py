@@ -9,6 +9,8 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from django.conf import settings
 
+from bfg.common.managers import TenantScopedModel
+
 
 class TicketCategory(models.Model):
     """Support ticket category."""
@@ -75,7 +77,7 @@ class SupportTeam(models.Model):
         return self.name
 
 
-class SupportTicket(models.Model):
+class SupportTicket(TenantScopedModel):
     """Support ticket."""
     STATUS_CHOICES = (
         ('new', _('New')),
@@ -136,6 +138,8 @@ class SupportTicket(models.Model):
             models.Index(fields=['status']),
             models.Index(fields=['assigned_to']),
         ]
+        # Phase-0 PR-07: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return f"{self.ticket_number} - {self.subject}"

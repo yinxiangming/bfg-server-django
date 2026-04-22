@@ -70,7 +70,7 @@ class Command(BaseCommand):
                     created_domains += 1
                     self.stdout.write(self.style.SUCCESS(f"[domain] ensured system_default {system_domain.hostname} for workspace={workspace.slug}"))
 
-            sites = Site.objects.filter(workspace=workspace, is_active=True)
+            sites = Site.all_objects.filter(workspace=workspace, is_active=True)
             for site in sites:
                 hostname = normalize_hostname(site.domain)
                 if not hostname:

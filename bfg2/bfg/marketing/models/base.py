@@ -10,6 +10,8 @@ from django.utils import timezone
 from django.conf import settings
 from decimal import Decimal
 
+from bfg.common.managers import TenantScopedModel
+
 
 class CampaignGroup(models.Model):
     """Campaign group for organizing campaigns."""
@@ -32,7 +34,7 @@ class CampaignGroup(models.Model):
         return self.name
 
 
-class Campaign(models.Model):
+class Campaign(TenantScopedModel):
     """Marketing campaign."""
     CAMPAIGN_TYPE_CHOICES = (
         ('email', _('Email')),
@@ -80,6 +82,8 @@ class Campaign(models.Model):
         verbose_name = _("Campaign")
         verbose_name_plural = _("Campaigns")
         ordering = ['-start_date']
+        # Phase-0 PR-07: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
 
     def __str__(self):
         return self.name
@@ -112,7 +116,7 @@ class CampaignParticipation(models.Model):
         return f"{self.customer} in {self.campaign.name}"
 
 
-class DiscountRule(models.Model):
+class DiscountRule(TenantScopedModel):
     """Discount rule for campaigns and coupons."""
     DISCOUNT_TYPE_CHOICES = (
         ('percentage', _('Percentage')),
@@ -180,12 +184,14 @@ class DiscountRule(models.Model):
         verbose_name = _("Discount Rule")
         verbose_name_plural = _("Discount Rules")
         ordering = ['name']
+        # Phase-0 PR-07: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
 
     def __str__(self):
         return self.name
 
 
-class Coupon(models.Model):
+class Coupon(TenantScopedModel):
     """Discount coupon."""
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='coupons')
     campaign = models.ForeignKey(Campaign, on_delete=models.SET_NULL, null=True, blank=True, related_name='coupons')
@@ -220,6 +226,8 @@ class Coupon(models.Model):
         verbose_name_plural = _("Coupons")
         ordering = ['-created_at']
         unique_together = ('workspace', 'code')
+        # Phase-0 PR-07: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
 
     def __str__(self):
         return self.code

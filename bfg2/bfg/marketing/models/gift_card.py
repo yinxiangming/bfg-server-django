@@ -10,8 +10,10 @@ from django.utils import timezone
 from decimal import Decimal
 import secrets
 
+from bfg.common.managers import TenantScopedModel
 
-class GiftCard(models.Model):
+
+class GiftCard(TenantScopedModel):
     """
     Prepaid gift card with a balance.
     Can be issued to a specific customer or generic (bearer token).
@@ -49,6 +51,8 @@ class GiftCard(models.Model):
         verbose_name_plural = _("Gift Cards")
         ordering = ['-created_at']
         unique_together = ('workspace', 'code')
+        # Phase-0 PR-07: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
 
     def __str__(self):
         return f"**** {self.code[-4:]} ({self.balance} {self.currency.code})"

@@ -13,6 +13,8 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from decimal import Decimal
 
+from bfg.common.managers import TenantScopedModel
+
 
 # Transport type choices
 TRANSPORT_TYPE_CHOICES = [
@@ -24,7 +26,7 @@ TRANSPORT_TYPE_CHOICES = [
 ]
 
 
-class Warehouse(models.Model):
+class Warehouse(TenantScopedModel):
     """Warehouse/fulfillment center."""
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='warehouses')
     
@@ -58,6 +60,8 @@ class Warehouse(models.Model):
         verbose_name_plural = _("Warehouses")
         ordering = ['name']
         unique_together = ('workspace', 'code')
+        # Phase-0 PR-07: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return self.name
@@ -82,10 +86,10 @@ class StorageLocation(models.Model):
         return f"{self.warehouse.code} - {self.code}"
 
 
-class Carrier(models.Model):
+class Carrier(TenantScopedModel):
     """
     Shipping carrier/courier with plugin support.
-    
+
     carrier_type: Plugin identifier (e.g., 'parcelport', 'nzpost').
                   Available types are discovered from carriers/ directory.
     config: Live API credentials and settings
@@ -121,7 +125,9 @@ class Carrier(models.Model):
         verbose_name_plural = _("Carriers")
         ordering = ['name']
         unique_together = ('workspace', 'code')
-    
+        # Phase-0 PR-07: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
+
     def __str__(self):
         mode = 'Test' if self.is_test_mode else 'Live'
         return f"{self.name} ({mode})"

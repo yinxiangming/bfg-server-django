@@ -86,7 +86,7 @@ class Command(BaseCommand):
         user.default_workspace = workspace
         user.save()
 
-        member, m_created = StaffMember.objects.get_or_create(
+        member, m_created = StaffMember.all_objects.get_or_create(
             workspace=workspace,
             user=user,
             defaults={"role": admin_role, "is_active": True},

@@ -3,7 +3,10 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 
-class Cart(models.Model):
+from bfg.common.managers import TenantScopedModel
+
+
+class Cart(TenantScopedModel):
     """Shopping cart for customers (authenticated or anonymous)."""
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='carts')
     
@@ -28,6 +31,8 @@ class Cart(models.Model):
         verbose_name = _("Cart")
         verbose_name_plural = _("Carts")
         ordering = ['-updated_at']
+        # Phase-0 PR-06: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         if self.customer:

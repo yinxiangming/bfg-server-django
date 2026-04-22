@@ -13,9 +13,9 @@ def clear_data():
     """Clear inbox module data. Process: (1) collect cache keys if any, (2) delete in dependency order, (3) invalidate caches if any."""
     # 1. Collect cache keys before delete (this module has no cache)
     # 2. Delete in dependency order
-    SMSMessage.objects.all().delete()
+    SMSMessage.all_objects.all().delete()
     MessageRecipient.objects.all().delete()
-    Message.objects.all().delete()
+    Message.all_objects.all().delete()
     MessageTemplate.objects.all().delete()
     # 3. Invalidate caches (none for inbox)
 
@@ -68,7 +68,7 @@ def seed_data(workspace, stdout=None, style=None, **context):
     create_sms_messages(workspace, customers, stdout, style)
     
     summary = [
-        {'label': 'Messages', 'count': Message.objects.count()},
+        {'label': 'Messages', 'count': Message.all_objects.count()},
     ]
     return {
         'templates': templates,
@@ -147,7 +147,7 @@ def create_messages(workspace, admin_user, customers, stdout=None, style=None):
     ]
     
     messages = []
-    orders = Order.objects.filter(workspace=workspace)[:5]
+    orders = Order.all_objects.filter(workspace=workspace)[:5]
     
     for i, data in enumerate(messages_data * 3):
         customer = customers[i % len(customers)]
@@ -160,7 +160,7 @@ def create_messages(workspace, admin_user, customers, stdout=None, style=None):
             related_content_type = ContentType.objects.get_for_model(Order)
             related_object_id = order.id
         
-        message = Message.objects.create(
+        message = Message.all_objects.create(
             workspace=workspace,
             subject=data['subject'],
             message=data['message'],
@@ -222,7 +222,7 @@ def create_sms_messages(workspace, customers, stdout=None, style=None):
         statuses = ['sent', 'delivered', 'pending']
         status = statuses[i % len(statuses)]
         
-        sms = SMSMessage.objects.create(
+        sms = SMSMessage.all_objects.create(
             workspace=workspace,
             customer=customer,
             phone_number=customer.user.phone or '+1-555-0000',

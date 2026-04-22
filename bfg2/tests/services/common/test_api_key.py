@@ -225,7 +225,7 @@ class TestAPIKeyAuthentication:
         mock_qs = MagicMock()
         mock_qs.get.return_value = key_obj
 
-        with patch('bfg.common.models.APIKey.objects') as mock_manager:
+        with patch('bfg.common.models.APIKey.all_objects') as mock_manager:
             mock_manager.select_related.return_value = mock_qs
             result = auth.authenticate(request)
 
@@ -247,7 +247,7 @@ class TestAPIKeyAuthentication:
         mock_qs = MagicMock()
         mock_qs.get.side_effect = APIKeyModel.DoesNotExist
 
-        with patch('bfg.common.models.APIKey.objects') as mock_manager:
+        with patch('bfg.common.models.APIKey.all_objects') as mock_manager:
             mock_manager.select_related.return_value = mock_qs
             with pytest.raises(AuthenticationFailed, match='Invalid API key'):
                 auth.authenticate(request)
@@ -266,7 +266,7 @@ class TestAPIKeyAuthentication:
 
         request = self._make_request(api_key='aabb1122', api_secret='x' * 64)
 
-        with patch('bfg.common.models.APIKey.objects') as mock_manager:
+        with patch('bfg.common.models.APIKey.all_objects') as mock_manager:
             mock_manager.select_related.return_value = mock_qs
             with pytest.raises(AuthenticationFailed, match='inactive'):
                 auth.authenticate(request)
@@ -285,7 +285,7 @@ class TestAPIKeyAuthentication:
 
         request = self._make_request(api_key='aabb1122', api_secret='x' * 64)
 
-        with patch('bfg.common.models.APIKey.objects') as mock_manager:
+        with patch('bfg.common.models.APIKey.all_objects') as mock_manager:
             mock_manager.select_related.return_value = mock_qs
             with pytest.raises(AuthenticationFailed, match='expired'):
                 auth.authenticate(request)
@@ -305,7 +305,7 @@ class TestAPIKeyAuthentication:
 
         request = self._make_request(api_key='aabb1122', api_secret='wrong')
 
-        with patch('bfg.common.models.APIKey.objects') as mock_manager:
+        with patch('bfg.common.models.APIKey.all_objects') as mock_manager:
             mock_manager.select_related.return_value = mock_qs
             with pytest.raises(AuthenticationFailed, match='Invalid API secret'):
                 auth.authenticate(request)
@@ -337,7 +337,7 @@ class TestAPIKeyAuthentication:
         mock_qs = MagicMock()
         mock_qs.get.return_value = key_obj
 
-        with patch('bfg.common.models.APIKey.objects') as mock_manager:
+        with patch('bfg.common.models.APIKey.all_objects') as mock_manager:
             mock_manager.select_related.return_value = mock_qs
             returned_user, returned_auth = auth.authenticate(request)
 

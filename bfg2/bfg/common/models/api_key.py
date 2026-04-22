@@ -16,6 +16,8 @@ from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from bfg.common.managers import TenantScopedModel
+
 # Public prefix length (used for lookup / display)
 API_KEY_PREFIX_LENGTH = 8
 # Secret raw length in bytes; hex-encoded = 2× characters
@@ -37,7 +39,7 @@ def hash_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
 
 
-class APIKey(models.Model):
+class APIKey(TenantScopedModel):
     """
     Workspace-scoped API key.
 
@@ -111,6 +113,11 @@ class APIKey(models.Model):
         indexes = [
             models.Index(fields=['workspace', '-created_at']),
         ]
+        # Phase-0 PR-08: keep reverse FK / migration access unscoped.
+        # Critical for APIKey specifically — authentication middleware
+        # must be able to look up a key by prefix without a workspace
+        # context (the key itself identifies the workspace).
+        base_manager_name = 'all_objects'
 
     def __str__(self):
         return f"{self.name} ({self.prefix}…)"
@@ -134,8 +141,14 @@ class APIKey(models.Model):
         return self.is_active and not self.is_expired
 
     def record_usage(self):
-        """Stamp *last_used_at* without triggering ``auto_now`` on *updated_at*."""
-        APIKey.objects.filter(pk=self.pk).update(last_used_at=timezone.now())
+        """Stamp *last_used_at* without triggering ``auto_now`` on *updated_at*.
+
+        Uses ``all_objects`` because this runs from the authentication
+        class **before** WorkspaceMiddleware has a chance to populate
+        the thread-local workspace (authentication runs at view-layer
+        after middleware). The pk filter still keys to a single row.
+        """
+        APIKey.all_objects.filter(pk=self.pk).update(last_used_at=timezone.now())
 
     @classmethod
     def create_key(cls, workspace, name, created_by=None, expires_at=None):

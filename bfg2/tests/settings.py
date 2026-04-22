@@ -16,6 +16,11 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'test-insecure-do-not-use-in-productio
 
 DEBUG = True
 
+# Match config/settings.py's env switch so SecurityHeadersMiddleware
+# picks the Report-Only CSP variant under test (per Phase-0 PR-02).
+ENV = 'test'
+IS_PROD = False
+
 ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
@@ -61,6 +66,9 @@ MIGRATION_MODULES = {
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # Must be first so OPTIONS gets CORS headers
     'django.middleware.security.SecurityMiddleware',
+    # Phase-0 PR-02: exercise SecurityHeadersMiddleware in tests too so
+    # header/CSP assertions (tests/security/) run against the real code.
+    'bfg.common.security_headers.SecurityHeadersMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -68,7 +76,10 @@ MIDDLEWARE = [
     'allauth.account.middleware.AccountMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'bfg.core.middleware.WorkspaceMiddleware',
+    # Phase-0 PR-04: was ``bfg.core.middleware.WorkspaceMiddleware``
+    # (legacy 11-line shim); swap in the real strict-mode middleware so
+    # tests exercise the production behaviour.
+    'bfg.common.middleware.WorkspaceMiddleware',
 ]
 
 ROOT_URLCONF = 'tests.urls'
@@ -84,6 +95,11 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     'x-forwarded-host',
     'x-workspace-id',
 ]
+
+# Phase-0 PR-02: CSP origin lists consumed by SecurityHeadersMiddleware.
+# Keep defaults tight in tests so assertions have a stable baseline.
+CSP_FRONTEND_ORIGINS = ["'self'"]
+CSP_API_ORIGINS = ["'self'"]
 
 TEMPLATES = [
     {

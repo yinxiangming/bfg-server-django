@@ -4,7 +4,10 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from decimal import Decimal
 
-class Order(models.Model):
+from bfg.common.managers import TenantScopedModel
+
+
+class Order(TenantScopedModel):
     """Customer order."""
     STATUS_CHOICES = (
         ('pending', _('Pending')),
@@ -104,6 +107,8 @@ class Order(models.Model):
             models.Index(fields=['status']),
             models.Index(fields=['sales_channel']),
         ]
+        # Phase-0 PR-06: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return f"Order {self.order_number}"

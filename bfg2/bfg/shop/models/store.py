@@ -4,7 +4,10 @@ from django.contrib.contenttypes.fields import GenericRelation
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 
-class Store(models.Model):
+from bfg.common.managers import TenantScopedModel
+
+
+class Store(TenantScopedModel):
     """Store (physical or online) belonging to a workspace."""
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='stores')
     
@@ -37,6 +40,8 @@ class Store(models.Model):
         indexes = [
             models.Index(fields=['workspace', 'is_active']),
         ]
+        # Phase-0 PR-05: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return self.name

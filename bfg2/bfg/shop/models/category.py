@@ -2,7 +2,10 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
-class ProductCategory(models.Model):
+from bfg.common.managers import TenantScopedModel
+
+
+class ProductCategory(TenantScopedModel):
     """Product category with hierarchy support."""
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='product_categories')
     
@@ -37,6 +40,8 @@ class ProductCategory(models.Model):
         verbose_name_plural = _("Product Categories")
         ordering = ['order', 'name']
         unique_together = ('workspace', 'slug', 'language')
+        # Phase-0 PR-05: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return self.name

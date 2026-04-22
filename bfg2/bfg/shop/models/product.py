@@ -6,26 +6,34 @@ from django.utils import timezone
 from django.conf import settings
 import os
 
-class ProductTag(models.Model):
+from bfg.common.managers import TenantScopedModel
+
+
+class ProductTag(TenantScopedModel):
     """Product tag for flexible organization."""
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='product_tags')
-    
+
     name = models.CharField(_("Name"), max_length=50)
     slug = models.SlugField(_("Slug"), max_length=50)
-    
+
     language = models.CharField(_("Language"), max_length=10)
-    
+
     class Meta:
         verbose_name = _("Product Tag")
         verbose_name_plural = _("Product Tags")
         ordering = ['name']
         unique_together = ('workspace', 'slug', 'language')
-    
+        # Phase-0 PR-05: reverse FK traversal + migrations must see every
+        # row regardless of request-scoped workspace. Explicit opt-in
+        # required per concrete model because child Metas don't inherit
+        # ``base_manager_name`` from the abstract base.
+        base_manager_name = 'all_objects'
+
     def __str__(self):
         return self.name
 
 
-class Product(models.Model):
+class Product(TenantScopedModel):
     """Product catalog item (both one-time and subscription)."""
     PRODUCT_TYPE_CHOICES = (
         ('physical', _('Physical Product')),
@@ -127,6 +135,8 @@ class Product(models.Model):
             models.Index(fields=['workspace', 'is_active']),
             models.Index(fields=['sku']),
         ]
+        # Phase-0 PR-05: keep reverse FK / migration access unscoped.
+        base_manager_name = 'all_objects'
     
     def __str__(self):
         return self.name

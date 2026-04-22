@@ -14,6 +14,7 @@ from bfg.common.management.commands.bfg_prod_check import PROD_CHECKS
 # from this baseline and violates exactly one axis so we can pin-point
 # which check catches which misconfig.
 PROD_READY = {
+    "IS_PROD": True,
     "DEBUG": False,
     "CORS_ALLOW_ALL_ORIGINS": False,
     "CORS_ALLOWED_ORIGINS": ["https://app.example.com"],
@@ -61,6 +62,14 @@ class TestHappyPath:
         text = out.getvalue()
         assert "All prod checks passed." in text
         assert "[FAIL]" not in text
+
+    def test_skips_when_not_is_prod(self, settings):
+        _apply_prod_ready(settings)
+        settings.IS_PROD = False
+        out = StringIO()
+        call_command("bfg_prod_check", stdout=out)
+        assert "Skipping bfg_prod_check" in out.getvalue()
+        assert "All prod checks passed." not in out.getvalue()
 
 
 # ─── Each failure mode ───────────────────────────────────────────────

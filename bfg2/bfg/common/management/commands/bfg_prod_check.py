@@ -89,6 +89,14 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **opts):
+        # Only enforce when the deployment is production; UAT/staging often
+        # relaxes DEBUG/Sentry/CORS and must not block `release` on Dokku.
+        if not getattr(settings, "IS_PROD", False):
+            self.stdout.write(
+                "Skipping bfg_prod_check: IS_PROD is False (non-production)."
+            )
+            return
+
         failed = []
         passed = []
 

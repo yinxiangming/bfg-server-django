@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 def server_version(request):
     """
     GET /api/v1/system/version/
-    Public metadata: API line, OpenAPI schema version, BFG library version, optional build id.
+    Public metadata: API line, OpenAPI schema version, BFG library version, workspace server app
+    version, Django local extension apps (id + optional __version__), optional build id.
     """
     return Response(get_server_version_payload())
 

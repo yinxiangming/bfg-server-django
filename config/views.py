@@ -24,9 +24,21 @@ from .serializers import (
     ResetPasswordConfirmSerializer,
     VerifyEmailSerializer,
 )
+from .version_info import get_server_version_payload
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def server_version(request):
+    """
+    GET /api/v1/system/version/
+    Public metadata: API line, OpenAPI schema version, BFG library version, optional build id.
+    """
+    return Response(get_server_version_payload())
 
 
 @api_view(['POST'])

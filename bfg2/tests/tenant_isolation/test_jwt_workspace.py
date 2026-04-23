@@ -128,15 +128,16 @@ class TestDecodeJwtWorkspaceId:
     def test_extracts_workspace_id_from_access_token(self, ws, rf):
         token = _mint_token(User.objects.create_user('dec_user', 'x'), workspace_id=ws.id)
         request = rf.get('/', **_bearer(token))
-        assert _decode_jwt_workspace_id(request) == ws.id
+        assert _decode_jwt_workspace_id(request) == (ws.id, True)
 
     def test_returns_none_for_missing_header(self, rf):
         request = rf.get('/')
-        assert _decode_jwt_workspace_id(request) is None
+        assert _decode_jwt_workspace_id(request) == (None, False)
 
     def test_returns_none_for_invalid_token(self, rf):
         request = rf.get('/', HTTP_AUTHORIZATION='Bearer not.a.token')
-        assert _decode_jwt_workspace_id(request) is None
+        # Invalid token → token_valid=False so middleware can fall back to domain
+        assert _decode_jwt_workspace_id(request) == (None, False)
 
     def test_returns_none_when_no_workspace_claim(self, rf):
         u = User.objects.create_user('no_claim', 'x')
@@ -144,9 +145,8 @@ class TestDecodeJwtWorkspaceId:
         refresh = RefreshToken.for_user(u)
         token = str(refresh.access_token)
         request = rf.get('/', **_bearer(token))
-        # workspace_id key absent → returns None
-        result = _decode_jwt_workspace_id(request)
-        assert result is None
+        # workspace_id key absent but token is valid → (None, True)
+        assert _decode_jwt_workspace_id(request) == (None, True)
 
 
 # ─── Middleware JWT-first resolution ─────────────────────────────────
@@ -240,6 +240,40 @@ class TestProdModeHeaderSpoofing:
             **_bearer(token),
         )
         # Domain 'testserver' exists but must not be used for prod+authenticated+no-claim
+        assert response.status_code == 400
+        assert response.json()['code'] == 'workspace_required'
+
+    @override_settings(IS_PROD=True)
+    def test_prod_invalid_bearer_falls_back_to_domain(self, ws, db):
+        """Expired/invalid Bearer token must not short-circuit domain resolution.
+
+        Regression test: previously, any Bearer header in prod would block the
+        domain fallback, causing public storefront endpoints to 400 when the
+        client's access token expired. An invalid token is semantically
+        anonymous (DRF auth will reject it at the view layer), so the
+        middleware should fall through to X-Forwarded-Host domain lookup.
+        """
+        WorkspaceDomain.objects.create(
+            workspace=ws,
+            hostname='shop.example.com',
+            kind=WorkspaceDomain.KIND_CUSTOM,
+            verification_status=WorkspaceDomain.VERIFICATION_VERIFIED,
+        )
+        response = Client().get(
+            '/api/v1/__strict_probe__/',
+            HTTP_X_FORWARDED_HOST='shop.example.com',
+            HTTP_AUTHORIZATION='Bearer not.a.valid.token',
+        )
+        # Invalid JWT → treated as anonymous → domain resolves → not 400
+        assert response.status_code != 400
+
+    @override_settings(IS_PROD=True)
+    def test_prod_invalid_bearer_without_domain_still_400(self, ws):
+        """Invalid Bearer + no resolvable domain still yields 400 (no silent fallback)."""
+        response = Client().get(
+            '/api/v1/__strict_probe__/',
+            HTTP_AUTHORIZATION='Bearer not.a.valid.token',
+        )
         assert response.status_code == 400
         assert response.json()['code'] == 'workspace_required'
 

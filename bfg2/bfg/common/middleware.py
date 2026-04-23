@@ -200,12 +200,25 @@ WORKSPACE_ACCESS_DENIED_RESPONSE = {
 
 
 def _decode_jwt_workspace_id(request):
-    """Extract workspace_id from Bearer JWT claim without full DRF auth stack."""
+    """Extract workspace_id from Bearer JWT claim without full DRF auth stack.
+
+    Returns ``(workspace_id, token_valid)``:
+
+    - ``(int, True)`` — JWT decoded successfully and carried a workspace_id claim
+    - ``(None, True)`` — JWT decoded successfully but had no workspace_id claim
+    - ``(None, False)`` — no Bearer header, or JWT present but invalid/expired
+
+    Callers use ``token_valid`` to tell "authenticated request with no claim"
+    (must be rejected in prod to prevent cross-tenant via header/domain spoofing)
+    apart from "invalid/expired token" (caller is effectively anonymous — DRF
+    auth will reject the token at the view layer, so falling through to domain
+    resolution is safe and avoids breaking public endpoints like storefront).
+    """
     if not _JWT_AVAILABLE:
-        return None
+        return None, False
     auth_header = request.META.get('HTTP_AUTHORIZATION', '')
     if not auth_header.startswith('Bearer '):
-        return None
+        return None, False
     raw_token = auth_header[len('Bearer '):]
     try:
         backend = TokenBackend(
@@ -214,9 +227,9 @@ def _decode_jwt_workspace_id(request):
         )
         payload = backend.decode(raw_token, verify=True)
         ws_id = payload.get('workspace_id')
-        return int(ws_id) if ws_id is not None else None
+        return (int(ws_id) if ws_id is not None else None), True
     except (TokenBackendError, ValueError, TypeError):
-        return None
+        return None, False
 
 
 class WorkspaceMiddleware:
@@ -302,7 +315,7 @@ class WorkspaceMiddleware:
     @staticmethod
     def _resolve_workspace(request):
         # 1. JWT claim (authenticated requests in prod — prevents header spoofing)
-        jwt_ws_id = _decode_jwt_workspace_id(request)
+        jwt_ws_id, jwt_valid = _decode_jwt_workspace_id(request)
         if jwt_ws_id is not None:
             return _get_workspace_by_id(jwt_ws_id)
 
@@ -313,11 +326,13 @@ class WorkspaceMiddleware:
 
         # 3. X-Workspace-ID header — only trusted in non-prod or for anonymous users.
         #    In prod, authenticated callers must use JWT (claim already checked above).
+        #    A request with an *invalid/expired* Bearer token is treated as anonymous:
+        #    DRF auth will reject the token at the view layer, so letting the request
+        #    fall through to domain resolution is safe and avoids breaking public
+        #    endpoints (e.g. storefront) when the client's access token has expired.
         is_prod = getattr(settings, 'IS_PROD', False)
-        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
-        header_is_authenticated = bool(auth_header.startswith('Bearer ') or auth_header.startswith('Token '))
-        if is_prod and header_is_authenticated:
-            # JWT claim absent on an authenticated prod request — reject before domain
+        if is_prod and jwt_valid:
+            # JWT valid but carried no workspace_id claim — reject before domain
             # fallback to prevent accidental cross-tenant resolution via hostname.
             return None
         ws_id = request.headers.get('X-Workspace-ID')

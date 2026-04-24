@@ -81,6 +81,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'rest_framework',
     'drf_spectacular',
+    'anymail',
     
     # Social Login
     'django.contrib.sites',
@@ -332,6 +333,16 @@ EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False').lower() == 'true'
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@example.com')
+
+# Anymail (Mailgun) — activated when EMAIL_BACKEND is set to the anymail backend.
+# Keep the default (smtp) for callers that haven't opted in; UAT / prod can flip this
+# via env without touching code.
+ANYMAIL = {
+    'MAILGUN_API_KEY': os.environ.get('MAILGUN_API_KEY', ''),
+    'MAILGUN_SENDER_DOMAIN': os.environ.get('MAILGUN_SENDER_DOMAIN', ''),
+    # EU users: set MAILGUN_API_URL=https://api.eu.mailgun.net/v3 via env. US default works unset.
+    'MAILGUN_API_URL': os.environ.get('MAILGUN_API_URL', 'https://api.mailgun.net/v3'),
+}
 
 # Onboarding / auth flow toggles
 EMAIL_VERIFICATION_REQUIRED = os.environ.get('EMAIL_VERIFICATION_REQUIRED', 'true').lower() in ('1', 'true', 'yes')

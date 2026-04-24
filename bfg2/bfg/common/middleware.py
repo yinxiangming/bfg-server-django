@@ -58,6 +58,12 @@ PUBLIC_PATHS = (
     '/admin/',
     '/.well-known/',
     '/api/v1/stripe/webhook/',
+    # Static/media file serving — these are bytes on disk, not tenant-scoped APIs.
+    # The workspace_id is already encoded in the path (e.g. /media/media/<ws_id>/...),
+    # and the underlying ``django.views.static.serve`` does not touch any model.
+    '/media/',
+    '/images/',
+    '/static/',
 )
 
 # Auth headers that carry enough information for the *view layer* to

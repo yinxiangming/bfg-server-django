@@ -35,3 +35,7 @@ whitenoise==6.8.2  # Replaces dj-static/static3 for modern Django
 # WSGI/ASGI Server
 gunicorn==23.0.0
 uvicorn==0.32.1  # Added for ASGI support (Django Ninja/Async)
+
+# Email HTTP backends (Mailgun etc.). Default SMTP backend still works; activate via
+# EMAIL_BACKEND=anymail.backends.mailgun.EmailBackend + MAILGUN_API_KEY env vars.
+django-anymail[mailgun]==12.0

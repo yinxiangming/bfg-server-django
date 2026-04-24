@@ -218,8 +218,45 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'static')
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# ─── Media storage ──────────────────────────────────────────────────────
+# Set AWS_STORAGE_BUCKET_NAME to route uploads to S3; otherwise, files are
+# written to MEDIA_ROOT on the local filesystem and served by Django.
+AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', '').strip()
+USE_S3_MEDIA = bool(AWS_STORAGE_BUCKET_NAME)
+
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')  # always defined; used as local fallback / dev
+
+if USE_S3_MEDIA:
+    AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'ap-southeast-2').strip()
+    # CloudFront / custom CDN domain (without scheme), e.g. cdn.preloved.kiwi.
+    AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '').strip() or None
+    # Boto3 picks up AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from env automatically.
+
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3.S3Storage',
+            'OPTIONS': {
+                'bucket_name': AWS_STORAGE_BUCKET_NAME,
+                'region_name': AWS_S3_REGION_NAME,
+                'custom_domain': AWS_S3_CUSTOM_DOMAIN,
+                'file_overwrite': False,         # never silently clobber an existing key
+                'querystring_auth': False,       # bucket is public-read; no signed URLs
+                'default_acl': None,             # rely on bucket policy
+                'object_parameters': {'CacheControl': 'public, max-age=31536000, immutable'},
+            },
+        },
+        'staticfiles': {
+            'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+        },
+    }
+    if AWS_S3_CUSTOM_DOMAIN:
+        MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/'
+    else:
+        MEDIA_URL = f'https://{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/'
+else:
+    MEDIA_URL = '/media/'
+
 # Absolute API/site origin for media URLs when storage returns relative paths (e.g. GitHub issue embeds).
 MEDIA_PUBLIC_BASE_URL = os.environ.get('MEDIA_PUBLIC_BASE_URL', '').strip().rstrip('/')
 

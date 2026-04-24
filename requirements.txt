@@ -32,6 +32,9 @@ django-allauth>=0.57
 # Static files
 whitenoise==6.8.2  # Replaces dj-static/static3 for modern Django
 
+# S3 media storage (activates when AWS_STORAGE_BUCKET_NAME env var is set)
+django-storages[s3]==1.14.4
+
 # WSGI/ASGI Server
 gunicorn==23.0.0
 uvicorn==0.32.1  # Added for ASGI support (Django Ninja/Async)

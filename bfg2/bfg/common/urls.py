@@ -5,7 +5,7 @@ from .views import (
     EmailConfigViewSet,
     UserViewSet, OptionsView,
     CustomerSegmentViewSet, CustomerTagViewSet,
-    StaffRoleViewSet,
+    StaffRoleViewSet, StaffMemberViewSet,
     MeViewSet, MeAddressViewSet, MeSettingsViewSet, MeOrdersViewSet,
     MeDashboardStatsView,
     MePaymentMethodViewSet, MePaymentViewSet, MeInvoiceViewSet,
@@ -25,6 +25,7 @@ router.register(r'users', UserViewSet, basename='user')
 router.register(r'customer-segments', CustomerSegmentViewSet, basename='customer-segment')
 router.register(r'customer-tags', CustomerTagViewSet, basename='customer-tag')
 router.register(r'staff-roles', StaffRoleViewSet, basename='staff-role')
+router.register(r'staff-members', StaffMemberViewSet, basename='staff-member')
 router.register(r'api-keys', APIKeyViewSet, basename='api-key')
 # Me API - unified personal information API
 # Note: me/ and me/settings/ are registered as direct paths, not via router to avoid conflicts

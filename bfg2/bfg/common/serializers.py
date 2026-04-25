@@ -369,15 +369,15 @@ class MeSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
     def to_representation(self, instance):
-        """Add customer info to representation"""
+        """Add customer and staff_member info to representation"""
         data = super().to_representation(instance)
-        
-        # Get customer for current workspace
+
         request = self.context.get('request')
         if request and hasattr(request, 'workspace'):
-            from bfg.common.models import Customer
+            from bfg.common.models import Customer, StaffMember
             from bfg.common.services import CustomerService
-            
+
+            # Customer info
             service = CustomerService(
                 workspace=request.workspace,
                 user=request.user
@@ -387,7 +387,27 @@ class MeSerializer(serializers.ModelSerializer):
                 data['customer'] = CustomerDetailSerializer(customer, context=self.context).data
             else:
                 data['customer'] = None
-        
+
+            # Staff member + role + permissions for current workspace
+            try:
+                staff = StaffMember.all_objects.select_related('role').get(
+                    workspace=request.workspace,
+                    user=instance,
+                    is_active=True
+                )
+                data['staff_member'] = {
+                    'id': staff.id,
+                    'is_active': staff.is_active,
+                    'role': {
+                        'id': staff.role.id,
+                        'code': staff.role.code,
+                        'name': staff.role.name,
+                        'permissions': staff.role.permissions,
+                    },
+                }
+            except StaffMember.DoesNotExist:
+                data['staff_member'] = None
+
         return data
 
 

@@ -2183,6 +2183,51 @@ def countries_list(request):
     return Response(COUNTRY_LIST)
 
 
+# ── Staff Member Management ───────────────────────────────────────
+
+class StaffMemberViewSet(viewsets.ModelViewSet):
+    """
+    Staff member management ViewSet (admin only).
+
+    GET    /api/v1/staff-members/        — list all staff in workspace
+    POST   /api/v1/staff-members/        — add a user as staff with a role
+    GET    /api/v1/staff-members/{id}/   — retrieve a staff member
+    PATCH  /api/v1/staff-members/{id}/   — change role or active status
+    DELETE /api/v1/staff-members/{id}/   — remove from workspace
+    """
+    from bfg.common.serializers import StaffMemberSerializer as _StaffMemberSerializer
+    serializer_class = _StaffMemberSerializer
+    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        from bfg.common.models import StaffMember
+        return StaffMember.all_objects.filter(
+            workspace=self.request.workspace
+        ).select_related('user', 'role').order_by('-created_at')
+
+    def perform_create(self, serializer):
+        serializer.save(workspace=self.request.workspace)
+
+    def destroy(self, request, *args, **kwargs):
+        """Refuse to delete the last admin of the workspace."""
+        from bfg.common.models import StaffMember
+        instance = self.get_object()
+        if instance.role.code == 'admin':
+            remaining_admins = StaffMember.all_objects.filter(
+                workspace=request.workspace,
+                role__code='admin',
+                is_active=True
+            ).exclude(pk=instance.pk).count()
+            if remaining_admins == 0:
+                return Response(
+                    {'detail': 'Cannot remove the last admin of the workspace.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 # ── API Key Management ────────────────────────────────────────────
 
 class APIKeyViewSet(viewsets.ModelViewSet):

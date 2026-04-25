@@ -115,14 +115,22 @@ class HasPermission(permissions.BasePermission):
             
             # Check role permissions JSON
             role_perms = staff.role.permissions
-            
+
+            def _action_allowed(actions, act):
+                """actions is a list or bool; '*' in list means all actions."""
+                if isinstance(actions, bool):
+                    return actions
+                if isinstance(actions, list):
+                    return '*' in actions or act in actions
+                return False
+
             if module in role_perms:
-                return action in role_perms[module]
-            
-            # Check wildcard
+                return _action_allowed(role_perms[module], action)
+
+            # Check wildcard module key
             if '*' in role_perms:
-                return action in role_perms['*']
-            
+                return _action_allowed(role_perms['*'], action)
+
             return False
             
         except StaffMember.DoesNotExist:

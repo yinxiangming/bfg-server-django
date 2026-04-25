@@ -26,6 +26,7 @@ from bfg.shop.models import ProductCategory, ProductTag, Product, ProductVariant
 from bfg.shop.serializers import (
     ProductCategorySerializer, ProductTagSerializer,
     ProductListSerializer, ProductDetailSerializer,
+    ProductPublicListSerializer, ProductPublicDetailSerializer,
     ProductVariantSerializer, ProductReviewSerializer, VariantInventorySerializer
 )
 from bfg.shop.services import ProductService, ensure_product_identifiers
@@ -119,80 +120,89 @@ class ProductTagViewSet(viewsets.ModelViewSet):
         serializer.save(workspace=workspace)
 
 
-class ProductViewSet(viewsets.ModelViewSet):
+def _filter_products_queryset(queryset, request):
+    """Shared filter helper used by both public and admin product viewsets."""
+    category_id = request.query_params.get('category')
+    if category_id:
+        queryset = queryset.filter(categories__id=category_id)
+    tag_id = request.query_params.get('tag')
+    if tag_id:
+        queryset = queryset.filter(tags__id=tag_id)
+    lang_param = request.query_params.get('lang')
+    if lang_param is not None:
+        queryset = queryset.filter(language=lang_param)
+    featured = request.query_params.get('featured')
+    if featured == 'true':
+        queryset = queryset.filter(is_featured=True)
+    condition = request.query_params.get('condition')
+    if condition:
+        queryset = queryset.filter(condition=condition)
+    search = request.query_params.get('search')
+    if search:
+        from django.db.models import Q
+        queryset = queryset.filter(
+            Q(name__icontains=search)
+            | Q(sku__icontains=search)
+            | Q(barcode__icontains=search)
+            | Q(variants__sku__icontains=search)
+        ).distinct()
+    return queryset.order_by('-is_featured', '-created_at')
+
+
+class ProductViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    Product management ViewSet
-    
-    Public can view active products, staff can manage all products
+    Storefront-facing product ViewSet — read-only, public.
+
+    Returns only ``is_active=True`` products and exposes only public-safe
+    fields via the ``ProductPublic*`` serializers (no ``cost``, ``barcode``,
+    ``track_inventory``, ``low_stock_threshold``, ``finance_code``).
+
+    Admin product management — including create / update / delete and the
+    inventory / label / generate_identifiers actions — lives on the
+    sibling :class:`AdminProductViewSet` at ``/api/v1/shop/admin/products/``.
     """
+    permission_classes = [AllowAny]
+
     def get_serializer_class(self):
-        """Return appropriate serializer"""
+        if self.action == 'list':
+            return ProductPublicListSerializer
+        return ProductPublicDetailSerializer
+
+    def get_queryset(self):
+        workspace = getattr(self.request, 'workspace', None)
+        if not workspace:
+            return Product.objects.none()
+        queryset = Product.objects.filter(
+            workspace=workspace, is_active=True,
+        ).prefetch_related('categories', 'tags', 'media_links__media', 'variants')
+        return _filter_products_queryset(queryset, self.request)
+
+
+class AdminProductViewSet(viewsets.ModelViewSet):
+    """
+    Admin product management ViewSet — staff only.
+
+    Returns the workspace's full product catalogue (including drafts and
+    inactive items) via the full :class:`ProductDetailSerializer`, exposing
+    ``cost``, ``barcode``, ``track_inventory``, ``low_stock_threshold`` and
+    ``finance_code``. Hosts admin-only actions (``inventory``, ``label``,
+    ``generate_identifiers``).
+    """
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+
+    def get_serializer_class(self):
         if self.action == 'list':
             return ProductListSerializer
         return ProductDetailSerializer
-    
-    def get_permissions(self):
-        """Set permissions based on action"""
-        if self.action in ['list', 'retrieve']:
-            return [AllowAny()]
-        return [IsAuthenticated(), IsWorkspaceStaff()]
-    
+
     def get_queryset(self):
-        """Get products based on permissions"""
         workspace = getattr(self.request, 'workspace', None)
         if not workspace:
             return Product.objects.none()
         queryset = Product.objects.filter(workspace=workspace).prefetch_related(
             'categories', 'tags', 'media_links__media', 'variants'
         )
-        
-        # Non-staff can only see active products. If middleware never set is_staff_member (e.g. DEBUG
-        # default workspace without X-Workspace-ID), fall back to StaffMember check.
-        staff_like = getattr(self.request, 'is_staff_member', None)
-        if staff_like is None and self.request.user.is_authenticated:
-            staff_like = IsWorkspaceStaff().has_permission(self.request, self)
-        else:
-            staff_like = bool(staff_like)
-        if not staff_like:
-            queryset = queryset.filter(is_active=True)
-
-        # Filter by category
-        category_id = self.request.query_params.get('category')
-        if category_id:
-            queryset = queryset.filter(categories__id=category_id)
-        
-        # Filter by tag
-        tag_id = self.request.query_params.get('tag')
-        if tag_id:
-            queryset = queryset.filter(tags__id=tag_id)
-        
-        # Filter by language only when lang is explicitly provided (admin list shows all languages when omitted)
-        lang_param = self.request.query_params.get('lang')
-        if lang_param is not None:
-            queryset = queryset.filter(language=lang_param)
-        
-        # Filter by featured
-        featured = self.request.query_params.get('featured')
-        if featured == 'true':
-            queryset = queryset.filter(is_featured=True)
-
-        # Filter by condition (e.g. ?condition=good)
-        condition = self.request.query_params.get('condition')
-        if condition:
-            queryset = queryset.filter(condition=condition)
-        
-        # Search by name, SKU, or barcode
-        search = self.request.query_params.get('search')
-        if search:
-            from django.db.models import Q
-            queryset = queryset.filter(
-                Q(name__icontains=search) |
-                Q(sku__icontains=search) |
-                Q(barcode__icontains=search) |
-                Q(variants__sku__icontains=search)
-            ).distinct()
-        
-        return queryset.order_by('-is_featured', '-created_at')
+        return _filter_products_queryset(queryset, self.request)
 
     def create(self, request, *args, **kwargs):
         """Create product; require workspace; return 409 on duplicate (workspace, slug, language)."""

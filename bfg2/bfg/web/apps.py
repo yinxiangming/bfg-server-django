@@ -23,3 +23,10 @@ class WebConfig(AppConfig):
             register_capabilities()
         except ImportError:
             pass
+
+        try:
+            from bfg.web.roles import register as register_roles
+            register_roles()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to register web roles")

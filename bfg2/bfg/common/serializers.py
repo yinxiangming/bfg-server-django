@@ -34,11 +34,26 @@ class WorkspaceSerializer(serializers.ModelSerializer):
 class StaffRoleSerializer(serializers.ModelSerializer):
     """Staff role serializer"""
     code = serializers.CharField(required=False, allow_blank=True, max_length=50)
-    
+    permissions_match_default = serializers.SerializerMethodField()
+
     class Meta:
         model = StaffRole
-        fields = ['id', 'name', 'code', 'description', 'permissions', 'is_system', 'is_active', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'is_system', 'created_at', 'updated_at']
+        fields = [
+            'id', 'name', 'code', 'description',
+            'permissions', 'default_permissions',
+            'permissions_match_default',
+            'owner_module',
+            'is_system', 'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'is_system', 'default_permissions', 'owner_module',
+            'permissions_match_default', 'created_at', 'updated_at',
+        ]
+
+    def get_permissions_match_default(self, obj: StaffRole) -> bool:
+        if not obj.is_system or not obj.default_permissions:
+            return False
+        return obj.permissions == obj.default_permissions
 
 
 class StaffMemberSerializer(serializers.ModelSerializer):

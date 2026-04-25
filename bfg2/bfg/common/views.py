@@ -19,7 +19,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
-from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, IsOwnerOrStaff
+from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, IsOwnerOrStaff, StaffReadAdminWrite
 from bfg.common.models import Workspace, Customer, Address, CustomerSegment, CustomerTag, User, UserPreferences, StaffRole, EmailConfig
 from bfg.common.serializers import (
     WorkspaceSerializer,
@@ -97,22 +97,13 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     Superusers can create workspaces without being staff
     """
     serializer_class = WorkspaceSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
-    
-    def get_permissions(self):
-        """Per-action permissions.
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
 
-        - ``create``: any authenticated user (gated further in perform_create).
-        - ``list``/``retrieve``: any active staff member of the workspace —
-          the admin UI fetches the current workspace on every page load to
-          render workspace name/branding, so non-admin staff (manager, etc.)
-          must be able to read it.
-        - ``update``/``partial_update``/``destroy``: workspace admin only.
-        """
+    def get_permissions(self):
+        # ``create`` is special — first-workspace bootstrap or superuser only;
+        # the actual gating lives in ``perform_create``.
         if self.action == 'create':
             return [IsAuthenticated()]
-        if self.action in ('list', 'retrieve'):
-            return [IsAuthenticated(), IsWorkspaceStaff()]
         return super().get_permissions()
     
     def get_queryset(self):
@@ -166,11 +157,14 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
 class CustomerViewSet(viewsets.ModelViewSet):
     """
-    Customer management ViewSet
-    
-    Staff can view all customers, customers can only view/update themselves
+    Admin customer management ViewSet — staff only.
+
+    Customers should hit ``/api/v1/me/`` (and the storefront / account API)
+    for their own data. This endpoint backs the admin /admin/store/customers
+    page and returns the workspace's full customer list, so non-staff are
+    rejected outright rather than silently scope-filtered.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     filter_backends = [SearchFilter]
     search_fields = [
         'user__first_name',
@@ -216,15 +210,6 @@ class CustomerViewSet(viewsets.ModelViewSet):
         if self.action == 'retrieve':
             qs = qs.prefetch_related('addresses')
         return qs
-    
-    def get_permissions(self):
-        """Set permissions based on action"""
-        if self.action in ['list', 'retrieve']:
-            return [IsAuthenticated()]
-        elif self.action in ['update', 'partial_update']:
-            return [IsAuthenticated(), IsOwnerOrStaff()]
-        else:
-            return [IsAuthenticated(), IsWorkspaceStaff()]
     
     def perform_create(self, serializer):
         """Create customer using service"""
@@ -602,19 +587,8 @@ class SettingsViewSet(viewsets.ModelViewSet):
     page to render layout/branding/theme). Mutations stay admin-only.
     """
     serializer_class = SettingsSerializer
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     http_method_names = ['get', 'put', 'patch']  # No create/delete
-
-    def get_permissions(self):
-        # Honor per-action @action(permission_classes=[...]) overrides.
-        action = getattr(self, 'action', None)
-        if action is not None:
-            handler = getattr(self, action, None)
-            kwargs = getattr(handler, 'kwargs', None) if handler else None
-            if kwargs and 'permission_classes' in kwargs:
-                return [p() for p in kwargs['permission_classes']]
-        if self.request.method in ('GET', 'HEAD', 'OPTIONS'):
-            return [IsAuthenticated(), IsWorkspaceStaff()]
-        return [IsAuthenticated(), IsWorkspaceAdmin()]
     
     def get_queryset(self):
         """Get settings for current workspace"""
@@ -1079,29 +1053,28 @@ class EmailConfigViewSet(viewsets.ModelViewSet):
 
 class UserViewSet(viewsets.ModelViewSet):
     """
-    User management ViewSet
+    Admin user search / lookup ViewSet — staff only.
+
+    Used by the admin UI (e.g. staff-add dialog) to search across the
+    workspace's users. Customers should use ``/api/v1/me/`` for their
+    own profile and never need to enumerate other users.
     """
     from bfg.common.serializers import UserSerializer
     serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated]
-    
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+
     def get_queryset(self):
-        """Return users scoped to the current workspace for admin/staff."""
-        user = self.request.user
+        """Return users scoped to the current workspace."""
         from django.db.models import Q
         from bfg.common.models import User
 
         workspace = getattr(self.request, 'workspace', None)
-
-        if user.is_staff or user.is_superuser:
-            if not workspace:
-                return User.objects.none()
-            return User.objects.filter(
-                Q(default_workspace=workspace) |
-                Q(staff_memberships__workspace=workspace, staff_memberships__is_active=True)
-            ).distinct()
-
-        return User.objects.filter(id=user.id)
+        if not workspace:
+            return User.objects.none()
+        return User.objects.filter(
+            Q(default_workspace=workspace) |
+            Q(staff_memberships__workspace=workspace, staff_memberships__is_active=True)
+        ).distinct()
 
 
 class MeViewSet(viewsets.GenericViewSet):
@@ -1942,6 +1915,100 @@ class MeInvoiceViewSet(viewsets.ReadOnlyModelViewSet):
         return response
 
 
+class MeWalletViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Current user's wallets (read-only) — GET /api/v1/me/wallets/
+
+    Customers see only their own wallets. The ``withdraw`` action lets a
+    customer file a WithdrawalRequest against their own wallet (still
+    requires staff approval before the cash is deducted).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        from bfg.finance.serializers import WalletSerializer
+        return WalletSerializer
+
+    def get_queryset(self):
+        from bfg.finance.models import Wallet
+        from bfg.common.models import Customer
+        workspace = get_required_workspace(self.request)
+        try:
+            customer = Customer.objects.get(workspace=workspace, user=self.request.user)
+        except Customer.DoesNotExist:
+            return Wallet.objects.none()
+        return Wallet.objects.filter(
+            workspace=workspace, customer=customer,
+        ).select_related('customer', 'currency')
+
+    @action(detail=True, methods=['post'], url_path='withdraw')
+    def withdraw(self, request, pk=None):
+        """File a withdrawal request against this wallet."""
+        from bfg.finance.models import WithdrawalRequest
+        from bfg.finance.serializers import (
+            WithdrawalRequestCreateSerializer, WithdrawalRequestSerializer,
+        )
+        from bfg.finance.views import _get_min_withdrawal_amount_for_workspace
+
+        wallet = self.get_object()
+        serializer = WithdrawalRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        amount = serializer.validated_data['amount']
+
+        min_w = _get_min_withdrawal_amount_for_workspace(wallet.workspace)
+        if min_w is not None and amount < min_w:
+            return Response(
+                {
+                    'detail': f'Minimum withdrawal amount is {min_w}.',
+                    'code': 'min_withdrawal_amount',
+                    'min_amount': str(min_w),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if wallet.cash_balance < amount:
+            return Response(
+                {'detail': f'Insufficient cash balance. Available: {wallet.cash_balance}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        req = WithdrawalRequest.objects.create(
+            wallet=wallet,
+            amount=amount,
+            status='pending',
+            payout_method=serializer.validated_data.get('payout_method', ''),
+            payout_details=serializer.validated_data.get('payout_details', {}),
+            notes=serializer.validated_data.get('notes', ''),
+            requested_by=request.user,
+        )
+        return Response(WithdrawalRequestSerializer(req).data, status=status.HTTP_201_CREATED)
+
+
+class MeWithdrawalRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Current user's withdrawal request history (read-only) —
+    GET /api/v1/me/withdrawal-requests/
+
+    Customer-scoped read-only view; staff approve/reject via
+    ``/api/v1/finance/withdrawals/{id}/{approve,reject}/``.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        from bfg.finance.serializers import WithdrawalRequestSerializer
+        return WithdrawalRequestSerializer
+
+    def get_queryset(self):
+        from bfg.finance.models import WithdrawalRequest
+        from bfg.common.models import Customer
+        workspace = get_required_workspace(self.request)
+        try:
+            customer = Customer.objects.get(workspace=workspace, user=self.request.user)
+        except Customer.DoesNotExist:
+            return WithdrawalRequest.objects.none()
+        return WithdrawalRequest.objects.filter(
+            wallet__workspace=workspace, wallet__customer=customer,
+        ).select_related('wallet', 'requested_by', 'approved_by').order_by('-requested_at')
+
+
 class MeSupportOptionsView(APIView):
     """
     GET /api/v1/me/support-options/ - ticket statuses, priorities, categories for customer create-ticket form.
@@ -2164,32 +2231,112 @@ from bfg.common.seed_data import COUNTRY_LIST
 
 
 class StaffRoleViewSet(viewsets.ModelViewSet):
-    """Staff role management ViewSet"""
+    """Staff role management ViewSet.
+
+    Reads: any active workspace staff. Writes: workspace admin only.
+    """
     serializer_class = StaffRoleSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
-    
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
+
     def get_queryset(self):
-        """Get staff roles for current workspace"""
         return StaffRole.objects.filter(
             workspace=self.request.workspace
-        ).order_by('name')
-    
+        ).order_by('owner_module', 'name')
+
     def perform_create(self, serializer):
-        """Create role with workspace"""
+        """User-defined roles always start as non-system + no module ownership."""
         data = serializer.validated_data
-        # Generate code from name if not provided
         if 'code' not in data or not data['code']:
             from django.utils.text import slugify
             code = slugify(data['name']).upper().replace('-', '_')
-            # Ensure uniqueness within workspace
             base_code = code
             counter = 1
             while StaffRole.objects.filter(workspace=self.request.workspace, code=code).exists():
                 code = f"{base_code}_{counter}"
                 counter += 1
-            serializer.save(workspace=self.request.workspace, code=code)
+            serializer.save(
+                workspace=self.request.workspace,
+                code=code,
+                is_system=False,
+                owner_module='',
+            )
         else:
-            serializer.save(workspace=self.request.workspace)
+            serializer.save(
+                workspace=self.request.workspace,
+                is_system=False,
+                owner_module='',
+            )
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        # System roles cannot have their code/identity changed; permissions
+        # remain editable so the workspace admin can override defaults.
+        if instance.is_system:
+            for field in ('code', 'is_system', 'owner_module', 'default_permissions'):
+                serializer.validated_data.pop(field, None)
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        """System roles can be deactivated but not deleted outright."""
+        instance = self.get_object()
+        if instance.is_system:
+            return Response(
+                {'detail': 'System roles cannot be deleted. Set is_active=false instead.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=['post'], url_path='restore_defaults',
+            permission_classes=[IsAuthenticated, IsWorkspaceAdmin])
+    def restore_defaults(self, request, pk=None):
+        """
+        Reset this role's ``permissions`` back to its module-declared
+        ``default_permissions``. Admin-only.
+
+        POST /api/v1/staff-roles/{id}/restore_defaults/
+        """
+        from bfg.common.services.role_provisioning import restore_role_to_defaults
+        role = self.get_object()
+        if not role.is_system or not role.default_permissions:
+            return Response(
+                {'detail': 'This role has no system defaults to restore.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        changed = restore_role_to_defaults(role)
+        return Response({
+            'role': StaffRoleSerializer(role).data,
+            'changed': changed,
+        })
+
+    @action(detail=False, methods=['get'], url_path='permission_catalog',
+            permission_classes=[IsAuthenticated, IsWorkspaceStaff])
+    def permission_catalog(self, request):
+        """
+        Permission keys + actions every BFG module exposes — used by the
+        role editor UI to render the checkbox grid.
+
+        GET /api/v1/staff-roles/permission_catalog/
+        """
+        from bfg.common.role_registry import role_registry
+        return Response({'modules': role_registry.to_catalog_payload()})
+
+    @action(detail=False, methods=['post'], url_path='sync_system_roles',
+            permission_classes=[IsAuthenticated, IsWorkspaceAdmin])
+    def sync_system_roles(self, request):
+        """
+        Materialise any newly-registered system roles into the current
+        workspace. Idempotent — existing customised ``permissions`` are
+        preserved; only ``default_permissions`` and metadata refresh.
+
+        POST /api/v1/staff-roles/sync_system_roles/
+        """
+        from bfg.common.services.role_provisioning import provision_system_roles
+        result = provision_system_roles(request.workspace)
+        return Response({
+            'created': result.created,
+            'updated': result.updated,
+            'skipped': result.skipped,
+        })
 
 
 @api_view(['GET'])

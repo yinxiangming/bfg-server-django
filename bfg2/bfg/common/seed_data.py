@@ -205,55 +205,21 @@ def create_customer_users(workspace, stdout=None, style=None):
 
 
 def create_staff_roles(workspace, stdout=None, style=None):
-    """Create staff roles for workspace"""
-    system_roles = [
-        {
-            'code': 'admin',
-            'name': 'Administrator',
-            'description': 'Full access to all features',
-            'permissions': {'*': ['*']},
-            'is_system': True,
-        },
-        {
-            'code': 'manager',
-            'name': 'Manager',
-            'description': 'Can manage most features',
-            'permissions': {
-                'shop': ['*'],
-                'delivery': ['*'],
-                'web': ['*'],
-            },
-            'is_system': True,
-        },
-        {
-            'code': 'staff',
-            'name': 'Staff',
-            'description': 'Basic staff access',
-            'permissions': {
-                'shop': ['view', 'list'],
-                'delivery': ['view', 'list'],
-            },
-            'is_system': True,
-        },
-    ]
-    
-    roles = []
-    for role_data in system_roles:
-        role, created = StaffRole.objects.get_or_create(
-            workspace=workspace,
-            code=role_data['code'],
-            defaults={
-                'name': role_data['name'],
-                'description': role_data['description'],
-                'permissions': role_data['permissions'],
-                'is_system': role_data['is_system'],
-                'is_active': True,
-            }
-        )
-        if created and stdout:
-            stdout.write(style.SUCCESS(f'✓ Created staff role: {role.name}'))
-        roles.append(role)
-    return roles
+    """Provision system roles via the role registry.
+
+    Each BFG module declares its own roles in ``<module>/roles.py``;
+    we just delegate to the central provisioning service here.
+    """
+    from bfg.common.services.role_provisioning import provision_system_roles
+    from bfg.common.models import StaffRole
+
+    result = provision_system_roles(workspace)
+    if stdout and style:
+        for code in result.created:
+            stdout.write(style.SUCCESS(f'✓ Created staff role: {code}'))
+        for code in result.updated:
+            stdout.write(style.WARNING(f'↻ Refreshed staff role: {code}'))
+    return list(StaffRole.objects.filter(workspace=workspace).order_by('id'))
 
 
 def create_staff_members(workspace, admin_user, staff_users, stdout=None, style=None):

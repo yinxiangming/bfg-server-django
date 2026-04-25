@@ -64,37 +64,28 @@ def generate_customer_number(sender, instance, created, **kwargs):
 
 def on_workspace_created(event_data):
     """
-    Initialize basic system roles when a new workspace is created.
-    Other modules will add their own roles via separate listeners.
+    Materialise every module-registered system role for a new workspace.
+
+    Each BFG module declares its roles in ``<module>/roles.py`` and
+    registers them at app-ready time. We pull the union of the
+    registry here so the workspace gets ``admin`` (common),
+    ``store_admin`` (shop), ``warehouse_manager`` (delivery), etc. in
+    one shot.
     """
-    # BaseService.emit_event wraps data in event_data['data']
     workspace = event_data.get('data', {}).get('workspace')
     if not workspace:
         return
-    
+
     try:
-        from bfg.common.utils import create_staff_roles
-        
-        logger.info(f"Initializing core system roles for workspace: {workspace.name}")
-        
-        # Only create the core admin role here
-        # Other roles (store_admin, warehouse_manager, etc.) should be created
-        # by their respective modules (bfg.shop, apps.wms, bfg.support)
-        core_roles = [
-            {
-                'code': 'admin',
-                'name': 'Administrator',
-                'description': 'Full access to all workspace resources',
-                'permissions': {'*': ['create', 'read', 'update', 'delete']},
-                'is_system': True,
-            },
-        ]
-        
-        created_count = create_staff_roles(workspace, core_roles)
-        logger.info(f"Created {created_count} core system role(s) for {workspace.name}")
-        
+        from bfg.common.services.role_provisioning import provision_system_roles
+
+        result = provision_system_roles(workspace)
+        logger.info(
+            "Provisioned roles for workspace %s — created=%s updated=%s skipped=%s",
+            workspace.name, result.created, result.updated, result.skipped,
+        )
     except Exception as e:
-        logger.error(f"Failed to initialize core roles for workspace {workspace.id}: {e}", exc_info=True)
+        logger.error(f"Failed to provision roles for workspace {workspace.id}: {e}", exc_info=True)
 
 
 # Register event listener

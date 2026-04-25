@@ -21,7 +21,17 @@ class StaffRole(models.Model):
     
     # Permissions (e.g., {"shop.view_order": True, "shop.change_order": True, ...})
     permissions = models.JSONField(_("Permissions"), default=dict, blank=True)
-    
+
+    # Frozen system-default permissions, captured from the role registry at
+    # provisioning time. Used by "Restore defaults" — the workspace admin can
+    # freely mutate ``permissions`` while ``default_permissions`` stays as
+    # the module-declared baseline for that role code.
+    default_permissions = models.JSONField(_("Default Permissions"), default=dict, blank=True)
+
+    # Which module contributed this role (e.g. 'common', 'shop', 'delivery').
+    # Empty for roles a workspace admin created from scratch.
+    owner_module = models.CharField(_("Owner Module"), max_length=64, blank=True, default="")
+
     # System roles can't be deleted
     is_system = models.BooleanField(_("System Role"), default=False)
     is_active = models.BooleanField(_("Active"), default=True)

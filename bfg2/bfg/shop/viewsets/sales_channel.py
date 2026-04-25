@@ -6,7 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
-from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff
+from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite
 from bfg.shop.models import SalesChannel, ProductChannelListing, ChannelCollection, Product
 from bfg.shop.serializers import (
     SalesChannelSerializer, ProductChannelListingSerializer, ChannelCollectionSerializer
@@ -14,9 +14,9 @@ from bfg.shop.serializers import (
 
 
 class SalesChannelViewSet(viewsets.ModelViewSet):
-    """Sales channel management ViewSet"""
+    """Sales channel management ViewSet. Reads: any staff. Writes: admin only."""
     serializer_class = SalesChannelSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     
     def get_queryset(self):
         """Get sales channels for current workspace"""

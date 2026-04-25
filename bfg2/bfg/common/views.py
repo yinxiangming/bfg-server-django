@@ -100,19 +100,10 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, StaffReadAdminWrite]
 
     def get_permissions(self):
-        """Per-action permissions.
-
-        - ``create``: any authenticated user (gated further in perform_create).
-        - ``list``/``retrieve``: any active staff member of the workspace —
-          the admin UI fetches the current workspace on every page load to
-          render workspace name/branding, so non-admin staff (manager, etc.)
-          must be able to read it.
-        - ``update``/``partial_update``/``destroy``: workspace admin only.
-        """
+        # ``create`` is special — first-workspace bootstrap or superuser only;
+        # the actual gating lives in ``perform_create``.
         if self.action == 'create':
             return [IsAuthenticated()]
-        if self.action in ('list', 'retrieve'):
-            return [IsAuthenticated(), IsWorkspaceStaff()]
         return super().get_permissions()
     
     def get_queryset(self):
@@ -601,18 +592,6 @@ class SettingsViewSet(viewsets.ModelViewSet):
     serializer_class = SettingsSerializer
     permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     http_method_names = ['get', 'put', 'patch']  # No create/delete
-
-    def get_permissions(self):
-        # Honor per-action @action(permission_classes=[...]) overrides.
-        action = getattr(self, 'action', None)
-        if action is not None:
-            handler = getattr(self, action, None)
-            kwargs = getattr(handler, 'kwargs', None) if handler else None
-            if kwargs and 'permission_classes' in kwargs:
-                return [p() for p in kwargs['permission_classes']]
-        if self.request.method in ('GET', 'HEAD', 'OPTIONS'):
-            return [IsAuthenticated(), IsWorkspaceStaff()]
-        return [IsAuthenticated(), IsWorkspaceAdmin()]
     
     def get_queryset(self):
         """Get settings for current workspace"""

@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.translation import gettext_lazy as _
-from .models import Workspace, User, Customer, Address, Settings, AuditLog, APIKey, resolve_workspace_public_frontend_base_url
+from .models import Workspace, User, Customer, Address, Settings, AuditLog, APIKey, Invitation, resolve_workspace_public_frontend_base_url
 
 
 @admin.register(Workspace)
@@ -191,3 +191,11 @@ class APIKeyAdmin(admin.ModelAdmin):
             'description': 'The secret hash is stored for verification. The raw secret is never stored.'
         }),
     )
+
+
+@admin.register(Invitation)
+class InvitationAdmin(admin.ModelAdmin):
+    list_display = ('email', 'workspace', 'role', 'status', 'invited_by', 'expires_at', 'accepted_at', 'created_at')
+    list_filter = ('status', 'workspace', 'created_at')
+    search_fields = ('email', 'workspace__name')
+    readonly_fields = ('uuid', 'token_hash', 'created_at', 'updated_at', 'accepted_at', 'revoked_at', 'accepted_by')

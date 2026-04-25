@@ -100,12 +100,19 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
     
     def get_permissions(self):
-        """Set permissions based on action"""
+        """Per-action permissions.
+
+        - ``create``: any authenticated user (gated further in perform_create).
+        - ``list``/``retrieve``: any active staff member of the workspace —
+          the admin UI fetches the current workspace on every page load to
+          render workspace name/branding, so non-admin staff (manager, etc.)
+          must be able to read it.
+        - ``update``/``partial_update``/``destroy``: workspace admin only.
+        """
         if self.action == 'create':
-            # For create, only allow superuser or first workspace creation
-            # We'll check in perform_create if user is superuser or if this is first workspace
-            from rest_framework.permissions import IsAuthenticated
             return [IsAuthenticated()]
+        if self.action in ('list', 'retrieve'):
+            return [IsAuthenticated(), IsWorkspaceStaff()]
         return super().get_permissions()
     
     def get_queryset(self):
@@ -589,13 +596,25 @@ class AddressViewSet(viewsets.ModelViewSet):
 
 class SettingsViewSet(viewsets.ModelViewSet):
     """
-    Workspace settings management ViewSet
-    
-    Only admins can update settings
+    Workspace settings management ViewSet.
+
+    Any staff member can read settings (the admin UI loads them on every
+    page to render layout/branding/theme). Mutations stay admin-only.
     """
     serializer_class = SettingsSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
     http_method_names = ['get', 'put', 'patch']  # No create/delete
+
+    def get_permissions(self):
+        # Honor per-action @action(permission_classes=[...]) overrides.
+        action = getattr(self, 'action', None)
+        if action is not None:
+            handler = getattr(self, action, None)
+            kwargs = getattr(handler, 'kwargs', None) if handler else None
+            if kwargs and 'permission_classes' in kwargs:
+                return [p() for p in kwargs['permission_classes']]
+        if self.request.method in ('GET', 'HEAD', 'OPTIONS'):
+            return [IsAuthenticated(), IsWorkspaceStaff()]
+        return [IsAuthenticated(), IsWorkspaceAdmin()]
     
     def get_queryset(self):
         """Get settings for current workspace"""
@@ -2291,3 +2310,160 @@ class APIKeyViewSet(viewsets.ModelViewSet):
         api_key.api_secret = new_secret
         serializer = APIKeyCreateSerializer(api_key)
         return Response(serializer.data)
+
+
+# ── Staff Invitation Management ───────────────────────────────────
+
+class InvitationViewSet(viewsets.GenericViewSet,
+                         mixins.ListModelMixin,
+                         mixins.RetrieveModelMixin,
+                         mixins.DestroyModelMixin):
+    """
+    Workspace-scoped invitation management (admin only).
+
+    GET    /api/v1/staff-invitations/                — list invitations
+    POST   /api/v1/staff-invitations/                — invite one or many emails
+    GET    /api/v1/staff-invitations/{uuid}/         — retrieve
+    DELETE /api/v1/staff-invitations/{uuid}/         — revoke (does not delete row)
+    POST   /api/v1/staff-invitations/{uuid}/resend/  — regenerate token + email
+    """
+    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    lookup_field = 'uuid'
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
+
+    def get_serializer_class(self):
+        from bfg.common.serializers import (
+            InvitationSerializer, InvitationCreateSerializer,
+        )
+        if self.action == 'create':
+            return InvitationCreateSerializer
+        return InvitationSerializer
+
+    def get_queryset(self):
+        from bfg.common.models import Invitation
+        qs = Invitation.objects.filter(
+            workspace=self.request.workspace,
+        ).select_related('role', 'invited_by', 'accepted_by').order_by('-created_at')
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        # Lazy expire pending invitations whose deadline has passed.
+        from bfg.common.models import Invitation
+        from django.utils import timezone
+        Invitation.objects.filter(
+            workspace=request.workspace,
+            status=Invitation.STATUS_PENDING,
+            expires_at__lte=timezone.now(),
+        ).update(status=Invitation.STATUS_EXPIRED)
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        from bfg.common.models import StaffRole
+        from bfg.common.serializers import (
+            InvitationCreateSerializer, InvitationSerializer,
+        )
+        from bfg.common.services import InvitationService
+
+        serializer = InvitationCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        emails = serializer.validated_data['_emails']
+        role_id = serializer.validated_data['role_id']
+        expiry_hours = serializer.validated_data.get('expiry_hours')
+        message = serializer.validated_data.get('message', '')
+
+        try:
+            role = StaffRole.objects.get(pk=role_id, workspace=request.workspace)
+        except StaffRole.DoesNotExist:
+            return Response(
+                {'role_id': 'Role not found in this workspace.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        service = InvitationService(workspace=request.workspace, actor=request.user)
+        created = []
+        errors = []
+        for email in emails:
+            try:
+                invitation, _raw = service.create(
+                    email=email,
+                    role=role,
+                    expiry_hours=expiry_hours,
+                    message=message,
+                )
+                created.append(invitation)
+            except Exception as exc:  # noqa: BLE001 — collect per-email errors
+                detail = getattr(exc, 'detail', None) or str(exc)
+                errors.append({'email': email, 'error': detail})
+
+        out = InvitationSerializer(created, many=True).data
+        return Response(
+            {'created': out, 'errors': errors},
+            status=status.HTTP_201_CREATED if created else status.HTTP_400_BAD_REQUEST,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        """Revoke an invitation (set status, do not delete)."""
+        from bfg.common.services import InvitationService
+        invitation = self.get_object()
+        service = InvitationService(workspace=request.workspace, actor=request.user)
+        service.revoke(invitation)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['post'])
+    def resend(self, request, uuid=None):
+        from bfg.common.serializers import InvitationSerializer
+        from bfg.common.services import InvitationService
+        invitation = self.get_object()
+        expiry_hours = request.data.get('expiry_hours') if isinstance(request.data, dict) else None
+        service = InvitationService(workspace=request.workspace, actor=request.user)
+        invitation, _raw = service.resend(invitation, expiry_hours=expiry_hours)
+        return Response(InvitationSerializer(invitation).data)
+
+
+# ── Public invitation endpoints (no workspace context required) ────
+
+class InvitationPreviewView(APIView):
+    """GET /api/v1/invitations/preview/?token=...&uuid=..."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from bfg.common.models import User
+        from bfg.common.serializers import InvitationPreviewSerializer
+        from bfg.common.services import find_invitation_by_token
+        token = request.query_params.get('token', '')
+        uuid_str = request.query_params.get('uuid')
+        invitation = find_invitation_by_token(token, uuid_str)
+        data = InvitationPreviewSerializer(invitation).data
+        data['account_exists'] = User.objects.filter(
+            email__iexact=invitation.email
+        ).exists()
+        return Response(data)
+
+
+class InvitationAcceptView(APIView):
+    """
+    POST /api/v1/invitations/accept/
+    Body: { "token": "...", "uuid": "..." }
+    Requires the caller to be authenticated as the invited user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from bfg.common.serializers import InvitationPreviewSerializer
+        from bfg.common.services import accept_invitation, find_invitation_by_token
+        token = request.data.get('token', '')
+        uuid_str = request.data.get('uuid')
+        invitation = find_invitation_by_token(token, uuid_str)
+        accept_invitation(invitation, request.user)
+        return Response({
+            'invitation': InvitationPreviewSerializer(invitation).data,
+            'workspace': {
+                'id': invitation.workspace.id,
+                'uuid': str(invitation.workspace.uuid),
+                'name': invitation.workspace.name,
+                'slug': invitation.workspace.slug,
+            },
+        })

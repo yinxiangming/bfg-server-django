@@ -11,6 +11,11 @@ from .settings_service import SettingsService
 from .audit_service import AuditService
 from .email_service import EmailService
 from .user_service import UserService
+from .invitation_service import (
+    InvitationService,
+    accept_invitation,
+    find_invitation_by_token,
+)
 
 __all__ = [
     'WorkspaceService',
@@ -20,4 +25,7 @@ __all__ = [
     'AuditService',
     'EmailService',
     'UserService',
+    'InvitationService',
+    'accept_invitation',
+    'find_invitation_by_token',
 ]

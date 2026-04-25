@@ -6,6 +6,7 @@ from .views import (
     UserViewSet, OptionsView,
     CustomerSegmentViewSet, CustomerTagViewSet,
     StaffRoleViewSet, StaffMemberViewSet,
+    InvitationViewSet, InvitationPreviewView, InvitationAcceptView,
     MeViewSet, MeAddressViewSet, MeSettingsViewSet, MeOrdersViewSet,
     MeDashboardStatsView,
     MePaymentMethodViewSet, MePaymentViewSet, MeInvoiceViewSet,
@@ -26,6 +27,7 @@ router.register(r'customer-segments', CustomerSegmentViewSet, basename='customer
 router.register(r'customer-tags', CustomerTagViewSet, basename='customer-tag')
 router.register(r'staff-roles', StaffRoleViewSet, basename='staff-role')
 router.register(r'staff-members', StaffMemberViewSet, basename='staff-member')
+router.register(r'staff-invitations', InvitationViewSet, basename='staff-invitation')
 router.register(r'api-keys', APIKeyViewSet, basename='api-key')
 # Me API - unified personal information API
 # Note: me/ and me/settings/ are registered as direct paths, not via router to avoid conflicts
@@ -37,6 +39,9 @@ router.register(r'me/invoices', MeInvoiceViewSet, basename='me-invoice')
 router.register(r'me/tickets', MeTicketsViewSet, basename='me-tickets')
 
 urlpatterns = [
+    # Public invitation endpoints (no workspace context required) — must come before router
+    path('invitations/preview/', InvitationPreviewView.as_view(), name='invitation-preview'),
+    path('invitations/accept/', InvitationAcceptView.as_view(), name='invitation-accept'),
     # Me API - specific action routes must come before router.urls
     path('me/dashboard-stats/', MeDashboardStatsView.as_view(), name='me-dashboard-stats'),
     path('me/support-options/', MeSupportOptionsView.as_view(), name='me-support-options'),

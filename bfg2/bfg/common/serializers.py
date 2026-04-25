@@ -8,7 +8,7 @@ from rest_framework import serializers
 from bfg.common.models import (
     Workspace, Customer, Address, User, StaffRole, StaffMember, Settings,
     CustomerSegment, CustomerTag, UserPreferences, Media, MediaLink, EmailConfig,
-    APIKey,
+    APIKey, Invitation,
 )
 from django.conf import settings    
 
@@ -47,7 +47,8 @@ class StaffMemberSerializer(serializers.ModelSerializer):
     role = StaffRoleSerializer(read_only=True)
     user_id = serializers.IntegerField(write_only=True)
     role_id = serializers.IntegerField(write_only=True)
-    
+    joined_at = serializers.DateTimeField(source='created_at', read_only=True)
+
     class Meta:
         model = StaffMember
         fields = [
@@ -55,6 +56,93 @@ class StaffMemberSerializer(serializers.ModelSerializer):
             'is_active', 'joined_at', 'created_at'
         ]
         read_only_fields = ['id', 'joined_at', 'created_at']
+
+
+class InvitationSerializer(serializers.ModelSerializer):
+    """Read serializer for staff invitations (admin view)."""
+    role = StaffRoleSerializer(read_only=True)
+    role_id = serializers.IntegerField(write_only=True, required=False)
+    invited_by = UserSerializer(read_only=True)
+    accepted_by = UserSerializer(read_only=True)
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Invitation
+        fields = [
+            'id', 'uuid', 'email', 'role', 'role_id', 'status',
+            'invited_by', 'accepted_by',
+            'expires_at', 'accepted_at', 'revoked_at',
+            'message', 'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'uuid', 'status', 'invited_by', 'accepted_by',
+            'expires_at', 'accepted_at', 'revoked_at',
+            'created_at', 'updated_at',
+        ]
+
+    def get_status(self, obj: Invitation) -> str:
+        return obj.effective_status()
+
+
+class InvitationCreateSerializer(serializers.Serializer):
+    """Write serializer for invite creation. Accepts a single email or a list."""
+    email = serializers.EmailField(required=False)
+    emails = serializers.ListField(
+        child=serializers.EmailField(), required=False, max_length=100
+    )
+    role_id = serializers.IntegerField(required=True)
+    expiry_hours = serializers.IntegerField(
+        required=False, min_value=1, max_value=24 * 14
+    )
+    message = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+
+    def validate(self, attrs):
+        emails = attrs.get('emails') or []
+        single = attrs.get('email')
+        if single:
+            emails = [*emails, single]
+        emails = [e.strip().lower() for e in emails if e and e.strip()]
+        # de-dupe while preserving order
+        seen = set()
+        deduped = []
+        for e in emails:
+            if e not in seen:
+                seen.add(e)
+                deduped.append(e)
+        if not deduped:
+            raise serializers.ValidationError({"email": "Provide at least one email."})
+        if len(deduped) > 100:
+            raise serializers.ValidationError(
+                {"emails": "Cannot invite more than 100 recipients in one request."}
+            )
+        attrs['_emails'] = deduped
+        return attrs
+
+
+class InvitationPreviewSerializer(serializers.Serializer):
+    """Public preview shown on the accept page before login/signup."""
+    workspace = serializers.SerializerMethodField()
+    role = serializers.SerializerMethodField()
+    email = serializers.EmailField()
+    invited_by = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    expires_at = serializers.DateTimeField()
+    message = serializers.CharField()
+
+    def get_workspace(self, obj: Invitation):
+        return {"id": obj.workspace_id, "name": obj.workspace.name, "slug": obj.workspace.slug}
+
+    def get_role(self, obj: Invitation):
+        return {"id": obj.role_id, "name": obj.role.name, "code": obj.role.code}
+
+    def get_invited_by(self, obj: Invitation):
+        if not obj.invited_by:
+            return None
+        full = obj.invited_by.get_full_name() or obj.invited_by.email
+        return {"id": obj.invited_by_id, "name": full, "email": obj.invited_by.email}
+
+    def get_status(self, obj: Invitation):
+        return obj.effective_status()
 
 
 class CustomerListSerializer(serializers.ModelSerializer):

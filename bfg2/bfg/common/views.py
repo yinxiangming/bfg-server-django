@@ -104,6 +104,13 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         # the actual gating lives in ``perform_create``.
         if self.action == 'create':
             return [IsAuthenticated()]
+        # ``list`` is also any-authenticated — get_queryset already scopes to
+        # the caller's own workspaces, and an authenticated user with no
+        # memberships should still be able to call GET /workspaces/ and see
+        # an empty list (e.g. immediately after registration, before
+        # creating their first workspace).
+        if self.action == 'list':
+            return [IsAuthenticated()]
         return super().get_permissions()
     
     def get_queryset(self):

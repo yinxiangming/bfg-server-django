@@ -104,26 +104,36 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         # the actual gating lives in ``perform_create``.
         if self.action == 'create':
             return [IsAuthenticated()]
+        # ``list`` is also any-authenticated — get_queryset already scopes to
+        # the caller's own workspaces, and an authenticated user with no
+        # memberships should still be able to call GET /workspaces/ and see
+        # an empty list (e.g. immediately after registration, before
+        # creating their first workspace).
+        if self.action == 'list':
+            return [IsAuthenticated()]
         return super().get_permissions()
     
     def get_queryset(self):
         """Get workspaces for current user"""
         user = self.request.user
-        
+
         # Superusers can see all workspaces
         if user.is_superuser:
             return Workspace.objects.filter(is_active=True)
-        
-        # Get workspaces where user is a staff member
+
+        # Get workspaces where user is a staff member. ``StaffMember.objects``
+        # is tenant-scoped (filters to the current request workspace), but the
+        # whole point of this endpoint is to enumerate every workspace the
+        # caller belongs to — use ``all_objects`` for the cross-tenant lookup.
         from bfg.common.models import StaffMember
-        staff_workspaces = StaffMember.objects.filter(
+        staff_workspaces = StaffMember.all_objects.filter(
             user=user,
-            is_active=True
+            is_active=True,
         ).values_list('workspace_id', flat=True)
-        
+
         return Workspace.objects.filter(
             id__in=staff_workspaces,
-            is_active=True
+            is_active=True,
         )
     
     def perform_create(self, serializer):

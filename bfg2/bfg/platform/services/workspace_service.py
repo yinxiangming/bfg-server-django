@@ -42,10 +42,15 @@ def is_platform_admin(user) -> bool:
 # ── Embedded mode ─────────────────────────────────────────────────────────────
 
 def _get_user_workspaces_embedded(user) -> list:
-    """Embedded: list workspaces via StaffMember (same DB)."""
+    """Embedded: list workspaces via StaffMember (same DB).
+
+    Uses ``all_objects`` (unscoped manager) — this is a cross-workspace
+    query by definition; ``StaffMember.objects`` would clamp the queryset
+    to the request's resolved workspace and miss every other membership.
+    """
     StaffMember = apps.get_model("common", "StaffMember")
     memberships = (
-        StaffMember.objects.filter(user=user, is_active=True)
+        StaffMember.all_objects.filter(user=user, is_active=True)
         .select_related("workspace", "role")
     )
 
@@ -79,7 +84,9 @@ def _is_platform_admin_embedded(user) -> bool:
     if not platform_ws:
         return False
     StaffMember = apps.get_model("common", "StaffMember")
-    return StaffMember.objects.filter(
+    # Cross-workspace: use unscoped manager so the answer doesn't depend on
+    # whichever tenant the request happens to be bound to.
+    return StaffMember.all_objects.filter(
         user=user, workspace=platform_ws, is_active=True
     ).exists()
 

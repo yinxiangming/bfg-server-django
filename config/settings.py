@@ -393,6 +393,9 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', '')
 WORKSPACE_FRONTEND_URL = os.environ.get('WORKSPACE_FRONTEND_URL', '').strip()
 SITE_NAME = os.environ.get('SITE_NAME', 'BFG')
 
+# Staff invitations: default TTL in hours (used when admin doesn't override per-invite).
+INVITATION_EXPIRY_HOURS = int(os.environ.get('INVITATION_EXPIRY_HOURS', '48'))
+
 # Logging
 LOGGING = {
     'version': 1,

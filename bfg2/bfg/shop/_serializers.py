@@ -167,6 +167,66 @@ class VariantInventorySerializer(serializers.ModelSerializer):
         return value
 
 
+class ProductPublicListSerializer(serializers.ModelSerializer):
+    """Storefront-safe product list serializer.
+
+    Excludes admin-only fields (``cost``, ``barcode``, ``track_inventory``,
+    ``low_stock_threshold``, ``finance_code``). Inactive products are also
+    filtered out at the queryset level by the public ProductViewSet.
+    """
+    primary_image = serializers.SerializerMethodField()
+    category_names = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = [
+            'id', 'name', 'slug', 'sku', 'product_type', 'condition',
+            'short_description', 'price', 'compare_price',
+            'primary_image', 'category_names',
+            'is_featured', 'stock_quantity', 'language',
+        ]
+        read_only_fields = fields
+
+    def get_primary_image(self, obj):
+        primary = obj.primary_image
+        if primary and primary.media:
+            request = self.context.get('request')
+            return media_file_url_for_serializer(primary.media, request)
+        return None
+
+    def get_category_names(self, obj):
+        return [cat.name for cat in obj.categories.all()]
+
+
+class ProductPublicDetailSerializer(serializers.ModelSerializer):
+    """Storefront-safe product detail serializer.
+
+    Same exclusions as the list flavour, plus media + variants are presented
+    via their public serializers.
+    """
+    media = BaseMediaLinkSerializer(many=True, read_only=True, source='media_links')
+    variants = ProductVariantSerializer(many=True, read_only=True)
+    categories = ProductCategorySerializer(many=True, read_only=True)
+    tags = ProductTagSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Product
+        fields = [
+            'id', 'name', 'slug', 'sku', 'product_type', 'condition',
+            'description', 'short_description',
+            'price', 'compare_price',
+            'is_subscription', 'subscription_plan',
+            'categories', 'tags',
+            'stock_quantity',
+            'requires_shipping', 'weight',
+            'meta_title', 'meta_description',
+            'is_featured', 'language',
+            'media', 'variants',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+
 class ProductListSerializer(serializers.ModelSerializer):
     """Product list serializer (concise)"""
     primary_image = serializers.SerializerMethodField()

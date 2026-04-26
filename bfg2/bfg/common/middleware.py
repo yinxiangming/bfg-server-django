@@ -12,6 +12,7 @@ happened to be first in the DB — a severe cross-tenant leak.
 import logging
 import threading
 
+from django.apps import apps as django_apps
 from django.conf import settings
 from django.core.cache import cache
 from django.http import JsonResponse
@@ -205,6 +206,42 @@ WORKSPACE_ACCESS_DENIED_RESPONSE = {
 }
 
 
+def _superuser_can_override(request):
+    """Return True if the JWT in *request* belongs to a superuser allowed to
+    use ``X-Workspace-Id`` to switch tenant context regardless of the JWT
+    workspace_id claim.
+
+    This bypass is gated on ``BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS``
+    (default True) — production deployments that need stricter isolation can
+    set it False to fall back to the previous claim-only behaviour.
+    """
+    if not getattr(settings, 'BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS', True):
+        return False
+    if not _JWT_AVAILABLE:
+        return False
+    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+    if not auth_header.startswith('Bearer '):
+        return False
+    raw_token = auth_header[len('Bearer '):]
+    try:
+        backend = TokenBackend(
+            algorithm=getattr(settings, 'SIMPLE_JWT', {}).get('ALGORITHM', 'HS256'),
+            signing_key=getattr(settings, 'SIMPLE_JWT', {}).get('SIGNING_KEY', settings.SECRET_KEY),
+        )
+        payload = backend.decode(raw_token, verify=True)
+        user_id = payload.get('user_id')
+        if user_id is None:
+            return False
+    except Exception:
+        return False
+    User = django_apps.get_model(settings.AUTH_USER_MODEL.split('.', 1)[0],
+                                 settings.AUTH_USER_MODEL.split('.', 1)[1])
+    try:
+        return User.objects.filter(pk=user_id, is_superuser=True, is_active=True).exists()
+    except Exception:
+        return False
+
+
 def _decode_jwt_workspace_id(request):
     """Extract workspace_id from Bearer JWT claim without full DRF auth stack.
 
@@ -320,9 +357,17 @@ class WorkspaceMiddleware:
 
     @staticmethod
     def _resolve_workspace(request):
-        # 1. JWT claim (authenticated requests in prod — prevents header spoofing)
+        # 1. JWT claim (authenticated requests in prod — prevents header spoofing).
+        #    Superusers are allowed to override via X-Workspace-Id so management
+        #    tooling, integration tests and the Platform module can switch
+        #    tenants without re-minting a token. The bypass only applies when
+        #    BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS=True (the default).
         jwt_ws_id, jwt_valid = _decode_jwt_workspace_id(request)
         if jwt_ws_id is not None:
+            if _superuser_can_override(request):
+                header_ws_id = request.headers.get('X-Workspace-ID') or request.headers.get('X-Workspace-Id')
+                if header_ws_id:
+                    return _get_workspace_by_id(header_ws_id)
             return _get_workspace_by_id(jwt_ws_id)
 
         # 2. Session (reserved for cookie-based flows)

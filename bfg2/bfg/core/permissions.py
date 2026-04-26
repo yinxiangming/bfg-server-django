@@ -45,6 +45,23 @@ class IsWorkspaceAdmin(permissions.BasePermission):
             return False
 
 
+class StaffReadAdminWrite(permissions.BasePermission):
+    """
+    Reads (GET/HEAD/OPTIONS) require any active workspace staff member;
+    writes (POST/PUT/PATCH/DELETE) require workspace admin.
+
+    Use on configuration-style ViewSets the admin UI fetches on every page
+    (workspace, settings, sites, stores, gateways, tax rates, …) so non-admin
+    staff can render the admin shell without being kicked back to login.
+    """
+    message = "You don't have permission to perform this action on this workspace."
+
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return IsWorkspaceStaff().has_permission(request, view)
+        return IsWorkspaceAdmin().has_permission(request, view)
+
+
 class IsWorkspaceStaff(permissions.BasePermission):
     """
     Any staff member of the workspace can access

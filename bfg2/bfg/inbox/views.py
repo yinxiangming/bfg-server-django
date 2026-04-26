@@ -10,7 +10,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
-from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff
+from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite
 from bfg.inbox.models import Message, MessageRecipient, MessageTemplate, SMSMessage
 from bfg.inbox.serializers import (
     MessageSerializer, MessageRecipientSerializer,
@@ -253,9 +253,9 @@ class MessageRecipientViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class MessageTemplateViewSet(viewsets.ModelViewSet):
-    """Message template ViewSet (Admin only)"""
+    """Message template ViewSet. Reads: any staff. Writes: admin only."""
     serializer_class = MessageTemplateSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     
     def get_queryset(self):
         return MessageTemplate.objects.filter(

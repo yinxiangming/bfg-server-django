@@ -7,15 +7,15 @@ from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from bfg.core.permissions import IsWorkspaceAdmin
+from bfg.core.permissions import StaffReadAdminWrite
 from bfg.shop.models import Store
 from bfg.shop.serializers import StoreSerializer
 
 
 class StoreViewSet(viewsets.ModelViewSet):
-    """Store management ViewSet (Admin only)"""
+    """Store management ViewSet. Reads: any staff. Writes: admin only."""
     serializer_class = StoreSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
 
     def get_queryset(self):
         """Get stores for current workspace"""

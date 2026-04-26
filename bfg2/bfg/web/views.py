@@ -15,7 +15,7 @@ from django.db import models
 from django.db.models import Q
 from django.shortcuts import get_object_or_404 as django_get_object_or_404
 
-from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff
+from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite
 from bfg.web.models import (
     Site, Theme, Language, Page, Post, Media, Category, Tag, Menu, Inquiry,
     BookingTimeSlot, Booking,
@@ -62,12 +62,14 @@ def get_workspace(request):
 
 class SiteViewSet(viewsets.ModelViewSet):
     """
-    Site management ViewSet
-    
-    Only admins can create/update/delete sites
+    Site management ViewSet.
+
+    Reads (list/retrieve/export) are open to any active workspace staff —
+    the admin UI uses this to render site name, theme and default language
+    on every page. Mutations stay admin-only.
     """
     serializer_class = SiteSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]  # Restored to IsWorkspaceAdmin (now allows superuser)
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     
     def get_queryset(self):
         """Get sites for current workspace"""
@@ -150,11 +152,18 @@ class PageViewSet(viewsets.ModelViewSet):
         return PageListSerializer
     
     def get_permissions(self):
-        """Set permissions based on action"""
-        if self.action in ['list', 'retrieve', 'rendered']:
+        """Set permissions based on action.
+
+        ``rendered`` is the storefront-safe public endpoint
+        (``GET /api/v1/web/pages/<slug>/rendered/``) — anonymous OK.
+        Everything else (list / retrieve / create / update / delete) is
+        admin only; the bare collection exposes draft pages, ``status``,
+        ``created_by`` and other admin-internal fields.
+        """
+        if self.action == 'rendered':
             return [AllowAny()]
         return [IsAuthenticated(), IsWorkspaceStaff()]
-    
+
     def get_queryset(self):
         """Get pages based on permissions"""
         workspace = get_workspace(self.request)
@@ -311,11 +320,12 @@ class PostViewSet(viewsets.ModelViewSet):
         return PostDetailSerializer
     
     def get_permissions(self):
-        """Set permissions based on action"""
-        if self.action in ['list', 'retrieve']:
-            return [AllowAny()]
+        """Admin-only — list/retrieve return draft posts, ``status``,
+        ``author`` and other admin-internal fields. Storefront blog
+        rendering should use a dedicated public endpoint (not this one).
+        """
         return [IsAuthenticated(), IsWorkspaceStaff()]
-    
+
     def get_queryset(self):
         """Get posts based on permissions"""
         workspace = get_workspace(self.request)

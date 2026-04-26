@@ -78,8 +78,10 @@ class AuthViewSet(viewsets.ViewSet):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-        # Verify user has access
-        if not StaffMember.objects.filter(
+        # Verify user has access. Cross-workspace check — the user is
+        # exchanging FROM whatever workspace their JWT is bound to INTO
+        # ``workspace``, so the scoped manager would always come up empty.
+        if not StaffMember.all_objects.filter(
             user=request.user, workspace=workspace, is_active=True
         ).exists():
             return Response(

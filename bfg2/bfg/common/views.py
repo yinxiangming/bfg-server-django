@@ -19,7 +19,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
-from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, IsOwnerOrStaff
+from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, IsOwnerOrStaff, StaffReadAdminWrite
 from bfg.common.models import Workspace, Customer, Address, CustomerSegment, CustomerTag, User, UserPreferences, StaffRole, EmailConfig
 from bfg.common.serializers import (
     WorkspaceSerializer,
@@ -97,35 +97,43 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     Superusers can create workspaces without being staff
     """
     serializer_class = WorkspaceSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
-    
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
+
     def get_permissions(self):
-        """Set permissions based on action"""
+        # ``create`` is special — first-workspace bootstrap or superuser only;
+        # the actual gating lives in ``perform_create``.
         if self.action == 'create':
-            # For create, only allow superuser or first workspace creation
-            # We'll check in perform_create if user is superuser or if this is first workspace
-            from rest_framework.permissions import IsAuthenticated
+            return [IsAuthenticated()]
+        # ``list`` is also any-authenticated — get_queryset already scopes to
+        # the caller's own workspaces, and an authenticated user with no
+        # memberships should still be able to call GET /workspaces/ and see
+        # an empty list (e.g. immediately after registration, before
+        # creating their first workspace).
+        if self.action == 'list':
             return [IsAuthenticated()]
         return super().get_permissions()
     
     def get_queryset(self):
         """Get workspaces for current user"""
         user = self.request.user
-        
+
         # Superusers can see all workspaces
         if user.is_superuser:
             return Workspace.objects.filter(is_active=True)
-        
-        # Get workspaces where user is a staff member
+
+        # Get workspaces where user is a staff member. ``StaffMember.objects``
+        # is tenant-scoped (filters to the current request workspace), but the
+        # whole point of this endpoint is to enumerate every workspace the
+        # caller belongs to — use ``all_objects`` for the cross-tenant lookup.
         from bfg.common.models import StaffMember
-        staff_workspaces = StaffMember.objects.filter(
+        staff_workspaces = StaffMember.all_objects.filter(
             user=user,
-            is_active=True
+            is_active=True,
         ).values_list('workspace_id', flat=True)
-        
+
         return Workspace.objects.filter(
             id__in=staff_workspaces,
-            is_active=True
+            is_active=True,
         )
     
     def perform_create(self, serializer):
@@ -159,11 +167,14 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
 class CustomerViewSet(viewsets.ModelViewSet):
     """
-    Customer management ViewSet
-    
-    Staff can view all customers, customers can only view/update themselves
+    Admin customer management ViewSet — staff only.
+
+    Customers should hit ``/api/v1/me/`` (and the storefront / account API)
+    for their own data. This endpoint backs the admin /admin/store/customers
+    page and returns the workspace's full customer list, so non-staff are
+    rejected outright rather than silently scope-filtered.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     filter_backends = [SearchFilter]
     search_fields = [
         'user__first_name',
@@ -209,15 +220,6 @@ class CustomerViewSet(viewsets.ModelViewSet):
         if self.action == 'retrieve':
             qs = qs.prefetch_related('addresses')
         return qs
-    
-    def get_permissions(self):
-        """Set permissions based on action"""
-        if self.action in ['list', 'retrieve']:
-            return [IsAuthenticated()]
-        elif self.action in ['update', 'partial_update']:
-            return [IsAuthenticated(), IsOwnerOrStaff()]
-        else:
-            return [IsAuthenticated(), IsWorkspaceStaff()]
     
     def perform_create(self, serializer):
         """Create customer using service"""
@@ -589,12 +591,13 @@ class AddressViewSet(viewsets.ModelViewSet):
 
 class SettingsViewSet(viewsets.ModelViewSet):
     """
-    Workspace settings management ViewSet
-    
-    Only admins can update settings
+    Workspace settings management ViewSet.
+
+    Any staff member can read settings (the admin UI loads them on every
+    page to render layout/branding/theme). Mutations stay admin-only.
     """
     serializer_class = SettingsSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     http_method_names = ['get', 'put', 'patch']  # No create/delete
     
     def get_queryset(self):
@@ -1060,29 +1063,28 @@ class EmailConfigViewSet(viewsets.ModelViewSet):
 
 class UserViewSet(viewsets.ModelViewSet):
     """
-    User management ViewSet
+    Admin user search / lookup ViewSet — staff only.
+
+    Used by the admin UI (e.g. staff-add dialog) to search across the
+    workspace's users. Customers should use ``/api/v1/me/`` for their
+    own profile and never need to enumerate other users.
     """
     from bfg.common.serializers import UserSerializer
     serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated]
-    
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+
     def get_queryset(self):
-        """Return users scoped to the current workspace for admin/staff."""
-        user = self.request.user
+        """Return users scoped to the current workspace."""
         from django.db.models import Q
         from bfg.common.models import User
 
         workspace = getattr(self.request, 'workspace', None)
-
-        if user.is_staff or user.is_superuser:
-            if not workspace:
-                return User.objects.none()
-            return User.objects.filter(
-                Q(default_workspace=workspace) |
-                Q(staff_memberships__workspace=workspace, staff_memberships__is_active=True)
-            ).distinct()
-
-        return User.objects.filter(id=user.id)
+        if not workspace:
+            return User.objects.none()
+        return User.objects.filter(
+            Q(default_workspace=workspace) |
+            Q(staff_memberships__workspace=workspace, staff_memberships__is_active=True)
+        ).distinct()
 
 
 class MeViewSet(viewsets.GenericViewSet):
@@ -1923,6 +1925,100 @@ class MeInvoiceViewSet(viewsets.ReadOnlyModelViewSet):
         return response
 
 
+class MeWalletViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Current user's wallets (read-only) — GET /api/v1/me/wallets/
+
+    Customers see only their own wallets. The ``withdraw`` action lets a
+    customer file a WithdrawalRequest against their own wallet (still
+    requires staff approval before the cash is deducted).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        from bfg.finance.serializers import WalletSerializer
+        return WalletSerializer
+
+    def get_queryset(self):
+        from bfg.finance.models import Wallet
+        from bfg.common.models import Customer
+        workspace = get_required_workspace(self.request)
+        try:
+            customer = Customer.objects.get(workspace=workspace, user=self.request.user)
+        except Customer.DoesNotExist:
+            return Wallet.objects.none()
+        return Wallet.objects.filter(
+            workspace=workspace, customer=customer,
+        ).select_related('customer', 'currency')
+
+    @action(detail=True, methods=['post'], url_path='withdraw')
+    def withdraw(self, request, pk=None):
+        """File a withdrawal request against this wallet."""
+        from bfg.finance.models import WithdrawalRequest
+        from bfg.finance.serializers import (
+            WithdrawalRequestCreateSerializer, WithdrawalRequestSerializer,
+        )
+        from bfg.finance.views import _get_min_withdrawal_amount_for_workspace
+
+        wallet = self.get_object()
+        serializer = WithdrawalRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        amount = serializer.validated_data['amount']
+
+        min_w = _get_min_withdrawal_amount_for_workspace(wallet.workspace)
+        if min_w is not None and amount < min_w:
+            return Response(
+                {
+                    'detail': f'Minimum withdrawal amount is {min_w}.',
+                    'code': 'min_withdrawal_amount',
+                    'min_amount': str(min_w),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if wallet.cash_balance < amount:
+            return Response(
+                {'detail': f'Insufficient cash balance. Available: {wallet.cash_balance}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        req = WithdrawalRequest.objects.create(
+            wallet=wallet,
+            amount=amount,
+            status='pending',
+            payout_method=serializer.validated_data.get('payout_method', ''),
+            payout_details=serializer.validated_data.get('payout_details', {}),
+            notes=serializer.validated_data.get('notes', ''),
+            requested_by=request.user,
+        )
+        return Response(WithdrawalRequestSerializer(req).data, status=status.HTTP_201_CREATED)
+
+
+class MeWithdrawalRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Current user's withdrawal request history (read-only) —
+    GET /api/v1/me/withdrawal-requests/
+
+    Customer-scoped read-only view; staff approve/reject via
+    ``/api/v1/finance/withdrawals/{id}/{approve,reject}/``.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        from bfg.finance.serializers import WithdrawalRequestSerializer
+        return WithdrawalRequestSerializer
+
+    def get_queryset(self):
+        from bfg.finance.models import WithdrawalRequest
+        from bfg.common.models import Customer
+        workspace = get_required_workspace(self.request)
+        try:
+            customer = Customer.objects.get(workspace=workspace, user=self.request.user)
+        except Customer.DoesNotExist:
+            return WithdrawalRequest.objects.none()
+        return WithdrawalRequest.objects.filter(
+            wallet__workspace=workspace, wallet__customer=customer,
+        ).select_related('wallet', 'requested_by', 'approved_by').order_by('-requested_at')
+
+
 class MeSupportOptionsView(APIView):
     """
     GET /api/v1/me/support-options/ - ticket statuses, priorities, categories for customer create-ticket form.
@@ -2145,32 +2241,112 @@ from bfg.common.seed_data import COUNTRY_LIST
 
 
 class StaffRoleViewSet(viewsets.ModelViewSet):
-    """Staff role management ViewSet"""
+    """Staff role management ViewSet.
+
+    Reads: any active workspace staff. Writes: workspace admin only.
+    """
     serializer_class = StaffRoleSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
-    
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
+
     def get_queryset(self):
-        """Get staff roles for current workspace"""
         return StaffRole.objects.filter(
             workspace=self.request.workspace
-        ).order_by('name')
-    
+        ).order_by('owner_module', 'name')
+
     def perform_create(self, serializer):
-        """Create role with workspace"""
+        """User-defined roles always start as non-system + no module ownership."""
         data = serializer.validated_data
-        # Generate code from name if not provided
         if 'code' not in data or not data['code']:
             from django.utils.text import slugify
             code = slugify(data['name']).upper().replace('-', '_')
-            # Ensure uniqueness within workspace
             base_code = code
             counter = 1
             while StaffRole.objects.filter(workspace=self.request.workspace, code=code).exists():
                 code = f"{base_code}_{counter}"
                 counter += 1
-            serializer.save(workspace=self.request.workspace, code=code)
+            serializer.save(
+                workspace=self.request.workspace,
+                code=code,
+                is_system=False,
+                owner_module='',
+            )
         else:
-            serializer.save(workspace=self.request.workspace)
+            serializer.save(
+                workspace=self.request.workspace,
+                is_system=False,
+                owner_module='',
+            )
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        # System roles cannot have their code/identity changed; permissions
+        # remain editable so the workspace admin can override defaults.
+        if instance.is_system:
+            for field in ('code', 'is_system', 'owner_module', 'default_permissions'):
+                serializer.validated_data.pop(field, None)
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        """System roles can be deactivated but not deleted outright."""
+        instance = self.get_object()
+        if instance.is_system:
+            return Response(
+                {'detail': 'System roles cannot be deleted. Set is_active=false instead.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=['post'], url_path='restore_defaults',
+            permission_classes=[IsAuthenticated, IsWorkspaceAdmin])
+    def restore_defaults(self, request, pk=None):
+        """
+        Reset this role's ``permissions`` back to its module-declared
+        ``default_permissions``. Admin-only.
+
+        POST /api/v1/staff-roles/{id}/restore_defaults/
+        """
+        from bfg.common.services.role_provisioning import restore_role_to_defaults
+        role = self.get_object()
+        if not role.is_system or not role.default_permissions:
+            return Response(
+                {'detail': 'This role has no system defaults to restore.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        changed = restore_role_to_defaults(role)
+        return Response({
+            'role': StaffRoleSerializer(role).data,
+            'changed': changed,
+        })
+
+    @action(detail=False, methods=['get'], url_path='permission_catalog',
+            permission_classes=[IsAuthenticated, IsWorkspaceStaff])
+    def permission_catalog(self, request):
+        """
+        Permission keys + actions every BFG module exposes — used by the
+        role editor UI to render the checkbox grid.
+
+        GET /api/v1/staff-roles/permission_catalog/
+        """
+        from bfg.common.role_registry import role_registry
+        return Response({'modules': role_registry.to_catalog_payload()})
+
+    @action(detail=False, methods=['post'], url_path='sync_system_roles',
+            permission_classes=[IsAuthenticated, IsWorkspaceAdmin])
+    def sync_system_roles(self, request):
+        """
+        Materialise any newly-registered system roles into the current
+        workspace. Idempotent — existing customised ``permissions`` are
+        preserved; only ``default_permissions`` and metadata refresh.
+
+        POST /api/v1/staff-roles/sync_system_roles/
+        """
+        from bfg.common.services.role_provisioning import provision_system_roles
+        result = provision_system_roles(request.workspace)
+        return Response({
+            'created': result.created,
+            'updated': result.updated,
+            'skipped': result.skipped,
+        })
 
 
 @api_view(['GET'])
@@ -2291,3 +2467,160 @@ class APIKeyViewSet(viewsets.ModelViewSet):
         api_key.api_secret = new_secret
         serializer = APIKeyCreateSerializer(api_key)
         return Response(serializer.data)
+
+
+# ── Staff Invitation Management ───────────────────────────────────
+
+class InvitationViewSet(viewsets.GenericViewSet,
+                         mixins.ListModelMixin,
+                         mixins.RetrieveModelMixin,
+                         mixins.DestroyModelMixin):
+    """
+    Workspace-scoped invitation management (admin only).
+
+    GET    /api/v1/staff-invitations/                — list invitations
+    POST   /api/v1/staff-invitations/                — invite one or many emails
+    GET    /api/v1/staff-invitations/{uuid}/         — retrieve
+    DELETE /api/v1/staff-invitations/{uuid}/         — revoke (does not delete row)
+    POST   /api/v1/staff-invitations/{uuid}/resend/  — regenerate token + email
+    """
+    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    lookup_field = 'uuid'
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
+
+    def get_serializer_class(self):
+        from bfg.common.serializers import (
+            InvitationSerializer, InvitationCreateSerializer,
+        )
+        if self.action == 'create':
+            return InvitationCreateSerializer
+        return InvitationSerializer
+
+    def get_queryset(self):
+        from bfg.common.models import Invitation
+        qs = Invitation.objects.filter(
+            workspace=self.request.workspace,
+        ).select_related('role', 'invited_by', 'accepted_by').order_by('-created_at')
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        # Lazy expire pending invitations whose deadline has passed.
+        from bfg.common.models import Invitation
+        from django.utils import timezone
+        Invitation.objects.filter(
+            workspace=request.workspace,
+            status=Invitation.STATUS_PENDING,
+            expires_at__lte=timezone.now(),
+        ).update(status=Invitation.STATUS_EXPIRED)
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        from bfg.common.models import StaffRole
+        from bfg.common.serializers import (
+            InvitationCreateSerializer, InvitationSerializer,
+        )
+        from bfg.common.services import InvitationService
+
+        serializer = InvitationCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        emails = serializer.validated_data['_emails']
+        role_id = serializer.validated_data['role_id']
+        expiry_hours = serializer.validated_data.get('expiry_hours')
+        message = serializer.validated_data.get('message', '')
+
+        try:
+            role = StaffRole.objects.get(pk=role_id, workspace=request.workspace)
+        except StaffRole.DoesNotExist:
+            return Response(
+                {'role_id': 'Role not found in this workspace.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        service = InvitationService(workspace=request.workspace, actor=request.user)
+        created = []
+        errors = []
+        for email in emails:
+            try:
+                invitation, _raw = service.create(
+                    email=email,
+                    role=role,
+                    expiry_hours=expiry_hours,
+                    message=message,
+                )
+                created.append(invitation)
+            except Exception as exc:  # noqa: BLE001 — collect per-email errors
+                detail = getattr(exc, 'detail', None) or str(exc)
+                errors.append({'email': email, 'error': detail})
+
+        out = InvitationSerializer(created, many=True).data
+        return Response(
+            {'created': out, 'errors': errors},
+            status=status.HTTP_201_CREATED if created else status.HTTP_400_BAD_REQUEST,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        """Revoke an invitation (set status, do not delete)."""
+        from bfg.common.services import InvitationService
+        invitation = self.get_object()
+        service = InvitationService(workspace=request.workspace, actor=request.user)
+        service.revoke(invitation)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['post'])
+    def resend(self, request, uuid=None):
+        from bfg.common.serializers import InvitationSerializer
+        from bfg.common.services import InvitationService
+        invitation = self.get_object()
+        expiry_hours = request.data.get('expiry_hours') if isinstance(request.data, dict) else None
+        service = InvitationService(workspace=request.workspace, actor=request.user)
+        invitation, _raw = service.resend(invitation, expiry_hours=expiry_hours)
+        return Response(InvitationSerializer(invitation).data)
+
+
+# ── Public invitation endpoints (no workspace context required) ────
+
+class InvitationPreviewView(APIView):
+    """GET /api/v1/invitations/preview/?token=...&uuid=..."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from bfg.common.models import User
+        from bfg.common.serializers import InvitationPreviewSerializer
+        from bfg.common.services import find_invitation_by_token
+        token = request.query_params.get('token', '')
+        uuid_str = request.query_params.get('uuid')
+        invitation = find_invitation_by_token(token, uuid_str)
+        data = InvitationPreviewSerializer(invitation).data
+        data['account_exists'] = User.objects.filter(
+            email__iexact=invitation.email
+        ).exists()
+        return Response(data)
+
+
+class InvitationAcceptView(APIView):
+    """
+    POST /api/v1/invitations/accept/
+    Body: { "token": "...", "uuid": "..." }
+    Requires the caller to be authenticated as the invited user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from bfg.common.serializers import InvitationPreviewSerializer
+        from bfg.common.services import accept_invitation, find_invitation_by_token
+        token = request.data.get('token', '')
+        uuid_str = request.data.get('uuid')
+        invitation = find_invitation_by_token(token, uuid_str)
+        accept_invitation(invitation, request.user)
+        return Response({
+            'invitation': InvitationPreviewSerializer(invitation).data,
+            'workspace': {
+                'id': invitation.workspace.id,
+                'uuid': str(invitation.workspace.uuid),
+                'name': invitation.workspace.name,
+                'slug': invitation.workspace.slug,
+            },
+        })

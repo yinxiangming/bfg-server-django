@@ -11,7 +11,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
-from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff
+from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite
 from bfg.delivery.models import (
     Warehouse, Carrier, FreightService, Manifest, Consignment,
     Package, TrackingEvent, FreightStatus, DeliveryZone, PackagingType,
@@ -37,9 +37,9 @@ from bfg.delivery.schemas import (
 
 
 class WarehouseViewSet(viewsets.ModelViewSet):
-    """Warehouse management ViewSet (Admin only)"""
+    """Warehouse management ViewSet. Reads: any staff. Writes: admin only."""
     serializer_class = WarehouseSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     
     def get_queryset(self):
         """Get warehouses for current workspace"""
@@ -1176,9 +1176,9 @@ class PackageViewSet(viewsets.ModelViewSet):
 
 
 class FreightStatusViewSet(viewsets.ModelViewSet):
-    """Freight status management ViewSet (Admin)"""
+    """Freight status management ViewSet. Reads: any staff. Writes: admin only."""
     serializer_class = FreightStatusSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     
     def get_queryset(self):
         """Get freight statuses for current workspace"""

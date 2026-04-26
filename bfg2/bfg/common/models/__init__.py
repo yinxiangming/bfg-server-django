@@ -12,6 +12,7 @@ from .workspace_domain import (
 )
 from .customer import Customer, CustomerSegment, CustomerTag
 from .staff import StaffRole, StaffMember
+from .invitation import Invitation, generate_invitation_token, hash_invitation_token
 from .preferences import UserPreferences
 from .email import EmailConfig
 from .api_key import APIKey

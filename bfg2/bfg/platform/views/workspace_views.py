@@ -51,10 +51,17 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         StaffMember = apps.get_model('common', 'StaffMember')
         Workspace = apps.get_model('common', 'Workspace')
-        workspace_ids = StaffMember.objects.filter(
-            user=self.request.user, is_active=True
+        # Cross-workspace lookup — must use ``all_objects`` so the platform
+        # endpoint sees every workspace the user belongs to, not just the
+        # one bound to the current request.
+        workspace_ids = StaffMember.all_objects.filter(
+            user=self.request.user, is_active=True,
         ).values_list('workspace_id', flat=True)
-        return Workspace.objects.filter(id__in=workspace_ids)
+        # Newest first so freshly-provisioned workspaces appear on page 1
+        # without the caller having to paginate or sort. The Workspace
+        # model defaults to ordering by ``name`` (alphabetical) which is
+        # surprising on a "my workspaces" view.
+        return Workspace.objects.filter(id__in=workspace_ids).order_by('-created_at')
 
     def perform_create(self, serializer):
         workspace = serializer.save()

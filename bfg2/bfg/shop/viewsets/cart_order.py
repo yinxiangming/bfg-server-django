@@ -10,6 +10,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+
+from bfg.core.permissions import IsWorkspaceStaff
 from rest_framework.exceptions import PermissionDenied, ValidationError as APIValidationError
 from decimal import Decimal
 
@@ -351,11 +353,15 @@ class CartViewSet(viewsets.ModelViewSet):
 
 class OrderViewSet(viewsets.ModelViewSet):
     """
-    Order management ViewSet
-    
-    Customers can only see their own orders, staff can see all
+    Admin order management ViewSet — staff only.
+
+    Customers should hit ``/api/v1/me/orders/`` for their own orders;
+    that endpoint is scoped to the requesting user. This endpoint
+    returns the workspace's full order list and accepts mutating
+    actions (mark_paid, refund, cancel, update_items), so non-staff
+    are rejected outright.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     http_method_names = ['get', 'post', 'patch']
     
     def get_serializer_class(self):
@@ -1005,7 +1011,7 @@ class OrderPackageViewSet(viewsets.ModelViewSet):
     Manages actual packages used for fulfilling orders.
     Uses bfg.delivery.Package model with order relation.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     http_method_names = ['get', 'post', 'patch', 'delete']
     
     def get_serializer_class(self):

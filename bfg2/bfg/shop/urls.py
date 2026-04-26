@@ -2,7 +2,8 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .viewsets.quick_entry import QuickProductEntryView
 from .viewsets import (
-    ProductViewSet, ProductCategoryViewSet as CategoryViewSet, ProductTagViewSet,
+    ProductViewSet, AdminProductViewSet,
+    ProductCategoryViewSet as CategoryViewSet, ProductTagViewSet,
     ProductVariantViewSet, StoreViewSet, CartViewSet, OrderViewSet,
     MediaViewSet, ProductMediaViewSet, SalesChannelViewSet, ProductChannelListingViewSet,
     ChannelCollectionViewSet, ReturnViewSet, ReturnLineItemViewSet,
@@ -12,6 +13,7 @@ from .viewsets import (
 
 router = DefaultRouter()
 router.register(r'products', ProductViewSet, basename='product')
+router.register(r'admin/products', AdminProductViewSet, basename='admin-product')
 router.register(r'categories', CategoryViewSet, basename='category')
 router.register(r'variants', ProductVariantViewSet, basename='variant')
 router.register(r'stores', StoreViewSet, basename='store')

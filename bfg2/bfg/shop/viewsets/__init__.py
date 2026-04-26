@@ -5,6 +5,7 @@ from .product import (
     ProductCategoryViewSet,
     ProductTagViewSet,
     ProductViewSet,
+    AdminProductViewSet,
     ProductVariantViewSet,
     ProductReviewViewSet
 )
@@ -39,6 +40,7 @@ __all__ = [
     'ProductCategoryViewSet',
     'ProductTagViewSet',
     'ProductViewSet',
+    'AdminProductViewSet',
     'ProductVariantViewSet',
     'ProductReviewViewSet',
     # Media

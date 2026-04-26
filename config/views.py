@@ -199,14 +199,53 @@ def register(request):
     """
     serializer = RegisterSerializer(data=request.data)
     if serializer.is_valid():
+        # If the registration is part of accepting an invitation, validate
+        # the token *before* creating the user so we don't leave orphans.
+        invite_token = request.data.get('invite_token') or ''
+        invite_uuid = request.data.get('invite_uuid') or ''
+        pending_invitation = None
+        if invite_token:
+            from bfg.common.services import find_invitation_by_token
+            try:
+                pending_invitation = find_invitation_by_token(invite_token, invite_uuid)
+            except Exception as exc:  # noqa: BLE001
+                detail = getattr(exc, 'detail', None) or str(exc)
+                return Response({'invite_token': detail}, status=status.HTTP_400_BAD_REQUEST)
+            if pending_invitation.email.lower() != serializer.validated_data['email'].lower():
+                return Response({
+                    'email': (
+                        'Please register with the email address the invitation '
+                        f'was sent to ({pending_invitation.email}).'
+                    ),
+                }, status=status.HTTP_400_BAD_REQUEST)
+
         user = serializer.save()
 
         store_name = getattr(user, '_temporary_store_name', None)
         from bfg.common.services import UserService
-        workspace, workspace_error = UserService.process_registration(user, store_name)
+        # Don't auto-provision a fresh workspace if the user is joining one via invite.
+        if pending_invitation:
+            workspace, workspace_error = None, None
+        else:
+            workspace, workspace_error = UserService.process_registration(user, store_name)
 
-        # Generate JWT token for the new user
-        refresh = RefreshToken.for_user(user)
+        accepted_invitation = None
+        if pending_invitation:
+            from bfg.common.services import accept_invitation
+            try:
+                accept_invitation(pending_invitation, user)
+                accepted_invitation = pending_invitation
+                workspace = pending_invitation.workspace
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to auto-accept invitation during register")
+
+        # Generate JWT token for the new user.
+        # Use CustomTokenObtainPairSerializer.get_token so the access token
+        # carries the workspace_id claim required by WorkspaceMiddleware —
+        # without it, /me/ and other workspace-scoped endpoints can't resolve
+        # the user's workspace and the frontend gets bounced back to login.
+        from .serializers import CustomTokenObtainPairSerializer
+        refresh = CustomTokenObtainPairSerializer.get_token(user)
 
         response_data = {
             'user': {
@@ -228,6 +267,9 @@ def register(request):
             }
         elif workspace_error:
             response_data['workspace_warning'] = workspace_error
+
+        if accepted_invitation:
+            response_data['invitation_accepted'] = True
 
         return Response(response_data, status=status.HTTP_201_CREATED)
 

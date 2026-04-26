@@ -11,7 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.http import HttpResponse
 from django.utils import timezone
 
-from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, CanManagePayments, CanManageInvoices
+from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite, CanManagePayments, CanManageInvoices
 from bfg.finance.models import (
     Currency, PaymentGateway, PaymentMethod, Brand, FinancialCode,
     Invoice, Payment, Refund, TaxRate, Transaction, Wallet, WithdrawalRequest,
@@ -133,9 +133,9 @@ class FinancialCodeViewSet(viewsets.ModelViewSet):
 
 
 class PaymentGatewayViewSet(viewsets.ModelViewSet):
-    """Payment gateway ViewSet (Admin only)"""
+    """Payment gateway ViewSet. Reads: any staff. Writes: admin only."""
     serializer_class = PaymentGatewaySerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     
     def get_queryset(self):
         return PaymentGateway.objects.filter(workspace=self.request.workspace)
@@ -160,9 +160,15 @@ class PaymentGatewayViewSet(viewsets.ModelViewSet):
 
 
 class PaymentMethodViewSet(viewsets.ModelViewSet):
-    """Payment method ViewSet"""
+    """
+    Admin payment method ViewSet — staff only.
+
+    Lists and manages every customer's saved payment methods in the
+    workspace. Customers should hit ``/api/v1/me/payment-methods/`` for
+    their own saved cards.
+    """
     serializer_class = PaymentMethodSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     
     def get_queryset(self):
         """Get payment methods for current workspace"""
@@ -836,9 +842,9 @@ class RefundViewSet(viewsets.ModelViewSet):
 
 
 class TaxRateViewSet(viewsets.ModelViewSet):
-    """Tax rate ViewSet (Admin only)"""
+    """Tax rate ViewSet. Reads: any staff. Writes: admin only."""
     serializer_class = TaxRateSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     
     def get_queryset(self):
         return TaxRate.objects.filter(workspace=self.request.workspace)
@@ -886,73 +892,37 @@ def _is_workspace_staff(request):
 
 
 class WalletViewSet(viewsets.ReadOnlyModelViewSet):
-    """Wallet list/retrieve; customers see only own wallet, staff see workspace wallets."""
+    """
+    Admin wallet ViewSet — staff only.
+
+    Read-only listing of every wallet in the workspace. Customers should
+    use ``/api/v1/me/wallets/`` to view their own wallets and submit
+    withdrawals.
+    """
     serializer_class = WalletSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
 
     def get_queryset(self):
         workspace = _get_workspace(self.request)
-        qs = Wallet.objects.filter(workspace=workspace).select_related('customer', 'currency')
-        if not _is_workspace_staff(self.request):
-            customer = _get_customer_for_user(self.request)
-            if not customer:
-                return Wallet.objects.none()
-            return qs.filter(customer=customer)
-        return qs
-
-    @action(detail=True, methods=['post'], url_path='withdraw')
-    def withdraw(self, request, pk=None):
-        """Create a withdrawal request (customer). Balance is deducted only after staff approval."""
-        wallet = self.get_object()
-        customer = _get_customer_for_user(request)
-        if not customer or wallet.customer_id != customer.id:
-            return Response({'detail': 'You can only withdraw from your own wallet.'}, status=status.HTTP_403_FORBIDDEN)
-        serializer = WithdrawalRequestCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        amount = serializer.validated_data['amount']
-        min_w = _get_min_withdrawal_amount_for_workspace(wallet.workspace)
-        if min_w is not None and amount < min_w:
-            return Response(
-                {
-                    'detail': f'Minimum withdrawal amount is {min_w}.',
-                    'code': 'min_withdrawal_amount',
-                    'min_amount': str(min_w),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if wallet.cash_balance < amount:
-            return Response(
-                {'detail': f'Insufficient cash balance. Available: {wallet.cash_balance}'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        req = WithdrawalRequest.objects.create(
-            wallet=wallet,
-            amount=amount,
-            status='pending',
-            payout_method=serializer.validated_data.get('payout_method', ''),
-            payout_details=serializer.validated_data.get('payout_details', {}),
-            notes=serializer.validated_data.get('notes', ''),
-            requested_by=request.user,
-        )
-        return Response(WithdrawalRequestSerializer(req).data, status=status.HTTP_201_CREATED)
+        return Wallet.objects.filter(workspace=workspace).select_related('customer', 'currency')
 
 
 class WithdrawalRequestViewSet(viewsets.ReadOnlyModelViewSet):
-    """Withdrawal requests; staff can approve/reject."""
+    """
+    Admin withdrawal request ViewSet — staff only.
+
+    Lists every workspace withdrawal request and exposes approve/reject
+    actions. Customers should use ``/api/v1/me/withdrawal-requests/``
+    for their own filings.
+    """
     serializer_class = WithdrawalRequestSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
 
     def get_queryset(self):
         workspace = _get_workspace(self.request)
-        qs = WithdrawalRequest.objects.filter(wallet__workspace=workspace).select_related(
-            'wallet', 'wallet__customer', 'requested_by', 'approved_by'
-        )
-        if not _is_workspace_staff(self.request):
-            customer = _get_customer_for_user(self.request)
-            if not customer:
-                return WithdrawalRequest.objects.none()
-            return qs.filter(wallet__customer=customer)
-        return qs
+        return WithdrawalRequest.objects.filter(
+            wallet__workspace=workspace,
+        ).select_related('wallet', 'wallet__customer', 'requested_by', 'approved_by')
 
     @action(detail=True, methods=['post'], url_path='approve')
     def approve(self, request, pk=None):

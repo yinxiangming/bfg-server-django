@@ -224,7 +224,7 @@ class AuditLog(models.Model):
     )
     
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='audit_logs', verbose_name=_("Workspace"), null=True, blank=True)
-    
+
     # User
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -233,7 +233,12 @@ class AuditLog(models.Model):
         blank=True,
         verbose_name=_("User")
     )
-    
+
+    # Module — free-form string tag identifying which subsystem produced the entry
+    # (e.g. "resale", "shop", "finance"). Plugins set this so they can scope queries
+    # to their own events without needing a separate table.
+    module = models.CharField(_("Module"), max_length=32, blank=True, db_index=True)
+
     # Action
     action = models.CharField(_("Action"), max_length=20, choices=ACTION_CHOICES)
     description = models.TextField(_("Description"), blank=True)
@@ -261,6 +266,7 @@ class AuditLog(models.Model):
             models.Index(fields=['workspace', '-created_at']),
             models.Index(fields=['user', '-created_at']),
             models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['workspace', 'module', '-created_at'], name='audit_ws_module_time_idx'),
         ]
     
     def __str__(self):

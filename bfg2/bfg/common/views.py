@@ -739,6 +739,12 @@ class SettingsViewSet(viewsets.ModelViewSet):
         header_options = storefront_ui.get('header_options')
         if isinstance(header_options, dict):
             default_header_options = {**default_header_options, **header_options}
+        default_language = (
+            getattr(settings_obj, 'default_language', None)
+            or general_custom.get('default_language')
+            or 'en'
+        )
+        supported_languages = getattr(settings_obj, 'supported_languages', None) or [default_language]
         payload = {
             'workspace_id': workspace.id,
             'workspace_slug': workspace.slug,
@@ -758,6 +764,8 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'header_menus': [],
             'footer_menus': [],
             'footer_menu_groups': [],
+            'default_language': default_language,
+            'languages': list(supported_languages) if isinstance(supported_languages, list) else [default_language],
             'theme': storefront_ui.get('theme') or 'store',
             'header': storefront_ui.get('header'),
             'footer': storefront_ui.get('footer'),
@@ -850,7 +858,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
         except Exception:
             pass
 
-        # Prefer bfg.web Site for site_name, theme, default_language — not for workspace_domain
+        # Prefer bfg.web Site for site_name, theme, default_language, languages — not for workspace_domain
         # (public hostname is WorkspaceDomain-only, same as workspace middleware for API/account/admin).
         # When multiple Sites exist, match request host via Site.domain if present; else default row wins.
         try:
@@ -875,11 +883,16 @@ class SettingsViewSet(viewsets.ModelViewSet):
                         payload['theme'] = 'website'
                     elif tp == 'themes/default' or not tp:
                         payload['theme'] = 'store'
-                payload['default_language'] = getattr(site, 'default_language', None) or 'zh-hans'
+                site_default_language = getattr(site, 'default_language', None) or 'en'
+                payload['default_language'] = site_default_language
+                site_languages = getattr(site, 'languages', None) or [site_default_language]
+                payload['languages'] = list(site_languages) if isinstance(site_languages, list) else [site_default_language]
         except (ImportError, AttributeError):
             pass
         if 'default_language' not in payload:
-            payload['default_language'] = 'zh-hans'
+            payload['default_language'] = 'en'
+        if not payload.get('languages'):
+            payload['languages'] = [payload['default_language']]
 
         if not django_settings.DEBUG:
             cache.set(cache_key, payload, STOREFRONT_CONFIG_TTL)

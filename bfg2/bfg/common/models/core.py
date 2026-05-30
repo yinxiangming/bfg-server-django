@@ -235,7 +235,7 @@ class AuditLog(models.Model):
     )
 
     # Module — free-form string tag identifying which subsystem produced the entry
-    # (e.g. "resale", "shop", "finance"). Plugins set this so they can scope queries
+    # (e.g. "shop", "finance", "custom_app"). Plugins set this so they can scope queries
     # to their own events without needing a separate table.
     module = models.CharField(_("Module"), max_length=32, blank=True, db_index=True)
 

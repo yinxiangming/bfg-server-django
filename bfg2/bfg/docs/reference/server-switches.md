@@ -1,6 +1,6 @@
 # Server Feature Switches and Environment Toggles
 
-This document summarizes the main server-side switches, feature flags, and operational environment variables used by the Resale/BFG server.
+This document summarizes the main server-side switches, feature flags, and operational environment variables used by the BFG server.
 
 It focuses on runtime behavior toggles rather than secrets. Secret values such as API keys, DB passwords, and OAuth secrets are intentionally not documented here beyond their purpose.
 

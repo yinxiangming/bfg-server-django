@@ -1473,7 +1473,7 @@ class MeOrdersViewSet(viewsets.ReadOnlyModelViewSet):
 class MeDashboardStatsView(APIView):
     """
     GET /api/v1/me/dashboard-stats/ - Stats for account dashboard:
-    wallet_balance, order_counts by status, unread_messages_count, resale (listings, sold).
+    wallet_balance, order_counts by status, unread_messages_count, plus optional app stats.
     """
     permission_classes = [IsAuthenticated]
 
@@ -1525,32 +1525,22 @@ class MeDashboardStatsView(APIView):
         except Exception:
             pass
 
-        # Resale: listings (active + pending) and sold count (optional app)
-        resale_listings_count = 0
-        resale_sold_count = 0
-        try:
-            from apps.resale.models import ResaleProduct
-            resale_qs = ResaleProduct.objects.filter(
-                workspace=workspace, customer=customer
-            )
-            resale_listings_count = resale_qs.filter(
-                status__in=('pending', 'active')
-            ).count()
-            resale_sold_count = resale_qs.filter(status='sold').count()
-        except Exception:
-            pass
+        from bfg.common.dashboard_extensions import collect_me_dashboard_stats
+        app_stats = collect_me_dashboard_stats(
+            request=request,
+            workspace=workspace,
+            customer=customer,
+        )
 
-        return Response({
+        payload = {
             'wallet_balance': wallet_balance,
             'wallet_currency': wallet_currency,
             'default_currency': workspace_default_currency,
             'order_counts': order_counts,
             'unread_messages_count': unread_messages_count,
-            'resale': {
-                'listings_count': resale_listings_count,
-                'sold_count': resale_sold_count,
-            },
-        })
+        }
+        payload.update(app_stats)
+        return Response(payload)
 
 
 class MePaymentMethodViewSet(viewsets.ModelViewSet):

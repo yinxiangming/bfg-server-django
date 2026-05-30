@@ -17,7 +17,7 @@ SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()
 # than Celery's (e.g. Celery ``/0``, cache ``/1``).
 _DJANGO_CACHE_URL = os.environ.get('DJANGO_CACHE_URL', '').strip()
 if _DJANGO_CACHE_URL:
-    _cache_key_prefix = os.environ.get('DJANGO_CACHE_KEY_PREFIX', 'resale').strip() or 'resale'
+    _cache_key_prefix = os.environ.get('DJANGO_CACHE_KEY_PREFIX', 'bfg').strip() or 'bfg'
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.redis.RedisCache',

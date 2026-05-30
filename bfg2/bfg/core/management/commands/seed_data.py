@@ -105,7 +105,7 @@ class Command(BaseCommand):
             ))
             modules = ['common', 'delivery', 'web', 'shop', 'marketing', 'support', 'finance', 'inbox']
 
-        # Prefer order: shop before marketing so CampaignDisplay rules get ProductCategory; resale after bfg modules
+        # Prefer order: shop before marketing so CampaignDisplay rules get ProductCategory.
         seed_order = ['common', 'delivery', 'web', 'shop', 'marketing', 'support', 'finance', 'inbox']
         order_index = {m: i for i, m in enumerate(seed_order)}
         return sorted(modules, key=lambda m: (order_index.get(m, len(seed_order)), m))
@@ -117,7 +117,7 @@ class Command(BaseCommand):
         return sorted(modules, key=lambda m: (order_index.get(m, len(clear_order)), m))
 
     def get_modules_to_seed(self, module_filter=None):
-        """Get list of modules to seed. Module name can be bfg short name (e.g. common) or dotted path (e.g. apps.resale)."""
+        """Get list of modules to seed. Module name can be bfg short name (e.g. common) or dotted path (e.g. apps.custom_app)."""
         all_modules = self.discover_modules()
 
         if not module_filter:
@@ -130,7 +130,7 @@ class Command(BaseCommand):
             if module_name in all_modules:
                 valid_modules.append(module_name)
             elif '.' in module_name:
-                # Dotted path (e.g. apps.resale): accept and seed by name, no auto-discovery
+                # Dotted path (e.g. apps.custom_app): accept and seed by name, no auto-discovery
                 valid_modules.append(module_name)
             else:
                 invalid_modules.append(module_name)
@@ -140,12 +140,12 @@ class Command(BaseCommand):
                 f'Unknown module(s): {", ".join(invalid_modules)}'
             ))
             self.stdout.write(self.style.WARNING(
-                f'Available bfg modules: {", ".join(all_modules)}. Or use dotted path (e.g. apps.resale).'
+                f'Available bfg modules: {", ".join(all_modules)}. Or use dotted path (e.g. apps.custom_app).'
             ))
         return valid_modules
 
     def seed_module(self, module_name, context):
-        """Seed data for a specific module. module_name: bfg short name (common) or dotted path (apps.resale)."""
+        """Seed data for a specific module. module_name: bfg short name (common) or dotted path (apps.custom_app)."""
         self.stdout.write(self.style.SUCCESS(f'\n📦 Seeding {module_name} module...'))
 
         try:
@@ -273,4 +273,3 @@ class Command(BaseCommand):
             count = item.get('count', 0)
             if label:
                 self.stdout.write(self.style.SUCCESS(f'   {label}: {count}'))
-

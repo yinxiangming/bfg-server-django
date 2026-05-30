@@ -4,7 +4,7 @@ Platform URL configuration.
 
 Mounted in the host project as:
   path('api/v1/', include([..., path('platform/', include('bfg.platform.urls')), ...]))
-See resale-website/server/config/urls.py.
+See the host project's config/urls.py.
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter

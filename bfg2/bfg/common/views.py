@@ -1650,9 +1650,14 @@ class MePaymentMethodViewSet(viewsets.ModelViewSet):
                     # Save to BFG PaymentMethod model
                     set_as_default = serializer.validated_data.get('is_default', False)
                     payment_method_data = {'set_as_default': set_as_default}
+                    gateway_payment_method_id = (
+                        gateway_pm.get('id', payment_method_id)
+                        if isinstance(gateway_pm, dict)
+                        else getattr(gateway_pm, 'id', payment_method_id)
+                    )
                     payment_method = plugin.save_payment_method(
                         customer,
-                        gateway_pm.id if isinstance(gateway_pm, dict) else gateway_pm.get('id', payment_method_id),
+                        gateway_payment_method_id,
                         payment_method_data
                     )
                     

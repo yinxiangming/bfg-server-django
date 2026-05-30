@@ -745,6 +745,27 @@ class SettingsViewSet(viewsets.ModelViewSet):
             or 'en'
         )
         supported_languages = getattr(settings_obj, 'supported_languages', None) or [default_language]
+
+        # Allowed color modes: a list like ['light', 'dark']. Mirrors the
+        # `languages` pattern — if only one entry is configured, the
+        # frontend hides the mode switcher and forces that mode.
+        ALL_COLOR_MODES = ['light', 'dark']
+        raw_modes = storefront_ui.get('allowed_color_modes')
+        if isinstance(raw_modes, list):
+            allowed_color_modes = [m for m in raw_modes if m in ALL_COLOR_MODES]
+            if not allowed_color_modes:
+                allowed_color_modes = ALL_COLOR_MODES
+        else:
+            allowed_color_modes = ALL_COLOR_MODES
+        default_color_mode = storefront_ui.get('default_color_mode')
+        if default_color_mode not in ('light', 'dark', 'system'):
+            default_color_mode = 'system' if len(allowed_color_modes) > 1 else allowed_color_modes[0]
+        # If the configured default isn't in the allowed set, fall back to
+        # the first allowed mode so the frontend never gets an unreachable
+        # mode preselected.
+        if default_color_mode in ('light', 'dark') and default_color_mode not in allowed_color_modes:
+            default_color_mode = allowed_color_modes[0]
+
         payload = {
             'workspace_id': workspace.id,
             'workspace_slug': workspace.slug,
@@ -770,6 +791,8 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'header': storefront_ui.get('header'),
             'footer': storefront_ui.get('footer'),
             'header_options': default_header_options,
+            'allowed_color_modes': allowed_color_modes,
+            'default_color_mode': default_color_mode,
             'review_moderation_required': bool(shop_custom.get('review_moderation_required', False)),
         }
 

@@ -68,6 +68,24 @@ BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS = _env_bool(
 
 ALLOWED_HOSTS = ['*']
 
+# ─── Error monitoring (Sentry) ────────────────────────────────────────
+# Initialised only when SENTRY_DSN is set (per-app Dokku config), so dev and
+# non-Sentry deploys are unaffected. SENTRY_ENVIRONMENT distinguishes UAT vs
+# prod (falls back to ENV); SENTRY_TRACES_SAMPLE_RATE (0..1) enables tracing
+# (default off = errors only). Skipped under `manage.py test`.
+SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()
+if SENTRY_DSN and not TESTING:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.environ.get('SENTRY_ENVIRONMENT', '').strip() or ENV or 'production',
+        # Add data like request headers and IP for users; see
+        # https://docs.sentry.io/platforms/python/data-management/data-collected/
+        send_default_pii=True,
+        traces_sample_rate=float(os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0') or 0),
+    )
+
 # Application definition (BFG core only; no apps.* business modules)
 INSTALLED_APPS = [
     'django.contrib.admin',

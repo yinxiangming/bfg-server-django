@@ -42,3 +42,6 @@ uvicorn==0.32.1  # Added for ASGI support (Django Ninja/Async)
 # Email HTTP backends (Mailgun etc.). Default SMTP backend still works; activate via
 # EMAIL_BACKEND=anymail.backends.mailgun.EmailBackend + MAILGUN_API_KEY env vars.
 django-anymail[mailgun]==12.0
+
+# Error monitoring — initialised in config/prod.py only when SENTRY_DSN env is set.
+sentry-sdk[django]>=2.0.0,<3.0.0

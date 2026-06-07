@@ -8,7 +8,7 @@ and redirects to frontend with token in URL fragment (no session cookie).
 from urllib.parse import urlencode
 
 from django.conf import settings
-from django.http import HttpResponseRedirect
+from django.http import HttpResponseRedirect, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -119,3 +119,40 @@ def social_callback_view(request, provider):
 
 # Apple sends POST; must exempt CSRF for callback
 social_callback_view_csrf_exempt = csrf_exempt(social_callback_view)
+
+
+# --- Provider discovery -----------------------------------------------------
+
+# Each provider is "enabled" iff the credential fields it actually needs at
+# runtime are populated in settings.SOCIALACCOUNT_PROVIDERS. The empty-string
+# defaults in settings.py mean unset env vars fall through naturally — no
+# extra flag needed to disable a provider.
+_PROVIDER_REQUIRED_KEYS = {
+    'google': ('client_id', 'secret'),
+    'facebook': ('client_id', 'secret'),
+    # Apple uses a signed JWT, so it needs the private key on top of the IDs.
+    'apple': ('client_id', 'secret', 'key', 'certificate_key'),
+}
+
+
+def _provider_configured(name):
+    app = ((getattr(settings, 'SOCIALACCOUNT_PROVIDERS', {}) or {}).get(name) or {}).get('APP') or {}
+    required = _PROVIDER_REQUIRED_KEYS.get(name) or ()
+    return all((app.get(k) or '').strip() for k in required)
+
+
+@require_http_methods(['GET'])
+def social_providers_view(request):
+    """Public — list provider keys the frontend should render a button for.
+
+    Returns ``{"providers": ["google", ...]}``. Used so the auth UI can
+    auto-hide buttons for providers whose credentials are not yet provisioned
+    in env (e.g. show only Google until Apple/Facebook are wired up).
+    """
+    providers = [
+        name for name in _PROVIDER_REQUIRED_KEYS
+        if _provider_configured(name)
+    ]
+    response = JsonResponse({'providers': providers})
+    response['Cache-Control'] = 'public, max-age=60'
+    return response

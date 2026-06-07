@@ -26,6 +26,7 @@ from config.social_auth import (
     social_login_view,
     social_callback_view,
     social_callback_view_csrf_exempt,
+    social_providers_view,
 )
 
 urlpatterns = [
@@ -48,6 +49,7 @@ urlpatterns = [
             path('token/', TokenObtainPairView.as_view(serializer_class=CustomTokenObtainPairSerializer), name='token_obtain_pair'),
             path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
             path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),             
+            path('providers/', social_providers_view, name='social_providers'),
             path('google/login/', social_login_view, {'provider': 'google'}, name='google_login'),
             path('google/callback/', social_callback_view, {'provider': 'google'}, name='google_callback'),
             path('facebook/login/', social_login_view, {'provider': 'facebook'}, name='facebook_login'),

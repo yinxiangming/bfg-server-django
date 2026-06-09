@@ -23,6 +23,11 @@ from bfg.common.security_headers import (
 )
 
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:Converter 'drf_format_suffix' is already registered.*"
+)
+
+
 # ─── Unit: build_csp ──────────────────────────────────────────────────
 
 

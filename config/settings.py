@@ -180,6 +180,9 @@ db_from_env = dj_database_url.config(conn_max_age=500)
 if db_from_env:
     DATABASES['default'].update(db_from_env)
 
+if not DATABASES['default'].get('ENGINE', '').endswith('.mysql'):
+    DATABASES['default'].pop('OPTIONS', None)
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'common.User'
 

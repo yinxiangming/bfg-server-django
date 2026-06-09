@@ -28,20 +28,52 @@ SOCIAL_REDIRECT_KEY = 'social_login_redirect'
 SOCIAL_HOST_KEY = 'social_login_host'
 
 
-def _get_frontend_base_url(request):
-    """Frontend base URL from env (no trailing slash)."""
+def _allowed_frontend_origins():
+    """Frontend origins permitted as social-login callback hosts.
+
+    Pulled from CORS_ALLOWED_ORIGINS so the existing CORS allowlist is the
+    single source of truth — adding a new frontend means updating one list.
+    Returned as a {host_lower: origin} map for case-insensitive lookup.
+    """
+    origins = getattr(settings, 'CORS_ALLOWED_ORIGINS', None) or []
+    result = {}
+    for origin in origins:
+        origin = (origin or '').strip().rstrip('/')
+        if not origin or '://' not in origin:
+            continue
+        host = origin.split('://', 1)[1].split('/', 1)[0]
+        result[host.lower()] = origin
+    return result
+
+
+def _get_frontend_base_url(request, requested_host=None):
+    """Frontend base URL (no trailing slash).
+
+    If `requested_host` (captured at login start from the originating frontend)
+    matches an allowed CORS origin, that origin wins — so users coming from
+    e.g. idlevo.com get redirected back to idlevo.com, not the FRONTEND_URL
+    default. Unknown hosts fall through to FRONTEND_URL, then a localhost dev
+    fallback. The CORS check is what prevents an attacker from supplying an
+    arbitrary host to harvest tokens.
+    """
+    if requested_host:
+        host = requested_host.strip().split(':', 1)[0].lower()
+        allowed = _allowed_frontend_origins()
+        match = allowed.get(host)
+        if match:
+            return match
     base = (getattr(settings, 'FRONTEND_URL', '') or '').strip()
-    if not base:
-        # Fallback: same host, port 3000 (dev)
-        scheme = request.scheme
-        host = request.get_host().split(':')[0]
-        base = f'{scheme}://{host}:3000'
-    return base.rstrip('/')
+    if base:
+        return base.rstrip('/')
+    # Final fallback (local dev without FRONTEND_URL set): same host, port 3000.
+    scheme = request.scheme
+    host = request.get_host().split(':')[0]
+    return f'{scheme}://{host}:3000'
 
 
-def _build_callback_url_with_fragment(request, access, refresh, redirect_path):
+def _build_callback_url_with_fragment(request, access, refresh, redirect_path, requested_host=None):
     """Build frontend /auth/callback URL with access, refresh, redirect in fragment."""
-    base = _get_frontend_base_url(request)
+    base = _get_frontend_base_url(request, requested_host=requested_host)
     fragment = urlencode({
         'access': access,
         'refresh': refresh,
@@ -85,7 +117,7 @@ def _social_callback_jwt_redirect(request, get_response):
         return response
 
     redirect_path = request.session.pop(SOCIAL_REDIRECT_KEY, None) or '/account'
-    request.session.pop(SOCIAL_HOST_KEY, None)
+    requested_host = request.session.pop(SOCIAL_HOST_KEY, None)
 
     refresh = RefreshToken.for_user(request.user)
     access = str(refresh.access_token)
@@ -94,7 +126,7 @@ def _social_callback_jwt_redirect(request, get_response):
     request.session.flush()
 
     callback_url = _build_callback_url_with_fragment(
-        request, access, refresh_str, redirect_path
+        request, access, refresh_str, redirect_path, requested_host=requested_host
     )
     return HttpResponseRedirect(callback_url)
 

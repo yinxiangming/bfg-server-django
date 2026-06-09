@@ -318,6 +318,16 @@ def finalize_onboarding(request):
             },
             'created': created,
         }
+
+        # Public frontend URL of the (possibly just-provisioned) workspace, so the
+        # onboarding client can hand the user off to their own tenant subdomain.
+        try:
+            from bfg.common.models.workspace_domain import resolve_workspace_public_frontend_base_url
+            frontend_url = resolve_workspace_public_frontend_base_url(workspace)
+        except Exception:
+            frontend_url = ''
+        response_data['workspace']['frontend_url'] = frontend_url
+
         return Response(response_data, status=status.HTTP_200_OK)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

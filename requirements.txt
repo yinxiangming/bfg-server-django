@@ -6,7 +6,8 @@ djangorestframework-simplejwt>=5.4.0
 drf-spectacular>=0.28,<0.30  # OpenAPI/Swagger documentation
 
 # Database
-PyMySQL==1.1.1
+mysqlclient>=2.2.1  # Recommended MySQL driver (C extension); requires build deps
+PyMySQL==1.1.1  # Pure-Python fallback when mysqlclient cannot be built
 dj-database-url==2.3.0
 cryptography==46.0.7  # Often needed for modern DB connections
 

@@ -79,6 +79,21 @@ class CarrierLoader:
         cls._initialized = True
     
     @classmethod
+    def register_plugin(cls, plugin_class) -> None:
+        """Register a carrier plugin class programmatically.
+
+        Lets extension apps (e.g. local apps under apps/) contribute carrier
+        plugins that live outside bfg/delivery/carriers/, which
+        discover_plugins() does not scan. Call from an AppConfig.ready().
+        """
+        if not (isinstance(plugin_class, type) and issubclass(plugin_class, BaseCarrierPlugin)):
+            raise TypeError("register_plugin expects a BaseCarrierPlugin subclass")
+        if not plugin_class.carrier_type:
+            raise ValueError(f"{plugin_class.__name__} must set carrier_type")
+        cls._plugins[plugin_class.carrier_type] = plugin_class
+        logger.info(f"Registered carrier plugin: {plugin_class.carrier_type}")
+
+    @classmethod
     def get_plugin_class(cls, carrier_type: str) -> Optional[Type[BaseCarrierPlugin]]:
         """
         Get plugin class for carrier type.

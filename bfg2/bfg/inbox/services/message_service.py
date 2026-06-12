@@ -112,21 +112,27 @@ class MessageService(BaseService):
         force_email: Optional[bool] = None,
         force_sms: Optional[bool] = None,
         force_push: Optional[bool] = None
-    ) -> Message:
+    ) -> Optional[Message]:
         """
         Send message using template
-        
+
+        Channels are chosen from the template's per-channel ``*_enabled`` flags
+        (and any ``force_*`` override); each recipient's UserPreferences are then
+        applied independently per channel. Templates without an in-app message
+        (``app_message_enabled=False``) send email/SMS/push only.
+
         Args:
             recipients: List of Customer instances
             template_code: Template code
             context_data: Template context variables
             language: Language code
-            force_email: Override email sending (None = use template + customer preference)
-            force_sms: Override SMS sending (None = use template + customer preference)
-            force_push: Override push sending (None = use template + customer preference)
-            
+            force_email: Override email channel on/off (None = use template flag)
+            force_sms: Override SMS channel on/off (None = use template flag)
+            force_push: Override push channel on/off (None = use template flag)
+
         Returns:
-            Message: Created message instance
+            The created in-app Message, or None when the template only targets
+            email/SMS/push (no in-app message).
         """
         # Get template
         template = MessageTemplate.objects.filter(
@@ -148,123 +154,105 @@ class MessageService(BaseService):
             f"email_enabled={template.email_enabled}, is_active={template.is_active}"
         )
         
-        # Determine which channels to use based on template and customer preferences
-        # For simplicity, we'll use the first recipient's preferences
-        # In production, you might want to send separate messages per recipient
-        send_email = template.email_enabled
-        send_sms = template.sms_enabled
-        send_push = template.push_enabled
-        
-        # Apply customer preferences if provided
-        if recipients:
-            customer = recipients[0]
-            # Get customer preferences via user
-            if hasattr(customer, 'user') and hasattr(customer.user, 'preferences'):
-                prefs = customer.user.preferences
-                # Only send if customer has enabled this channel
-                if force_email is None:
-                    send_email = send_email and prefs.email_notifications
-                if force_sms is None:
-                    send_sms = send_sms and prefs.sms_notifications
-                if force_push is None:
-                    send_push = send_push and prefs.push_notifications
-        
-        # Apply force overrides
-        if force_email is not None:
-            send_email = force_email and template.email_enabled
-        if force_sms is not None:
-            send_sms = force_sms and template.sms_enabled
-        if force_push is not None:
-            send_push = force_push and template.push_enabled
-        
-        # Render template
+        # Channel intent comes from the template flags (plus explicit force
+        # overrides) ONLY. Per-recipient preferences are enforced inside each
+        # send loop below, so one recipient opting out can no longer suppress a
+        # channel for the whole batch (previously the *first* recipient's
+        # preferences decided the channel for everyone).
+        send_email = (force_email if force_email is not None else True) and template.email_enabled
+        send_sms = (force_sms if force_sms is not None else True) and template.sms_enabled
+        send_push = (force_push if force_push is not None else True) and template.push_enabled
+
+        # The in-app message is optional: a template may target only
+        # email/SMS/push. Previously this method raised when app_message_enabled
+        # was False, making email-only templates impossible.
+        msg = None
+        subject = ''
+        message = ''
         if template.app_message_enabled:
             subject = self._render_template(template.app_message_title, context_data)
             message = self._render_template(template.app_message_body, context_data)
-            
-            # Create message
+
+            # Create the in-app message WITHOUT auto-delivering email/SMS/push:
+            # send_from_template performs templated per-channel delivery below, so
+            # passing the flags here would double-send (send_message's
+            # deliver_existing_message also dispatches email).
             msg = self.send_message(
                 recipients,
                 subject,
                 message,
                 message_type='notification',
-                send_email=send_email,
-                send_sms=send_sms,
-                send_push=send_push,
+                send_email=False,
+                send_sms=False,
+                send_push=False,
             )
-            
-            # Log message creation for debugging
-            import logging
-            logger = logging.getLogger(__name__)
+            if send_email or send_sms or send_push:
+                msg.send_email = send_email
+                msg.send_sms = send_sms
+                msg.send_push = send_push
+                msg.save(update_fields=['send_email', 'send_sms', 'send_push'])
+
             logger.info(
                 f"Created Inbox Message ID {msg.id} for template '{template_code}' "
                 f"with {len(recipients)} recipient(s)"
             )
-            
-            # Send Email if enabled
-            if send_email and template.email_enabled:
-                for recipient in recipients:
-                    # Check customer email preference again and get email address
-                    if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
-                        prefs = recipient.user.preferences
-                        if prefs.email_notifications and recipient.user.email:
-                            try:
-                                self._send_email(
-                                    recipient,
-                                    template,
-                                    context_data,
-                                    subject
-                                )
-                            except Exception as e:
-                                import logging
-                                logger = logging.getLogger(__name__)
-                                logger.error(f"Failed to send email to {recipient.id}: {e}")
-            
-            # Send SMS if enabled
-            if send_sms and template.sms_enabled and template.sms_body:
-                for recipient in recipients:
-                    # Check customer SMS preference again
-                    if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
-                        prefs = recipient.user.preferences
-                        if prefs.sms_notifications:
-                            try:
-                                sms_service = SMSService(workspace=self.workspace, user=self.user)
-                                sms_body = self._render_template(template.sms_body, context_data)
-                                sms_service.send_sms(recipient, sms_body[:160])
-                            except Exception as e:
-                                import logging
-                                logger = logging.getLogger(__name__)
-                                logger.error(f"Failed to send SMS to {recipient.id}: {e}")
-            
-            # Send Push notification if enabled
-            if send_push and template.push_enabled:
-                for recipient in recipients:
-                    # Check customer push preference again
-                    if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
-                        prefs = recipient.user.preferences
-                        if prefs.push_notifications:
-                            try:
-                                # Render push notification content
-                                push_title = self._render_template(template.push_title, context_data) if template.push_title else subject
-                                push_body = self._render_template(template.push_body, context_data) if template.push_body else message[:255]
-                                
-                                # Send push notification (implement based on your push provider)
-                                # This is a placeholder - implement actual push sending
-                                self._send_push_notification(
-                                    recipient,
-                                    push_title,
-                                    push_body,
-                                    action_url=msg.action_url
-                                )
-                            except Exception as e:
-                                import logging
-                                logger = logging.getLogger(__name__)
-                                logger.error(f"Failed to send push to {recipient.id}: {e}")
-            
-            return msg
-        
-        from bfg.core.exceptions import ValidationError
-        raise ValidationError("Template does not have app message enabled")
+        else:
+            # No in-app message — derive a fallback subject/body for the other
+            # channels from the email/SMS template fields.
+            subject = self._render_template(template.email_subject or '', context_data)
+            message = self._render_template(template.email_body or template.sms_body or '', context_data)
+
+        action_url = msg.action_url if msg else ''
+
+        # Send Email if enabled (per-recipient preference enforced here)
+        if send_email and template.email_enabled:
+            for recipient in recipients:
+                # Check customer email preference again and get email address
+                if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
+                    prefs = recipient.user.preferences
+                    if prefs.email_notifications and recipient.user.email:
+                        try:
+                            self._send_email(
+                                recipient,
+                                template,
+                                context_data,
+                                subject
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to send email to {recipient.id}: {e}")
+
+        # Send SMS if enabled (per-recipient preference enforced here)
+        if send_sms and template.sms_enabled and template.sms_body:
+            for recipient in recipients:
+                if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
+                    prefs = recipient.user.preferences
+                    if prefs.sms_notifications:
+                        try:
+                            sms_service = SMSService(workspace=self.workspace, user=self.user)
+                            sms_body = self._render_template(template.sms_body, context_data)
+                            sms_service.send_sms(recipient, sms_body[:160])
+                        except Exception as e:
+                            logger.error(f"Failed to send SMS to {recipient.id}: {e}")
+
+        # Send Push notification if enabled (per-recipient preference enforced here)
+        if send_push and template.push_enabled:
+            for recipient in recipients:
+                if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
+                    prefs = recipient.user.preferences
+                    if prefs.push_notifications:
+                        try:
+                            push_title = self._render_template(template.push_title, context_data) if template.push_title else subject
+                            push_body = self._render_template(template.push_body, context_data) if template.push_body else message[:255]
+                            self._send_push_notification(
+                                recipient,
+                                push_title,
+                                push_body,
+                                action_url=action_url
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to send push to {recipient.id}: {e}")
+
+        return msg
     
     def _send_email(
         self,

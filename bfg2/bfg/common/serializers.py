@@ -580,6 +580,26 @@ def media_file_url_for_serializer(media_obj, request=None):
     return base
 
 
+def signed_media_url(media_obj, request=None):
+    """URL for a Media object, signed + short-lived when the media is sensitive.
+
+    Public media keeps the existing CDN-friendly unsigned URL. Sensitive media
+    (Media.is_sensitive) on S3 is served from the private bucket via a presigned
+    expiring URL so the object is not world-readable; locally it falls back to the
+    normal media URL. Use this in any serializer/endpoint that exposes package
+    photos, POD, customs documents or payment proofs (WI-393).
+    """
+    if not media_obj or not media_obj.file or not media_obj.file.name:
+        return media_obj.external_url if media_obj else None
+    if getattr(media_obj, 'is_sensitive', False) and getattr(settings, 'USE_S3_MEDIA', False):
+        from bfg.common.storage import private_media_storage
+        url = private_media_storage().url(media_obj.file.name)
+        if request and url and url.startswith('/'):
+            return request.build_absolute_uri(url)
+        return url
+    return media_file_url_for_serializer(media_obj, request)
+
+
 class MediaSerializer(serializers.ModelSerializer):
     """Media serializer"""
     file = serializers.SerializerMethodField()

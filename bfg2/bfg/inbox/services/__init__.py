@@ -4,9 +4,15 @@ BFG Inbox Services
 Service exports
 """
 
-from .message_service import MessageService, NotificationService, SMSService
+from .message_service import (
+    ChannelSender,
+    MessageService,
+    NotificationService,
+    SMSService,
+)
 
 __all__ = [
+    'ChannelSender',
     'MessageService',
     'NotificationService',
     'SMSService',

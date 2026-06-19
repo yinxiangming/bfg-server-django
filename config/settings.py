@@ -275,8 +275,34 @@ if USE_S3_MEDIA:
         MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/'
     else:
         MEDIA_URL = f'https://{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/'
+
+    # Private bucket for sensitive media (package photos, customs docs, payment
+    # proofs). Served via short-lived signed (SigV4) URLs and never through the
+    # public CDN, so objects are not world-readable. Defaults to the main bucket
+    # when no dedicated private bucket is configured; set a separate private
+    # bucket in production for true isolation. See bfg.common.storage.
+    AWS_PRIVATE_STORAGE_BUCKET_NAME = (
+        os.environ.get('AWS_PRIVATE_STORAGE_BUCKET_NAME', '').strip() or AWS_STORAGE_BUCKET_NAME
+    )
+    AWS_PRIVATE_URL_EXPIRE = int(os.environ.get('AWS_PRIVATE_URL_EXPIRE', '3600'))  # signed-URL TTL, seconds
+    STORAGES['media_private'] = {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {
+            'bucket_name': AWS_PRIVATE_STORAGE_BUCKET_NAME,
+            'region_name': AWS_S3_REGION_NAME,
+            'querystring_auth': True,            # SigV4-signed, expiring URLs
+            'querystring_expire': AWS_PRIVATE_URL_EXPIRE,
+            'default_acl': 'private',
+            'file_overwrite': False,
+            'custom_domain': None,               # never serve private media via the public CDN
+        },
+    }
 else:
     MEDIA_URL = '/media/'
+    # Local dev: sensitive media falls back to the same filesystem storage; no
+    # signing is applied (see bfg.common.storage.private_media_storage).
+    AWS_PRIVATE_STORAGE_BUCKET_NAME = ''
+    AWS_PRIVATE_URL_EXPIRE = 3600
 
 # Absolute API/site origin for media URLs when storage returns relative paths (e.g. GitHub issue embeds).
 MEDIA_PUBLIC_BASE_URL = os.environ.get('MEDIA_PUBLIC_BASE_URL', '').strip().rstrip('/')

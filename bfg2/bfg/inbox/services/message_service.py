@@ -5,6 +5,7 @@ Message and notification services
 """
 
 from typing import Any, Optional, List, Dict
+from collections import OrderedDict
 from django.db import transaction
 from django.utils import timezone
 from django.template import Template, Context
@@ -14,13 +15,144 @@ from bfg.common.models import Customer
 from typing import Optional
 
 
+def _recipient_preferences(recipient: Customer) -> Any:
+    """Return a recipient's UserPreferences, or None when absent.
+
+    Channels gate per recipient on these preferences; a recipient without a
+    linked user (or without preferences) is skipped, matching the historical
+    behaviour of the hard-coded send loops.
+    """
+    if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
+        return recipient.user.preferences
+    return None
+
+
+class ChannelSender:
+    """Extension seam for a notification channel.
+
+    ``send_from_template`` dispatches a notification to every registered
+    ChannelSender, applying each recipient's preferences independently. The
+    built-in email/SMS/push channels are registered instances of this class;
+    extensions (e.g. PackGo WeChat) register additional channels through
+    :meth:`MessageService.register_channel`, so the core orchestrates
+    per-recipient delivery without knowing about the concrete channel.
+
+    The in-app message is NOT a ChannelSender: it stays a built-in default
+    created directly by ``send_from_template``.
+    """
+
+    #: Unique channel key (e.g. ``"email"``); also matched against the
+    #: ``force_<name>`` overrides of ``send_from_template``.
+    name: str = ''
+
+    def template_enabled(self, template: MessageTemplate) -> bool:
+        """Whether this channel is turned on for the given template."""
+        raise NotImplementedError
+
+    def recipient_enabled(self, recipient: Customer) -> bool:
+        """Whether this recipient opted in to this channel."""
+        raise NotImplementedError
+
+    def send(
+        self,
+        service: 'MessageService',
+        recipient: Customer,
+        template: MessageTemplate,
+        context_data: Dict[str, Any],
+        subject: str,
+        message: str,
+        action_url: str,
+    ) -> None:
+        """Deliver the rendered notification to a single recipient."""
+        raise NotImplementedError
+
+
+class _EmailChannel(ChannelSender):
+    name = 'email'
+
+    def template_enabled(self, template: MessageTemplate) -> bool:
+        return template.email_enabled
+
+    def recipient_enabled(self, recipient: Customer) -> bool:
+        prefs = _recipient_preferences(recipient)
+        return bool(prefs and prefs.email_notifications and recipient.user.email)
+
+    def send(self, service, recipient, template, context_data, subject, message, action_url) -> None:
+        service._send_email(recipient, template, context_data, subject)
+
+
+class _SMSChannel(ChannelSender):
+    name = 'sms'
+
+    def template_enabled(self, template: MessageTemplate) -> bool:
+        return template.sms_enabled and bool(template.sms_body)
+
+    def recipient_enabled(self, recipient: Customer) -> bool:
+        prefs = _recipient_preferences(recipient)
+        return bool(prefs and prefs.sms_notifications)
+
+    def send(self, service, recipient, template, context_data, subject, message, action_url) -> None:
+        sms_service = SMSService(workspace=service.workspace, user=service.user)
+        sms_body = service._render_template(template.sms_body, context_data)
+        sms_service.send_sms(recipient, sms_body[:160])
+
+
+class _PushChannel(ChannelSender):
+    name = 'push'
+
+    def template_enabled(self, template: MessageTemplate) -> bool:
+        return template.push_enabled
+
+    def recipient_enabled(self, recipient: Customer) -> bool:
+        prefs = _recipient_preferences(recipient)
+        return bool(prefs and prefs.push_notifications)
+
+    def send(self, service, recipient, template, context_data, subject, message, action_url) -> None:
+        push_title = (
+            service._render_template(template.push_title, context_data)
+            if template.push_title else subject
+        )
+        push_body = (
+            service._render_template(template.push_body, context_data)
+            if template.push_body else message[:255]
+        )
+        service._send_push_notification(recipient, push_title, push_body, action_url=action_url)
+
+
 class MessageService(BaseService):
     """
     Message and notification service
-    
+
     Handles sending in-app messages and notifications
     """
-    
+
+    # Ordered registry of pluggable notification channels. Built-in
+    # email/SMS/push are registered at import time; extensions add channels
+    # (e.g. PackGo WeChat) via ``register_channel``. The in-app message is a
+    # built-in default and is NOT in this registry.
+    _channels: "OrderedDict[str, ChannelSender]" = OrderedDict()
+
+    @classmethod
+    def register_channel(cls, sender: ChannelSender) -> None:
+        """Register (or replace) a notification channel by its ``name``.
+
+        Idempotent per name: re-registering the same name replaces the sender
+        while keeping the original dispatch position.
+        """
+        if not getattr(sender, 'name', ''):
+            raise ValueError("ChannelSender must define a non-empty name")
+        cls._channels[sender.name] = sender
+
+    @classmethod
+    def unregister_channel(cls, name: str) -> None:
+        """Remove a registered channel (no-op if absent)."""
+        cls._channels.pop(name, None)
+
+    @classmethod
+    def get_channels(cls) -> List[ChannelSender]:
+        """Registered channels in dispatch order."""
+        return list(cls._channels.values())
+
     @transaction.atomic
     def send_message(
         self,
@@ -204,53 +336,25 @@ class MessageService(BaseService):
 
         action_url = msg.action_url if msg else ''
 
-        # Send Email if enabled (per-recipient preference enforced here)
-        if send_email and template.email_enabled:
+        # Per-channel delivery via the channel registry. Built-in email/SMS/push
+        # are registered senders; extensions (e.g. PackGo WeChat) register extra
+        # channels through MessageService.register_channel and are orchestrated
+        # here with the same per-recipient preference semantics. ``force_*`` only
+        # override the matching built-in channel; extra channels follow their
+        # template_enabled flag.
+        force_overrides = {'email': force_email, 'sms': force_sms, 'push': force_push}
+        for channel in self.get_channels():
+            force = force_overrides.get(channel.name)
+            channel_on = (force if force is not None else True) and channel.template_enabled(template)
+            if not channel_on:
+                continue
             for recipient in recipients:
-                # Check customer email preference again and get email address
-                if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
-                    prefs = recipient.user.preferences
-                    if prefs.email_notifications and recipient.user.email:
-                        try:
-                            self._send_email(
-                                recipient,
-                                template,
-                                context_data,
-                                subject
-                            )
-                        except Exception as e:
-                            logger.error(f"Failed to send email to {recipient.id}: {e}")
-
-        # Send SMS if enabled (per-recipient preference enforced here)
-        if send_sms and template.sms_enabled and template.sms_body:
-            for recipient in recipients:
-                if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
-                    prefs = recipient.user.preferences
-                    if prefs.sms_notifications:
-                        try:
-                            sms_service = SMSService(workspace=self.workspace, user=self.user)
-                            sms_body = self._render_template(template.sms_body, context_data)
-                            sms_service.send_sms(recipient, sms_body[:160])
-                        except Exception as e:
-                            logger.error(f"Failed to send SMS to {recipient.id}: {e}")
-
-        # Send Push notification if enabled (per-recipient preference enforced here)
-        if send_push and template.push_enabled:
-            for recipient in recipients:
-                if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
-                    prefs = recipient.user.preferences
-                    if prefs.push_notifications:
-                        try:
-                            push_title = self._render_template(template.push_title, context_data) if template.push_title else subject
-                            push_body = self._render_template(template.push_body, context_data) if template.push_body else message[:255]
-                            self._send_push_notification(
-                                recipient,
-                                push_title,
-                                push_body,
-                                action_url=action_url
-                            )
-                        except Exception as e:
-                            logger.error(f"Failed to send push to {recipient.id}: {e}")
+                if not channel.recipient_enabled(recipient):
+                    continue
+                try:
+                    channel.send(self, recipient, template, context_data, subject, message, action_url)
+                except Exception as e:
+                    logger.error(f"Failed to send {channel.name} to {recipient.id}: {e}")
 
         return msg
     
@@ -386,6 +490,14 @@ class MessageService(BaseService):
             is_read=False,
             is_deleted=False
         ).count()
+
+
+# Register built-in channels. email/SMS/push are first-class but no longer
+# special-cased in send_from_template; extensions register additional channels
+# the same way (MessageService.register_channel(MyChannel())).
+MessageService.register_channel(_EmailChannel())
+MessageService.register_channel(_SMSChannel())
+MessageService.register_channel(_PushChannel())
 
 
 class NotificationService(BaseService):

@@ -84,3 +84,81 @@ def test_app_message_path_still_creates_inbox_message(workspace):
     assert msg is not None
     assert msg.subject == "Hi Carol"
     assert msg.recipients.filter(recipient=customer).exists()
+
+
+# ---------------------------------------------------------------------------
+# Channel registry seam (WI-420)
+# ---------------------------------------------------------------------------
+def test_builtin_channels_registered():
+    """email/SMS/push are registered as built-in channels out of the box."""
+    names = [c.name for c in MessageService.get_channels()]
+    assert {"email", "sms", "push"}.issubset(set(names))
+
+
+@pytest.mark.django_db
+def test_registered_extra_channel_dispatched_per_recipient(workspace):
+    """An extension-registered channel is invoked per recipient, gated by its
+    own opt-in logic (regression coverage for the seam)."""
+    from bfg.inbox.services.message_service import ChannelSender
+
+    calls = []
+
+    class DummyChannel(ChannelSender):
+        name = "dummy"
+
+        def __init__(self, opted_in_ids):
+            self.opted_in_ids = opted_in_ids
+
+        def template_enabled(self, template):
+            return True
+
+        def recipient_enabled(self, recipient):
+            return recipient.id in self.opted_in_ids
+
+        def send(self, service, recipient, template, context_data, subject, message, action_url):
+            calls.append(recipient.id)
+
+    opted_in = _customer(workspace, "wx_in", email="in@example.com")
+    opted_out = _customer(workspace, "wx_out", email="out@example.com")
+    _template(workspace, "wx_evt", app_message_enabled=True)
+
+    MessageService.register_channel(DummyChannel({opted_in.id}))
+    try:
+        MessageService(workspace=workspace, user=None).send_from_template(
+            [opted_in, opted_out], "wx_evt", {"name": "x"})
+    finally:
+        MessageService.unregister_channel("dummy")
+
+    assert calls == [opted_in.id]  # extra channel called per-recipient; opt-out skipped
+
+
+@pytest.mark.django_db
+def test_registered_extra_channel_skipped_when_disabled(workspace):
+    """A registered channel reporting template_enabled=False is not dispatched."""
+    from bfg.inbox.services.message_service import ChannelSender
+
+    calls = []
+
+    class DisabledChannel(ChannelSender):
+        name = "disabled"
+
+        def template_enabled(self, template):
+            return False
+
+        def recipient_enabled(self, recipient):
+            return True
+
+        def send(self, service, recipient, template, context_data, subject, message, action_url):
+            calls.append(recipient.id)
+
+    customer = _customer(workspace, "wx_off", email="off@example.com")
+    _template(workspace, "wx_off_evt", app_message_enabled=True)
+
+    MessageService.register_channel(DisabledChannel())
+    try:
+        MessageService(workspace=workspace, user=None).send_from_template(
+            [customer], "wx_off_evt", {"name": "x"})
+    finally:
+        MessageService.unregister_channel("disabled")
+
+    assert calls == []  # channel off for the template -> never invoked

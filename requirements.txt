@@ -9,7 +9,7 @@ drf-spectacular>=0.28,<0.30  # OpenAPI/Swagger documentation
 mysqlclient>=2.2.1  # Recommended MySQL driver (C extension); requires build deps
 PyMySQL==1.1.1  # Pure-Python fallback when mysqlclient cannot be built
 dj-database-url==2.3.0
-cryptography==46.0.7  # Often needed for modern DB connections
+cryptography==50.0.0  # Often needed for modern DB connections
 
 # Background Tasks
 redis==5.2.0

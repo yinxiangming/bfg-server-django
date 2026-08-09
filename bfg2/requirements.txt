@@ -1,4 +1,4 @@
-Django>=5.0,<6.0
+Django>=6.0.7,<7.0
 djangorestframework>=3.14
 openai>=1.0
 django-allauth>=0.57

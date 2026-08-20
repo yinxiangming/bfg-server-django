@@ -104,7 +104,11 @@ class StorefrontProductSerializer(serializers.ModelSerializer):
             'description', 'short_description', 'media', 'variants',
             'categories', 'tags', 'primary_image', 'images',
             'discount_percentage', 'is_new', 'is_featured', 'rating', 'reviews_count',
-            'condition', 'stock_quantity'
+            'condition', 'stock_quantity',
+            # SEO overrides: already stored per product, needed by the storefront so a
+            # product can set its own <title>/meta description instead of falling back
+            # to name/description.
+            'sku', 'barcode', 'meta_title', 'meta_description',
         ]
         read_only_fields = ['id']
     

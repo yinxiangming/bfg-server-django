@@ -729,6 +729,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
         general_custom = (settings_obj.custom_settings or {}).get('general') or {}
         storefront_ui = (settings_obj.custom_settings or {}).get('storefront_ui') or {}
         shop_custom = (settings_obj.custom_settings or {}).get('shop') or {}
+        analytics_custom = (settings_obj.custom_settings or {}).get('analytics') or {}
         default_header_options = {
             'show_search': True,
             'show_cart': True,
@@ -797,6 +798,13 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'allowed_color_modes': allowed_color_modes,
             'default_color_mode': default_color_mode,
             'review_moderation_required': bool(shop_custom.get('review_moderation_required', False)),
+            # Per-workspace web analytics. The GA4 measurement id is a public
+            # client-side tag id, never a secret — and one deployment serves
+            # many storefronts, so it has to travel with the workspace config
+            # rather than a build-time env var.
+            'analytics': {
+                'google_analytics_id': str(analytics_custom.get('google_analytics_id') or '').strip(),
+            },
         }
 
         try:

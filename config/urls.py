@@ -27,6 +27,7 @@ from config.social_auth import (
     social_callback_view,
     social_callback_view_csrf_exempt,
     social_providers_view,
+    google_one_tap_view,
 )
 
 urlpatterns = [
@@ -52,6 +53,8 @@ urlpatterns = [
             path('providers/', social_providers_view, name='social_providers'),
             path('google/login/', social_login_view, {'provider': 'google'}, name='google_login'),
             path('google/callback/', social_callback_view, {'provider': 'google'}, name='google_callback'),
+            # Google One Tap / GIS button: ID token in, JWT pair out (no redirect).
+            path('google/one-tap/', google_one_tap_view, name='google_one_tap'),
             path('facebook/login/', social_login_view, {'provider': 'facebook'}, name='facebook_login'),
             path('facebook/callback/', social_callback_view, {'provider': 'facebook'}, name='facebook_callback'),
             path('apple/login/', social_login_view, {'provider': 'apple'}, name='apple_login'),

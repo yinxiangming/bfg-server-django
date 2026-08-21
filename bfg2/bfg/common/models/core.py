@@ -179,6 +179,10 @@ class Settings(models.Model):
     default_language = models.CharField(_("Default Language"), max_length=10, default='en')
     supported_languages = models.JSONField(_("Supported Languages"), default=list)  # ['en', 'zh-hans']
     default_currency = models.CharField(_("Default Currency"), max_length=3, default=DEFAULT_CURRENCY_CODE)
+    # ISO 3166-1 alpha-2. The market the storefront serves: drives the region half of the
+    # `lang`/hreflang tag, schema.org shipping destination and areaServed. Blank means the
+    # storefront omits every region-specific claim rather than guessing one.
+    country = models.CharField(_("Country"), max_length=2, blank=True)
     default_timezone = models.CharField(_("Default Timezone"), max_length=50, default='UTC')
     
     # Contact

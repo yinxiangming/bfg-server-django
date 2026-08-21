@@ -751,6 +751,10 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'twitter_url': settings_obj.twitter_url or '',
             'instagram_url': settings_obj.instagram_url or '',
             'default_currency': settings_obj.default_currency or DEFAULT_CURRENCY_CODE,
+            # ISO 3166-1 alpha-2 or ''. The storefront uses it for hreflang region, schema.org
+            # shipping destination and areaServed, and omits those claims when it is blank.
+            'country': (settings_obj.country or '').upper(),
+            'supported_languages': settings_obj.supported_languages or [],
             'top_bar_announcement': general_custom.get('top_bar_announcement', ''),
             'footer_copyright': general_custom.get('footer_copyright', ''),
             'site_announcement': general_custom.get('site_announcement', ''),
@@ -875,11 +879,15 @@ class SettingsViewSet(viewsets.ModelViewSet):
                         payload['theme'] = 'website'
                     elif tp == 'themes/default' or not tp:
                         payload['theme'] = 'store'
-                payload['default_language'] = getattr(site, 'default_language', None) or 'zh-hans'
+                payload['default_language'] = (
+                    getattr(site, 'default_language', None) or settings_obj.default_language or 'en'
+                )
         except (ImportError, AttributeError):
             pass
         if 'default_language' not in payload:
-            payload['default_language'] = 'zh-hans'
+            # Was hardcoded to 'zh-hans', which served Chinese to every workspace that had no
+            # bfg.web Site row — regardless of its own Settings.default_language.
+            payload['default_language'] = settings_obj.default_language or 'en'
 
         if not django_settings.DEBUG:
             cache.set(cache_key, payload, STOREFRONT_CONFIG_TTL)

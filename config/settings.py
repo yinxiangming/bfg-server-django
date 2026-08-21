@@ -400,6 +400,27 @@ else:
 CSP_FRONTEND_ORIGINS = _env_list('CSP_FRONTEND_ORIGINS', default=["'self'"])
 CSP_API_ORIGINS = _env_list('CSP_API_ORIGINS', default=["'self'"])
 
+# ─── Shared cache ─────────────────────────────────────────────────────
+# Workspace resolution and the public storefront JSON are cached per workspace.
+# Point DJANGO_CACHE_URL at Redis in any multi-process deployment: without it
+# Django falls back to a per-process LocMemCache, so each Gunicorn worker keeps
+# its own copy and an invalidation issued by one worker (or by ``dokku run``)
+# never reaches the others. Use a DB index other than Celery's — e.g. Celery on
+# ``/0``, cache on ``/1``.
+_DJANGO_CACHE_URL = os.environ.get('DJANGO_CACHE_URL', '').strip()
+if _DJANGO_CACHE_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': _DJANGO_CACHE_URL,
+            'KEY_PREFIX': os.environ.get('DJANGO_CACHE_KEY_PREFIX', 'bfg').strip() or 'bfg',
+        }
+    }
+
+# How long workspace-scoped cache entries live, in seconds. See
+# bfg.common.cache_policy for what this bounds.
+BFG_CACHE_TTL = int(os.environ.get('BFG_CACHE_TTL', '300') or '300')
+
 # Celery
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')

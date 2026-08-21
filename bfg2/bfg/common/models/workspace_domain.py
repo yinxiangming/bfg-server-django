@@ -10,7 +10,7 @@ from django.core.cache import cache
 from django.db import models, transaction
 from django.utils.translation import gettext_lazy as _
 
-WORKSPACE_FRONTEND_BASE_URL_CACHE_TIMEOUT = 600
+from bfg.common.cache_policy import cache_ttl
 
 
 class WorkspaceDomain(models.Model):
@@ -158,13 +158,13 @@ def resolve_workspace_public_frontend_base_url(workspace, override_domain=None) 
     ).first()
     if primary:
         value = f"https://{primary.hostname}"
-        cache.set(cache_key, value, WORKSPACE_FRONTEND_BASE_URL_CACHE_TIMEOUT)
+        cache.set(cache_key, value, cache_ttl())
         return value
 
     system_default = workspace.domains.filter(kind=WorkspaceDomain.KIND_SYSTEM_DEFAULT).first()
     if system_default:
         value = f"https://{system_default.hostname}"
-        cache.set(cache_key, value, WORKSPACE_FRONTEND_BASE_URL_CACHE_TIMEOUT)
+        cache.set(cache_key, value, cache_ttl())
         return value
 
     raise ValueError(f"Workspace {workspace.id} does not have a public frontend domain configured")

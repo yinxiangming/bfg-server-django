@@ -13,16 +13,6 @@ ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 # gated on SENTRY_DSN. This line is kept for ``bfg_prod_check`` compatibility.
 SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()
 
-# Shared Django cache (workspace resolution, storefront JSON). Prefer Redis in prod
-# so all Gunicorn workers and ``dokku run`` see the same keys; use a DB index other
-# than Celery's (e.g. Celery ``/0``, cache ``/1``).
-_DJANGO_CACHE_URL = os.environ.get('DJANGO_CACHE_URL', '').strip()
-if _DJANGO_CACHE_URL:
-    _cache_key_prefix = os.environ.get('DJANGO_CACHE_KEY_PREFIX', 'bfg').strip() or 'bfg'
-    CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-            'LOCATION': _DJANGO_CACHE_URL,
-            'KEY_PREFIX': _cache_key_prefix,
-        }
-    }
+# Cache: CACHES is configured in config/settings.py from DJANGO_CACHE_URL so that
+# staging shares production's backend. bfg_prod_check enforces that prod actually
+# sets it — a LocMemCache here means workers silently disagree.

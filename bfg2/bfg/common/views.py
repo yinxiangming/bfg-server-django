@@ -713,11 +713,11 @@ class SettingsViewSet(viewsets.ModelViewSet):
             )
 
         from django.conf import settings as django_settings
+        from bfg.common.cache_policy import cache_ttl
         from bfg.common.storefront_cache import storefront_config_cache_key
 
         lang = request.query_params.get('lang', 'en')
         cache_key = storefront_config_cache_key(workspace.id, lang)
-        STOREFRONT_CONFIG_TTL = 60 * 60  # 1 hour
 
         cached = cache.get(cache_key)
         if cached is not None and not django_settings.DEBUG:
@@ -925,7 +925,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
             payload['languages'] = [payload['default_language']]
 
         if not django_settings.DEBUG:
-            cache.set(cache_key, payload, STOREFRONT_CONFIG_TTL)
+            cache.set(cache_key, payload, cache_ttl())
         return Response(payload)
 
     @action(detail=False, methods=['get'])

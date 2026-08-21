@@ -23,6 +23,7 @@ from .models import (
     get_workspace_domain_cache_key,
     normalize_hostname,
 )
+from .cache_policy import cache_ttl
 from .storefront_cache import invalidate_storefront_config_cache
 
 try:
@@ -38,9 +39,6 @@ logger = logging.getLogger(__name__)
 # (and by any other code that needs the request-scoped workspace without
 # plumbing ``request`` through its call chain).
 _thread_locals = threading.local()
-
-# Cache timeout for workspace lookups (10 minutes).
-WORKSPACE_CACHE_TIMEOUT = 600
 
 # ─── Request paths that operate outside any workspace context ─────────
 # Hitting one of these bypasses the strict workspace requirement.
@@ -118,11 +116,11 @@ def _get_workspace_by_domain(hostname):
             .first()
         )
         workspace = domain.workspace if domain and domain.workspace_id else None
-        cache.set(cache_key, workspace, WORKSPACE_CACHE_TIMEOUT)
+        cache.set(cache_key, workspace, cache_ttl())
         return workspace
     except Exception as exc:  # noqa: BLE001 — log and fall through
         logger.error("Error resolving workspace for domain %s: %s", normalized, exc)
-        cache.set(cache_key, None, WORKSPACE_CACHE_TIMEOUT)
+        cache.set(cache_key, None, cache_ttl())
         return None
 
 
@@ -143,10 +141,10 @@ def _get_workspace_by_id(workspace_id):
 
     try:
         workspace = Workspace.objects.get(id=workspace_id, is_active=True)
-        cache.set(cache_key, workspace, WORKSPACE_CACHE_TIMEOUT)
+        cache.set(cache_key, workspace, cache_ttl())
         return workspace
     except Workspace.DoesNotExist:
-        cache.set(cache_key, None, WORKSPACE_CACHE_TIMEOUT)
+        cache.set(cache_key, None, cache_ttl())
         return None
 
 
@@ -194,7 +192,7 @@ def _hydrate_workspace_access(request, workspace):
             workspace=workspace, user=user, is_active=True,
         ).exists()
         access_status = {'is_staff_member': is_staff, 'is_customer': is_customer}
-        cache.set(cache_key, access_status, WORKSPACE_CACHE_TIMEOUT)
+        cache.set(cache_key, access_status, cache_ttl())
 
     request.is_staff_member = bool(access_status.get('is_staff_member', False))
     request.is_customer = bool(access_status.get('is_customer', False))

@@ -574,8 +574,13 @@ def media_file_url_for_serializer(media_obj, request=None):
     """
     if not media_obj or not media_obj.file or not media_obj.file.name:
         return None
-    base = (settings.MEDIA_URL + media_obj.file.name).replace('//', '/')
+    # Join on the boundary only. The old `.replace('//', '/')` also collapsed the
+    # `//` in an absolute MEDIA_URL, turning `https://cdn/...` into `https:/cdn/...`
+    # — harmless while MEDIA_URL was the relative `/media/`, fatal once it points
+    # at S3/CloudFront.
+    base = f"{settings.MEDIA_URL.rstrip('/')}/{media_obj.file.name.lstrip('/')}"
     if request:
+        # Absolute URLs are returned unchanged; only relative ones get the host.
         return request.build_absolute_uri(base)
     return base
 

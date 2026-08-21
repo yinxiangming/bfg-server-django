@@ -32,6 +32,11 @@ PROD_READY = {
             "KEY_PREFIX": "prod_check",
         }
     },
+    # S3 media on, public CDN in front, sensitive media in its own bucket.
+    "USE_S3_MEDIA": True,
+    "AWS_STORAGE_BUCKET_NAME": "surlex",
+    "AWS_S3_CUSTOM_DOMAIN": "files.surlex.co.nz",
+    "AWS_PRIVATE_STORAGE_BUCKET_NAME": "surlex-private",
 }
 
 
@@ -44,9 +49,9 @@ def _apply_prod_ready(settings):
 
 
 class TestChecksRegistry:
-    def test_eleven_checks_registered(self):
+    def test_twelve_checks_registered(self):
         # If this count changes, update deploy docs that reference bfg_prod_check.
-        assert len(PROD_CHECKS) == 11
+        assert len(PROD_CHECKS) == 12
 
     def test_each_check_is_a_description_plus_callable(self):
         for item in PROD_CHECKS:
@@ -111,6 +116,11 @@ class TestEachViolationCaught:
                 },
                 "RedisCache",
             ),
+            # Sensitive media falling back to the CDN-fronted public bucket.
+            (
+                {"AWS_PRIVATE_STORAGE_BUCKET_NAME": "surlex"},
+                "AWS_PRIVATE_STORAGE_BUCKET_NAME",
+            ),
         ],
     )
     def test_violation_raises_command_error(self, settings, override, expected_fragment):
@@ -173,3 +183,24 @@ class TestExceptionInCheck:
         # command keeps going even on exception inside a predicate.
         with pytest.raises(CommandError):
             call_command("bfg_prod_check", stdout=StringIO())
+
+
+# ─── Private media bucket ────────────────────────────────────────────
+
+
+class TestPrivateMediaBucket:
+    """The check only bites when a public CDN actually fronts the bucket."""
+
+    def test_shared_bucket_allowed_without_a_cdn(self, settings):
+        # No custom domain means no unsigned public path to the object, so the
+        # single-bucket fallback is still safe and must not block the deploy.
+        _apply_prod_ready(settings)
+        settings.AWS_S3_CUSTOM_DOMAIN = None
+        settings.AWS_PRIVATE_STORAGE_BUCKET_NAME = "surlex"
+        call_command("bfg_prod_check", stdout=StringIO())
+
+    def test_shared_bucket_allowed_when_s3_is_off(self, settings):
+        _apply_prod_ready(settings)
+        settings.USE_S3_MEDIA = False
+        settings.AWS_PRIVATE_STORAGE_BUCKET_NAME = "surlex"
+        call_command("bfg_prod_check", stdout=StringIO())

@@ -252,6 +252,10 @@ if USE_S3_MEDIA:
     AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'ap-southeast-2').strip()
     # CloudFront / custom CDN domain (without scheme), e.g. cdn.preloved.kiwi.
     AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '').strip() or None
+    # Key prefix inside the bucket, e.g. 'nexus/prod'. Lets several projects and
+    # environments share one bucket + CDN without colliding: production and UAT
+    # get disjoint prefixes, so a UAT upload or delete can never touch prod media.
+    AWS_LOCATION = os.environ.get('AWS_LOCATION', '').strip().strip('/')
     # Boto3 picks up AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from env automatically.
 
     STORAGES = {
@@ -261,6 +265,7 @@ if USE_S3_MEDIA:
                 'bucket_name': AWS_STORAGE_BUCKET_NAME,
                 'region_name': AWS_S3_REGION_NAME,
                 'custom_domain': AWS_S3_CUSTOM_DOMAIN,
+                'location': AWS_LOCATION,
                 'file_overwrite': False,         # never silently clobber an existing key
                 'querystring_auth': False,       # bucket is public-read; no signed URLs
                 'default_acl': None,             # rely on bucket policy
@@ -271,10 +276,11 @@ if USE_S3_MEDIA:
             'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
         },
     }
-    if AWS_S3_CUSTOM_DOMAIN:
-        MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/'
-    else:
-        MEDIA_URL = f'https://{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/'
+    # MEDIA_URL must carry AWS_LOCATION too: S3Storage.url() prepends the prefix
+    # itself, but bfg.common.serializers builds URLs as MEDIA_URL + file.name and
+    # would otherwise point one directory above every object.
+    _media_host = AWS_S3_CUSTOM_DOMAIN or f'{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com'
+    MEDIA_URL = f'https://{_media_host}/' + (f'{AWS_LOCATION}/' if AWS_LOCATION else '')
 
     # Private bucket for sensitive media (package photos, customs docs, payment
     # proofs). Served via short-lived signed (SigV4) URLs and never through the
@@ -290,6 +296,7 @@ if USE_S3_MEDIA:
         'OPTIONS': {
             'bucket_name': AWS_PRIVATE_STORAGE_BUCKET_NAME,
             'region_name': AWS_S3_REGION_NAME,
+            'location': AWS_LOCATION,            # same per-environment namespacing
             'querystring_auth': True,            # SigV4-signed, expiring URLs
             'querystring_expire': AWS_PRIVATE_URL_EXPIRE,
             'default_acl': 'private',
@@ -303,6 +310,7 @@ else:
     # signing is applied (see bfg.common.storage.private_media_storage).
     AWS_PRIVATE_STORAGE_BUCKET_NAME = ''
     AWS_PRIVATE_URL_EXPIRE = 3600
+    AWS_LOCATION = ''
 
 # Absolute API/site origin for media URLs when storage returns relative paths (e.g. GitHub issue embeds).
 MEDIA_PUBLIC_BASE_URL = os.environ.get('MEDIA_PUBLIC_BASE_URL', '').strip().rstrip('/')

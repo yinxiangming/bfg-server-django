@@ -63,3 +63,59 @@ def test_migrate_web_media_creates_common_media_and_is_idempotent(db):
     # Re-running migrates nothing new (matched by workspace + file key).
     call_command("migrate_web_media")
     assert CommonMedia.objects.filter(workspace=ws, file="media/2020/05/old.jpg").count() == 1
+
+
+# ─── MEDIA_URL joining (S3 / CDN) ────────────────────────────────────────
+# media_file_url_for_serializer builds URLs as MEDIA_URL + file.name rather than
+# calling file.url. It used to collapse every '//' in the result, which is a no-op
+# for a relative MEDIA_URL but destroys the scheme of an absolute one.
+
+def test_media_url_join_keeps_scheme_on_absolute_cdn_url(db, settings):
+    settings.MEDIA_URL = "https://files.surlex.co.nz/nexus/prod/"
+    ws, _ = _workspace("cdn")
+    m = CommonMedia.objects.create(workspace=ws, media_type="image")
+    m.file.name = "media/3/led-ring-module.png"
+    m.save()
+    assert media_file_url_for_serializer(m) == (
+        "https://files.surlex.co.nz/nexus/prod/media/3/led-ring-module.png")
+
+
+def test_media_url_join_unchanged_for_relative_media_url(db, settings):
+    # Local/filesystem behaviour must be byte-identical to before the fix.
+    settings.MEDIA_URL = "/media/"
+    ws, _ = _workspace("rel")
+    m = CommonMedia.objects.create(workspace=ws, media_type="image")
+    m.file.name = "seed_images/store/x.png"
+    m.save()
+    assert media_file_url_for_serializer(m) == "/media/seed_images/store/x.png"
+
+
+def test_media_url_join_tolerates_leading_slash_in_key(db, settings):
+    settings.MEDIA_URL = "https://files.surlex.co.nz/nexus/uat/"
+    ws, _ = _workspace("slash")
+    m = CommonMedia.objects.create(workspace=ws, media_type="image")
+    m.file.name = "/media/3/x.png"
+    m.save()
+    # Exactly one separator at the join, no empty path segment.
+    assert media_file_url_for_serializer(m) == (
+        "https://files.surlex.co.nz/nexus/uat/media/3/x.png")
+
+
+def test_s3_storage_url_includes_location_prefix():
+    """Pin the django-storages contract config.settings.MEDIA_URL mirrors.
+
+    S3Storage.url() prepends the ``location`` prefix itself. config/settings.py
+    therefore has to append AWS_LOCATION to MEDIA_URL by hand, or the two ways of
+    addressing a file (file.url vs MEDIA_URL + file.name) disagree by one path
+    segment and every image 404s.
+    """
+    from storages.backends.s3 import S3Storage
+
+    storage = S3Storage(
+        bucket_name="surlex",
+        location="nexus/prod",
+        custom_domain="files.surlex.co.nz",
+        querystring_auth=False,
+    )
+    assert storage.url("media/3/x.png") == (
+        "https://files.surlex.co.nz/nexus/prod/media/3/x.png")

@@ -73,6 +73,20 @@ PROD_CHECKS = (
         .get("BACKEND", "")
         == "django.core.cache.backends.redis.RedisCache",
     ),
+    (
+        "Sensitive media must not share a CDN-fronted public bucket "
+        "(set AWS_PRIVATE_STORAGE_BUCKET_NAME to a bucket with no CloudFront distribution)",
+        # A signed, expiring URL protects nothing when the same key is also
+        # reachable unsigned at https://<AWS_S3_CUSTOM_DOMAIN>/<key>: CloudFront's
+        # OAC reads the bucket on every viewer's behalf, so bucket-level "private"
+        # ACLs do not apply to CDN requests.
+        lambda s: not (
+            getattr(s, "USE_S3_MEDIA", False)
+            and getattr(s, "AWS_S3_CUSTOM_DOMAIN", None)
+            and getattr(s, "AWS_PRIVATE_STORAGE_BUCKET_NAME", "")
+            == getattr(s, "AWS_STORAGE_BUCKET_NAME", "")
+        ),
+    ),
 )
 
 

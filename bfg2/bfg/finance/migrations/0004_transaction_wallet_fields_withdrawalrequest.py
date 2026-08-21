@@ -67,7 +67,6 @@ class Migration(migrations.Migration):
                     ('debit', 'Debit'),
                     ('adjustment', 'Adjustment'),
                     ('topup', 'Top-up'),
-                    ('resale_payout', 'Resale Payout'),
                     ('withdrawal', 'Withdrawal'),
                     ('reward', 'Reward'),
                 ],

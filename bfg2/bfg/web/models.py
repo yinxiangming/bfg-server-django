@@ -482,6 +482,10 @@ class Language(models.Model):
 class Media(models.Model):
     """
     Media file (image, document, etc.).
+
+    DEPRECATED (WI-393): superseded by the unified ``common.Media`` + ``common.MediaLink``
+    model. Retained for backward compatibility; do not add new references. Migrate
+    existing rows into common.Media with ``manage.py migrate_web_media`` (non-destructive).
     """
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='media_files')
     

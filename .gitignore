@@ -4,11 +4,13 @@
 .idea/
 *.DS_Store
 db/
-venv/
-.venv/
+venv*/
+.venv*/
 .env*
+!.env.example
 media/
 celerybeat-schedule*
+*.sqlite3
 __pycache__/
 .pytest_cache/
 

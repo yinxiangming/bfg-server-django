@@ -68,6 +68,24 @@ BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS = _env_bool(
 
 ALLOWED_HOSTS = ['*']
 
+# ─── Error monitoring (Sentry) ────────────────────────────────────────
+# Initialised only when SENTRY_DSN is set (per-app Dokku config), so dev and
+# non-Sentry deploys are unaffected. SENTRY_ENVIRONMENT distinguishes UAT vs
+# prod (falls back to ENV); SENTRY_TRACES_SAMPLE_RATE (0..1) enables tracing
+# (default off = errors only). Skipped under `manage.py test`.
+SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()
+if SENTRY_DSN and not TESTING:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.environ.get('SENTRY_ENVIRONMENT', '').strip() or ENV or 'production',
+        # Add data like request headers and IP for users; see
+        # https://docs.sentry.io/platforms/python/data-management/data-collected/
+        send_default_pii=True,
+        traces_sample_rate=float(os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0') or 0),
+    )
+
 # Application definition (BFG core only; no apps.* business modules)
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -162,6 +180,9 @@ db_from_env = dj_database_url.config(conn_max_age=500)
 if db_from_env:
     DATABASES['default'].update(db_from_env)
 
+if not DATABASES['default'].get('ENGINE', '').endswith('.mysql'):
+    DATABASES['default'].pop('OPTIONS', None)
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'common.User'
 
@@ -254,8 +275,34 @@ if USE_S3_MEDIA:
         MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/'
     else:
         MEDIA_URL = f'https://{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/'
+
+    # Private bucket for sensitive media (package photos, customs docs, payment
+    # proofs). Served via short-lived signed (SigV4) URLs and never through the
+    # public CDN, so objects are not world-readable. Defaults to the main bucket
+    # when no dedicated private bucket is configured; set a separate private
+    # bucket in production for true isolation. See bfg.common.storage.
+    AWS_PRIVATE_STORAGE_BUCKET_NAME = (
+        os.environ.get('AWS_PRIVATE_STORAGE_BUCKET_NAME', '').strip() or AWS_STORAGE_BUCKET_NAME
+    )
+    AWS_PRIVATE_URL_EXPIRE = int(os.environ.get('AWS_PRIVATE_URL_EXPIRE', '3600'))  # signed-URL TTL, seconds
+    STORAGES['media_private'] = {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {
+            'bucket_name': AWS_PRIVATE_STORAGE_BUCKET_NAME,
+            'region_name': AWS_S3_REGION_NAME,
+            'querystring_auth': True,            # SigV4-signed, expiring URLs
+            'querystring_expire': AWS_PRIVATE_URL_EXPIRE,
+            'default_acl': 'private',
+            'file_overwrite': False,
+            'custom_domain': None,               # never serve private media via the public CDN
+        },
+    }
 else:
     MEDIA_URL = '/media/'
+    # Local dev: sensitive media falls back to the same filesystem storage; no
+    # signing is applied (see bfg.common.storage.private_media_storage).
+    AWS_PRIVATE_STORAGE_BUCKET_NAME = ''
+    AWS_PRIVATE_URL_EXPIRE = 3600
 
 # Absolute API/site origin for media URLs when storage returns relative paths (e.g. GitHub issue embeds).
 MEDIA_PUBLIC_BASE_URL = os.environ.get('MEDIA_PUBLIC_BASE_URL', '').strip().rstrip('/')

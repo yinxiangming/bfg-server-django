@@ -1,12 +1,13 @@
 # Core Django
-Django==5.1.15
+Django==6.0.6
 django-ninja==1.3.0
-djangorestframework==3.15.2
-djangorestframework-simplejwt>=5.3.0
-drf-spectacular==0.27.2  # OpenAPI/Swagger documentation
+djangorestframework>=3.16,<3.18
+djangorestframework-simplejwt>=5.4.0
+drf-spectacular>=0.28,<0.30  # OpenAPI/Swagger documentation
 
 # Database
-PyMySQL==1.1.1
+mysqlclient>=2.2.1  # Recommended MySQL driver (C extension); requires build deps
+PyMySQL==1.1.1  # Pure-Python fallback when mysqlclient cannot be built
 dj-database-url==2.3.0
 cryptography==46.0.7  # Often needed for modern DB connections
 
@@ -24,7 +25,7 @@ reportlab>=4.0.0  # PDF generation
 weasyprint>=60.0  # HTML to PDF generation
 
 # CORS
-django-cors-headers==4.6.0
+django-cors-headers>=4.8,<5
 
 # Social auth (Google, Apple, Facebook)
 django-allauth>=0.57
@@ -42,3 +43,6 @@ uvicorn==0.32.1  # Added for ASGI support (Django Ninja/Async)
 # Email HTTP backends (Mailgun etc.). Default SMTP backend still works; activate via
 # EMAIL_BACKEND=anymail.backends.mailgun.EmailBackend + MAILGUN_API_KEY env vars.
 django-anymail[mailgun]==12.0
+
+# Error monitoring — initialised in config/prod.py only when SENTRY_DSN env is set.
+sentry-sdk[django]>=2.0.0,<3.0.0

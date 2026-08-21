@@ -363,7 +363,7 @@ compare_price   DecimalField(10,2, null)
 cost            DecimalField(10,2, null)
 is_subscription BooleanField(default=False)
 subscription_plan   FK→SubscriptionPlan(null)
-condition       CharField choices: new|like_new|good|fair|poor (blank)  ← for resale
+condition       CharField choices: new|like_new|good|fair|poor (blank)
 categories      M2M→ProductCategory(related='products')
 tags            M2M→ProductTag(related='products')
 finance_code    FK→FinancialCode(null)

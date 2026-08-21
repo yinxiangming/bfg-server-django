@@ -35,7 +35,7 @@ install:
 	@echo "Installing project dependencies..."
 	pip install -r requirements.txt
 
-# Create MySQL database from DATABASE_URL (e.g. mysql://user:pass@127.0.0.1:3306/resale)
+# Create MySQL database from DATABASE_URL (e.g. mysql://user:pass@127.0.0.1:3306/bfg)
 db-create:
 	python manage.py create_db
 
@@ -55,4 +55,3 @@ reset-migrations:
 	@echo "Running migrate..."
 	python manage.py migrate
 	@echo "Done. Run 'make init' to create workspace, admin and seed data."
-

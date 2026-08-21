@@ -669,7 +669,7 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='mark-paid')
     def mark_paid(self, request, pk=None):
-        """Mark order as paid (staff). Triggers order.paid and resale payout hooks."""
+        """Mark order as paid (staff). Triggers order.paid hooks."""
         from bfg.common.models import StaffMember
 
         if not (
@@ -696,7 +696,7 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='refund')
     def refund(self, request, pk=None):
-        """Mark order as refunded (staff). Emits order.refunded for resale reversal hooks."""
+        """Mark order as refunded (staff). Emits order.refunded hooks."""
         from bfg.common.models import StaffMember
 
         if not (
@@ -910,7 +910,7 @@ class OrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def update_items(self, request, pk=None):
         """Update order items. Syncs to requested items; does not delete items that are
-        protected by other FKs (e.g. ResalePayoutItem)."""
+        protected by other FKs."""
         from decimal import Decimal
         from django.db import transaction
         from django.db.models.deletion import ProtectedError
@@ -955,7 +955,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                     try:
                         existing_item.delete()
                     except ProtectedError:
-                        # Keep item and include in subtotal (e.g. linked to ResalePayoutItem)
+                        # Keep item and include in subtotal when another module protects it.
                         q = existing_item.quantity
                         subtotal += price * q
                     continue
@@ -1334,4 +1334,3 @@ class OrderPackageViewSet(viewsets.ModelViewSet):
             'freight_service': freight_service.name,
             'billing_weight': str(total_billing_weight.quantize(Decimal('0.01')))
         })
-

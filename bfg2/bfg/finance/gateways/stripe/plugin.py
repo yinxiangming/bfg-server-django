@@ -259,7 +259,11 @@ class StripeGateway(BasePaymentGateway):
         
         # Create PaymentMethod in BFG
         # Handle null cardholder_name - use empty string as default
-        cardholder_name = stripe_pm.billing_details.get('name') or ''
+        billing_details = getattr(stripe_pm, 'billing_details', None)
+        if isinstance(billing_details, dict):
+            cardholder_name = billing_details.get('name') or ''
+        else:
+            cardholder_name = getattr(billing_details, 'name', '') or ''
         
         payment_method = PaymentMethod.objects.create(
             workspace=customer.workspace,
@@ -643,4 +647,3 @@ class StripeGateway(BasePaymentGateway):
         customer.save(update_fields=['gateway_metadata'])
         
         return stripe_customer.id
-

@@ -7,10 +7,14 @@ bfg2_path = BASE_DIR / 'bfg2'
 if str(bfg2_path) not in sys.path:
     sys.path.insert(0, str(bfg2_path))
 
-import pymysql
+# Use mysqlclient (the MySQLdb C extension) — Django's recommended MySQL driver.
+# Fall back to the pure-Python PyMySQL driver only if mysqlclient is unavailable.
+try:
+    import MySQLdb  # noqa: F401  (mysqlclient)
+except ImportError:
+    import pymysql
 
-# pymysql.version_info = (1, 4, 13, "final", 0)  # change this to your pymysql version
-pymysql.install_as_MySQLdb()
+    pymysql.install_as_MySQLdb()
 
 # This will make sure the app is always imported when
 # Django starts so that shared_task will use this app.

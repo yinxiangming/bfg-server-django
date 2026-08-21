@@ -14,7 +14,7 @@ def _validate_app_package(apps_dir: Path, name: str) -> None:
     if not pkg.exists():
         raise ImproperlyConfigured(
             f'LOCAL_APPS includes "{name}" but {pkg} does not exist. '
-            f'Use a directory under apps/ (e.g. resale), or leave LOCAL_APPS empty for auto-discovery. '
+            f'Use a directory under apps/ (e.g. custom_app), or leave LOCAL_APPS empty for auto-discovery. '
             f'Platform APIs live in bfg.platform and are mounted from config/urls.py (not under apps/).'
         )
     target = pkg.resolve() if pkg.is_dir() or pkg.is_symlink() else pkg
@@ -30,7 +30,7 @@ def _validate_app_package(apps_dir: Path, name: str) -> None:
 
 def get_local_apps():
     """
-    Return list of local app names (e.g. ['resale']).
+    Return list of local app names (e.g. ['custom_app']).
     Uses LOCAL_APPS env (comma-separated) if set; otherwise discovers from apps dir.
     """
     base_dir = Path(__file__).resolve().parent.parent
@@ -63,5 +63,5 @@ def get_local_apps():
 
 
 def get_local_app_dotted_names():
-    """Return list of dotted app names (e.g. ['apps.resale'])."""
+    """Return list of dotted app names (e.g. ['apps.custom_app'])."""
     return [f'apps.{name}' for name in get_local_apps()]

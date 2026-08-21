@@ -66,7 +66,7 @@ class Product(TenantScopedModel):
     is_subscription = models.BooleanField(_("Is Subscription"), default=False)
     subscription_plan = models.ForeignKey('shop.SubscriptionPlan', null=True, blank=True, on_delete=models.SET_NULL, related_name='products')
     
-    # Condition (for resale products)
+    # Condition (for pre-owned or graded products)
     CONDITION_CHOICES = [
         ('new', 'New'),
         ('like_new', 'Like New'),

@@ -739,6 +739,33 @@ class SettingsViewSet(viewsets.ModelViewSet):
         header_options = storefront_ui.get('header_options')
         if isinstance(header_options, dict):
             default_header_options = {**default_header_options, **header_options}
+        default_language = (
+            getattr(settings_obj, 'default_language', None)
+            or general_custom.get('default_language')
+            or 'en'
+        )
+        supported_languages = getattr(settings_obj, 'supported_languages', None) or [default_language]
+
+        # Allowed color modes: a list like ['light', 'dark']. Mirrors the
+        # `languages` pattern — if only one entry is configured, the
+        # frontend hides the mode switcher and forces that mode.
+        ALL_COLOR_MODES = ['light', 'dark']
+        raw_modes = storefront_ui.get('allowed_color_modes')
+        if isinstance(raw_modes, list):
+            allowed_color_modes = [m for m in raw_modes if m in ALL_COLOR_MODES]
+            if not allowed_color_modes:
+                allowed_color_modes = ALL_COLOR_MODES
+        else:
+            allowed_color_modes = ALL_COLOR_MODES
+        default_color_mode = storefront_ui.get('default_color_mode')
+        if default_color_mode not in ('light', 'dark', 'system'):
+            default_color_mode = 'system' if len(allowed_color_modes) > 1 else allowed_color_modes[0]
+        # If the configured default isn't in the allowed set, fall back to
+        # the first allowed mode so the frontend never gets an unreachable
+        # mode preselected.
+        if default_color_mode in ('light', 'dark') and default_color_mode not in allowed_color_modes:
+            default_color_mode = allowed_color_modes[0]
+
         payload = {
             'workspace_id': workspace.id,
             'workspace_slug': workspace.slug,
@@ -754,7 +781,6 @@ class SettingsViewSet(viewsets.ModelViewSet):
             # ISO 3166-1 alpha-2 or ''. The storefront uses it for hreflang region, schema.org
             # shipping destination and areaServed, and omits those claims when it is blank.
             'country': (settings_obj.country or '').upper(),
-            'supported_languages': settings_obj.supported_languages or [],
             'top_bar_announcement': general_custom.get('top_bar_announcement', ''),
             'footer_copyright': general_custom.get('footer_copyright', ''),
             'site_announcement': general_custom.get('site_announcement', ''),
@@ -762,10 +788,14 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'header_menus': [],
             'footer_menus': [],
             'footer_menu_groups': [],
+            'default_language': default_language,
+            'languages': list(supported_languages) if isinstance(supported_languages, list) else [default_language],
             'theme': storefront_ui.get('theme') or 'store',
             'header': storefront_ui.get('header'),
             'footer': storefront_ui.get('footer'),
             'header_options': default_header_options,
+            'allowed_color_modes': allowed_color_modes,
+            'default_color_mode': default_color_mode,
             'review_moderation_required': bool(shop_custom.get('review_moderation_required', False)),
         }
 
@@ -854,7 +884,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
         except Exception:
             pass
 
-        # Prefer bfg.web Site for site_name, theme, default_language — not for workspace_domain
+        # Prefer bfg.web Site for site_name, theme, default_language, languages — not for workspace_domain
         # (public hostname is WorkspaceDomain-only, same as workspace middleware for API/account/admin).
         # When multiple Sites exist, match request host via Site.domain if present; else default row wins.
         try:
@@ -879,15 +909,20 @@ class SettingsViewSet(viewsets.ModelViewSet):
                         payload['theme'] = 'website'
                     elif tp == 'themes/default' or not tp:
                         payload['theme'] = 'store'
-                payload['default_language'] = (
+                # Site wins, then the workspace's own Settings, then 'en'. Skipping
+                # Settings here would ignore a language the workspace has explicitly set.
+                site_default_language = (
                     getattr(site, 'default_language', None) or settings_obj.default_language or 'en'
                 )
+                payload['default_language'] = site_default_language
+                site_languages = getattr(site, 'languages', None) or [site_default_language]
+                payload['languages'] = list(site_languages) if isinstance(site_languages, list) else [site_default_language]
         except (ImportError, AttributeError):
             pass
         if 'default_language' not in payload:
-            # Was hardcoded to 'zh-hans', which served Chinese to every workspace that had no
-            # bfg.web Site row — regardless of its own Settings.default_language.
             payload['default_language'] = settings_obj.default_language or 'en'
+        if not payload.get('languages'):
+            payload['languages'] = [payload['default_language']]
 
         if not django_settings.DEBUG:
             cache.set(cache_key, payload, STOREFRONT_CONFIG_TTL)
@@ -1445,7 +1480,7 @@ class MeOrdersViewSet(viewsets.ReadOnlyModelViewSet):
 class MeDashboardStatsView(APIView):
     """
     GET /api/v1/me/dashboard-stats/ - Stats for account dashboard:
-    wallet_balance, order_counts by status, unread_messages_count, resale (listings, sold).
+    wallet_balance, order_counts by status, unread_messages_count, plus optional app stats.
     """
     permission_classes = [IsAuthenticated]
 
@@ -1497,32 +1532,22 @@ class MeDashboardStatsView(APIView):
         except Exception:
             pass
 
-        # Resale: listings (active + pending) and sold count (optional app)
-        resale_listings_count = 0
-        resale_sold_count = 0
-        try:
-            from apps.resale.models import ResaleProduct
-            resale_qs = ResaleProduct.objects.filter(
-                workspace=workspace, customer=customer
-            )
-            resale_listings_count = resale_qs.filter(
-                status__in=('pending', 'active')
-            ).count()
-            resale_sold_count = resale_qs.filter(status='sold').count()
-        except Exception:
-            pass
+        from bfg.common.dashboard_extensions import collect_me_dashboard_stats
+        app_stats = collect_me_dashboard_stats(
+            request=request,
+            workspace=workspace,
+            customer=customer,
+        )
 
-        return Response({
+        payload = {
             'wallet_balance': wallet_balance,
             'wallet_currency': wallet_currency,
             'default_currency': workspace_default_currency,
             'order_counts': order_counts,
             'unread_messages_count': unread_messages_count,
-            'resale': {
-                'listings_count': resale_listings_count,
-                'sold_count': resale_sold_count,
-            },
-        })
+        }
+        payload.update(app_stats)
+        return Response(payload)
 
 
 class MePaymentMethodViewSet(viewsets.ModelViewSet):
@@ -1632,9 +1657,14 @@ class MePaymentMethodViewSet(viewsets.ModelViewSet):
                     # Save to BFG PaymentMethod model
                     set_as_default = serializer.validated_data.get('is_default', False)
                     payment_method_data = {'set_as_default': set_as_default}
+                    gateway_payment_method_id = (
+                        gateway_pm.get('id', payment_method_id)
+                        if isinstance(gateway_pm, dict)
+                        else getattr(gateway_pm, 'id', payment_method_id)
+                    )
                     payment_method = plugin.save_payment_method(
                         customer,
-                        gateway_pm.id if isinstance(gateway_pm, dict) else gateway_pm.get('id', payment_method_id),
+                        gateway_payment_method_id,
                         payment_method_data
                     )
                     

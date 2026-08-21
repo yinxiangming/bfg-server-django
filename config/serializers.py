@@ -157,8 +157,42 @@ class FinalizeOnboardingSerializer(serializers.Serializer):
                 'store_name': ['A workspace with a similar store name already exists.']
             })
 
+        # Give each onboarded workspace a reachable host on the trial domain
+        # (e.g. <slug>.idlevo.com) when TRIAL_WORKSPACE_DOMAIN_SUFFIX is configured,
+        # so the per-tenant storefront resolves by Host. No-op when unset.
+        import os
+        create_kwargs = {}
+        suffix = os.environ.get('TRIAL_WORKSPACE_DOMAIN_SUFFIX', '').strip().lstrip('.')
+        if suffix and slug:
+            create_kwargs['domain'] = f"{slug}.{suffix}"
+
         ws_service = WorkspaceService()
-        workspace = ws_service.create_workspace(name=store_name, owner_user=user)
+        workspace = ws_service.create_workspace(name=store_name, owner_user=user, **create_kwargs)
+
+        # Apply the trial storefront skin/color-mode so the new workspace feels
+        # real on first visit. Configurable; skipped when TRIAL_WORKSPACE_THEME unset.
+        trial_theme = os.environ.get('TRIAL_WORKSPACE_THEME', '').strip()
+        if trial_theme:
+            try:
+                from bfg.common.services import SettingsService
+                from django.core.cache import cache
+                settings_obj = SettingsService(workspace=workspace, user=user).get_or_create_settings(workspace)
+                cs = settings_obj.custom_settings or {}
+                su = cs.get('storefront_ui') or {}
+                su.setdefault('theme', trial_theme)
+                su.setdefault('allowed_color_modes', ['light'])
+                su.setdefault('default_color_mode', 'light')
+                cs['storefront_ui'] = su
+                settings_obj.custom_settings = cs
+                settings_obj.save(update_fields=['custom_settings'])
+                try:
+                    from bfg.common.storefront_cache import storefront_config_cache_key
+                    for lang in ('en', 'zh-hans'):
+                        cache.delete(storefront_config_cache_key(workspace.id, lang))
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
         return user, workspace, True
 

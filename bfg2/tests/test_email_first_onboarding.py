@@ -9,7 +9,7 @@ User = get_user_model()
 @pytest.mark.django_db
 def test_email_first_onboarding_flow(settings):
     """
-    Test the Email-First Onboarding (Resale Marketing Flow).
+    Test the Email-First Onboarding flow.
     
     Flow:
     1. Register with email + store details (provisioning deferred).
@@ -31,18 +31,18 @@ def test_email_first_onboarding_flow(settings):
 
     # Step 1: Register User
     register_payload = {
-        "email": "test-resale-flow@example.com",
+        "email": "test-email-first-flow@example.com",
         "password": "StrongPassword123!",
         "password_confirm": "StrongPassword123!",
-        "name": "Jane Resale",
-        "store_name": "Jane's Vintage Store"
+        "name": "Jane Example",
+        "store_name": "Jane's Store"
     }
 
     res = client.post('/api/v1/auth/register/', register_payload, format='json')
     assert res.status_code == 201, f"Registration should succeed, got {res.status_code}: {res.data}"
 
     # Verify user exists but is not fully provisioned yet
-    user = User.objects.get(email="test-resale-flow@example.com")
+    user = User.objects.get(email="test-email-first-flow@example.com")
     assert not user.is_active, "User should be inactive until email is verified"
     
     email_record = EmailAddress.objects.get(user=user, email=user.email)
@@ -77,7 +77,7 @@ def test_email_first_onboarding_flow(settings):
     # In the real system, completing the wizard would call the workspace creation API.
     # For now, we just ensure they can get a token now that they are active.
     token_res = client.post('/api/v1/auth/token/', {
-        "email": "test-resale-flow@example.com",
+        "email": "test-email-first-flow@example.com",
         "password": "StrongPassword123!"
     }, format='json')
     

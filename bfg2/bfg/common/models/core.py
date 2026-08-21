@@ -239,7 +239,7 @@ class AuditLog(models.Model):
     )
 
     # Module — free-form string tag identifying which subsystem produced the entry
-    # (e.g. "resale", "shop", "finance"). Plugins set this so they can scope queries
+    # (e.g. "shop", "finance", "custom_app"). Plugins set this so they can scope queries
     # to their own events without needing a separate table.
     module = models.CharField(_("Module"), max_length=32, blank=True, db_index=True)
 
@@ -319,6 +319,11 @@ class Media(models.Model):
     file = models.FileField(_("File"), upload_to=media_upload_to, blank=True, null=True)
     external_url = models.URLField(_("External URL"), blank=True)
     media_type = models.CharField(_("Media Type"), max_length=20, choices=MEDIA_TYPE_CHOICES, default='image')
+    # Sensitive media (package photos, POD, customs docs, payment proofs) lives in
+    # the private bucket and is served via short-lived signed URLs (WI-393). The
+    # file is written through bfg.common.storage.private_media_storage(); serve it
+    # with bfg.common.serializers.signed_media_url() rather than file.url.
+    is_sensitive = models.BooleanField(_("Sensitive"), default=False)
     
     # Metadata
     alt_text = models.CharField(_("Alt Text"), max_length=255, blank=True)

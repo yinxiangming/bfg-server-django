@@ -11,12 +11,15 @@ for p in (str(BASE_DIR), str(BASE_DIR / 'bfg2')):
 
 def main():
     """Run administrative tasks."""
-    # Try to install PyMySQL if available
+    # Prefer mysqlclient (Django's recommended MySQL driver); fall back to PyMySQL.
     try:
-        import pymysql
-        pymysql.install_as_MySQLdb()
+        import MySQLdb  # noqa: F401  (mysqlclient)
     except ImportError:
-        pass
+        try:
+            import pymysql
+            pymysql.install_as_MySQLdb()
+        except ImportError:
+            pass
 
     from config.django_settings_env import setdefault_django_settings_module
 

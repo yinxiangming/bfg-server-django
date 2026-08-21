@@ -921,8 +921,9 @@ def _save_feedback_screenshot_to_media_storage(workspace_id, image_base64):
         return None
 
 
-def _media_url_is_github_fetchable(url: str) -> bool:
-    """GitHub renders issue images via camo; it cannot reach localhost or private hosts."""
+def _media_url_is_public_fetchable(url: str) -> bool:
+    """Issue trackers (GitHub camo, Azure DevOps) embed images by fetching the URL
+    server-side; they cannot reach localhost or private/internal hosts."""
     import ipaddress
     from urllib.parse import urlparse
 
@@ -1016,7 +1017,7 @@ def _create_github_feedback_issue(
             saved_name = _save_feedback_screenshot_to_media_storage(workspace_id, image_base64)
         if saved_name and _embed_feedback_screenshots_enabled():
             candidate = _public_url_for_stored_media(request, saved_name)
-            if candidate and _media_url_is_github_fetchable(candidate):
+            if candidate and _media_url_is_public_fetchable(candidate):
                 embed_url = candidate
         if embed_url:
             body_lines.extend(['', '**Screenshot:**', f'![feedback screenshot]({embed_url})'])
@@ -1055,6 +1056,166 @@ def _create_github_feedback_issue(
     except Exception as e:
         logging.warning('Feedback GitHub issue error: %s', e)
         return None, str(e)
+
+
+def _build_feedback_workitem_body_html(
+    feedback_type,
+    content,
+    source,
+    page_url=None,
+    submitter_label=None,
+    screenshot_url=None,
+    screenshot_storage_name=None,
+):
+    """HTML body for an Azure DevOps work item (System.Description / Repro Steps are HTML)."""
+    import html
+    ref_url = page_url or '(not provided)'
+    ref_user = submitter_label or 'anonymous'
+    parts = [
+        '<p>',
+        f'<b>Type:</b> {html.escape(str(feedback_type))}<br/>',
+        f'<b>Source:</b> {html.escape(str(source))}<br/>',
+        f'<b>Page URL:</b> {html.escape(str(ref_url))}<br/>',
+        f'<b>Logged-in user:</b> {html.escape(str(ref_user))}',
+        '</p>',
+        '<p><b>Content</b></p>',
+        f'<pre style="white-space:pre-wrap">{html.escape(content)}</pre>',
+    ]
+    if screenshot_url:
+        safe = html.escape(screenshot_url, quote=True)
+        parts.append('<p><b>Screenshot</b></p>')
+        parts.append(
+            f'<p><img src="{safe}" alt="feedback screenshot" '
+            'style="max-width:100%;height:auto"/></p>'
+        )
+    elif screenshot_storage_name:
+        safe_path = html.escape(screenshot_storage_name)
+        parts.append('<p><b>Screenshot (storage path, not embedded):</b></p>')
+        parts.append(
+            f'<p><code>{safe_path}</code> (under <code>MEDIA_ROOT</code>). '
+            'Set <code>MEDIA_PUBLIC_BASE_URL</code> to a public API origin so the next '
+            'feedback can embed the image.</p>'
+        )
+    return ''.join(parts)
+
+
+def _create_azure_devops_feedback_workitem(
+    feedback_type,
+    content,
+    source,
+    image_base64,
+    page_url=None,
+    submitter_label=None,
+    workspace_id=None,
+    request=None,
+    saved_storage_name=None,
+):
+    """Create an Azure DevOps work item for feedback. Returns (item_url or None, error or None).
+
+    Mirrors _create_github_feedback_issue's signature so the two backends are
+    interchangeable. No-ops (returns (None, None)) when credentials are missing,
+    matching the GitHub backend's behavior so the API never errors on the client.
+    """
+    import os
+    import logging
+    import requests
+    from urllib.parse import quote
+
+    org_url = (os.environ.get('AZURE_DEVOPS_ORG_URL') or '').strip().rstrip('/')
+    # Accept either a full org URL or a bare org name.
+    if org_url and not org_url.startswith(('http://', 'https://')):
+        org_url = f'https://dev.azure.com/{org_url}'
+    project = (os.environ.get('AZURE_DEVOPS_PROJECT') or '').strip()
+    pat = (os.environ.get('AZURE_DEVOPS_PAT') or '').strip()
+    if not org_url or not project or not pat:
+        return None, None
+
+    bug_type = (os.environ.get('AZURE_DEVOPS_BUG_TYPE') or 'Bug').strip() or 'Bug'
+    feature_type = (os.environ.get('AZURE_DEVOPS_FEATURE_TYPE') or 'Issue').strip() or 'Issue'
+    wit_type = bug_type if feedback_type == 'bug' else feature_type
+
+    # Resolve a public screenshot URL with the same reachability guard as GitHub.
+    screenshot_url = None
+    saved_name = saved_storage_name
+    if image_base64:
+        if saved_name is None and _embed_feedback_screenshots_enabled() and workspace_id is not None:
+            saved_name = _save_feedback_screenshot_to_media_storage(workspace_id, image_base64)
+        if saved_name and _embed_feedback_screenshots_enabled():
+            candidate = _public_url_for_stored_media(request, saved_name)
+            if candidate and _media_url_is_public_fetchable(candidate):
+                screenshot_url = candidate
+
+    title = f'[Feedback][{feedback_type}] {content[:60]}' + ('...' if len(content) > 60 else '')
+    body_html = _build_feedback_workitem_body_html(
+        feedback_type,
+        content,
+        source,
+        page_url=page_url,
+        submitter_label=submitter_label,
+        screenshot_url=screenshot_url,
+        screenshot_storage_name=(saved_name if (saved_name and not screenshot_url) else None),
+    )
+
+    # Agile "Bug" surfaces rich text in Repro Steps; other types use Description.
+    description_field = (
+        'Microsoft.VSTS.TCM.ReproSteps'
+        if wit_type.strip().lower() == 'bug'
+        else 'System.Description'
+    )
+    patch = [
+        {'op': 'add', 'path': '/fields/System.Title', 'value': title[:255]},
+        {'op': 'add', 'path': f'/fields/{description_field}', 'value': body_html},
+        {'op': 'add', 'path': '/fields/System.Tags', 'value': f'feedback; {feedback_type}'},
+    ]
+    area = (os.environ.get('AZURE_DEVOPS_AREA_PATH') or '').strip()
+    if area:
+        patch.append({'op': 'add', 'path': '/fields/System.AreaPath', 'value': area})
+    iteration = (os.environ.get('AZURE_DEVOPS_ITERATION_PATH') or '').strip()
+    if iteration:
+        patch.append({'op': 'add', 'path': '/fields/System.IterationPath', 'value': iteration})
+
+    # The work item type goes in the path as `$<Type>` (e.g. /workitems/$Bug).
+    url = f'{org_url}/{quote(project)}/_apis/wit/workitems/${quote(wit_type)}?api-version=7.0'
+    try:
+        resp = requests.post(
+            url,
+            headers={
+                'Content-Type': 'application/json-patch+json',
+                'Accept': 'application/json',
+            },
+            auth=('', pat),  # Azure DevOps PAT: basic auth with empty username
+            json=patch,
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            html_link = ((data.get('_links') or {}).get('html') or {}).get('href')
+            if html_link:
+                return html_link, None
+            wid = data.get('id')
+            if wid:
+                return f'{org_url}/{quote(project)}/_workitems/edit/{wid}', None
+            return None, None
+        logging.warning(
+            'Feedback Azure DevOps work item failed: %s %s', resp.status_code, resp.text[:200]
+        )
+        return None, resp.text
+    except Exception as e:
+        logging.warning('Feedback Azure DevOps work item error: %s', e)
+        return None, str(e)
+
+
+def _create_feedback_tracker_item(*args, **kwargs):
+    """Dispatch feedback to the configured issue tracker backend.
+
+    Selected by env FEEDBACK_TRACKER (github|azure, default github). Both backends
+    share the same signature and return (item_url or None, error or None).
+    """
+    import os
+    tracker = (os.environ.get('FEEDBACK_TRACKER') or 'github').strip().lower()
+    if tracker == 'azure':
+        return _create_azure_devops_feedback_workitem(*args, **kwargs)
+    return _create_github_feedback_issue(*args, **kwargs)
 
 
 def _send_feedback_admin_email(
@@ -1152,7 +1313,10 @@ class FeedbackView(APIView):
     With Authorization: Bearer, logged-in user is attached from the token (not from body).
     Screenshots are saved with Django default file storage to media/<workspace_id>/feedbacks/
     (same backend as product Media; S3 when STORAGES/default is configured).
-    Creates GitHub issue if GITHUB_TOKEN and GITHUB_REPO are set; sends email to admin if configured.
+    Creates an issue tracker item via the backend selected by FEEDBACK_TRACKER
+    (github -> GitHub issue when GITHUB_TOKEN/GITHUB_REPO set; azure -> Azure DevOps
+    work item when AZURE_DEVOPS_ORG_URL/PROJECT/PAT set). Missing credentials no-op.
+    Sends email to admin if configured.
     """
     permission_classes = [AllowAny]
 
@@ -1185,7 +1349,7 @@ class FeedbackView(APIView):
                 image_public_url = _public_url_for_stored_media(request, saved_storage_name)
 
         issue_url = None
-        _issue_url, _err = _create_github_feedback_issue(
+        _issue_url, _err = _create_feedback_tracker_item(
             feedback_type,
             content,
             source,

@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('common', '0009_auditlog_module'),
+        ('common', '0011_media_is_sensitive'),
     ]
 
     operations = [

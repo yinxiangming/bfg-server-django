@@ -778,6 +778,9 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'twitter_url': settings_obj.twitter_url or '',
             'instagram_url': settings_obj.instagram_url or '',
             'default_currency': settings_obj.default_currency or DEFAULT_CURRENCY_CODE,
+            # ISO 3166-1 alpha-2 or ''. The storefront uses it for hreflang region, schema.org
+            # shipping destination and areaServed, and omits those claims when it is blank.
+            'country': (settings_obj.country or '').upper(),
             'top_bar_announcement': general_custom.get('top_bar_announcement', ''),
             'footer_copyright': general_custom.get('footer_copyright', ''),
             'site_announcement': general_custom.get('site_announcement', ''),
@@ -906,14 +909,18 @@ class SettingsViewSet(viewsets.ModelViewSet):
                         payload['theme'] = 'website'
                     elif tp == 'themes/default' or not tp:
                         payload['theme'] = 'store'
-                site_default_language = getattr(site, 'default_language', None) or 'en'
+                # Site wins, then the workspace's own Settings, then 'en'. Skipping
+                # Settings here would ignore a language the workspace has explicitly set.
+                site_default_language = (
+                    getattr(site, 'default_language', None) or settings_obj.default_language or 'en'
+                )
                 payload['default_language'] = site_default_language
                 site_languages = getattr(site, 'languages', None) or [site_default_language]
                 payload['languages'] = list(site_languages) if isinstance(site_languages, list) else [site_default_language]
         except (ImportError, AttributeError):
             pass
         if 'default_language' not in payload:
-            payload['default_language'] = 'en'
+            payload['default_language'] = settings_obj.default_language or 'en'
         if not payload.get('languages'):
             payload['languages'] = [payload['default_language']]
 

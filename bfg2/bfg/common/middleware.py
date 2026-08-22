@@ -148,6 +148,46 @@ def _get_workspace_by_id(workspace_id):
         return None
 
 
+def resolve_workspace_for_public_request(request, extra_host=None):
+    """Best-effort workspace for a request the middleware left tenant-less.
+
+    Endpoints under :data:`PUBLIC_PATHS` (``/api/v1/auth/`` above all) run with
+    ``request.workspace = None`` because the caller has no tenant *yet* — that
+    is the whole point of a sign-up. Sign-in views still need to know which
+    storefront the visitor came from so they can attach a Customer row and mint
+    a token carrying the ``workspace_id`` claim.
+
+    Resolution order mirrors :meth:`WorkspaceMiddleware._resolve_workspace`
+    minus the JWT claim (there is no token yet): explicit ``X-Workspace-ID``,
+    then ``extra_host`` (a frontend host captured earlier in the flow), then the
+    forwarded/actual Host header. Returns ``None`` when nothing matches —
+    callers must treat a workspace as optional, never assume one.
+    """
+    workspace = getattr(request, 'workspace', None)
+    if workspace:
+        return workspace
+
+    ws_id = request.headers.get('X-Workspace-ID')
+    if ws_id:
+        workspace = _get_workspace_by_id(ws_id)
+        if workspace:
+            return workspace
+
+    candidates = (
+        extra_host,
+        request.META.get('HTTP_X_FORWARDED_HOST'),
+        request.get_host(),
+    )
+    for raw in candidates:
+        host = (raw or '').split(',')[0].strip().split(':')[0]
+        if not host:
+            continue
+        workspace = _get_workspace_by_domain(host)
+        if workspace:
+            return workspace
+    return None
+
+
 def invalidate_workspace_cache(workspace):
     """Drop every cache key tied to ``workspace``.
 

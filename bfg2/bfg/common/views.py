@@ -589,6 +589,18 @@ class AddressViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
+def _model_file_url(field_file):
+    """URL for an ImageField/FileField, or '' when nothing is attached.
+
+    ``.url`` raises ValueError on an empty field, and the storefront config is
+    built for anonymous callers where an exception means a blank storefront.
+    """
+    try:
+        return field_file.url if field_file else ''
+    except (ValueError, AttributeError):
+        return ''
+
+
 class SettingsViewSet(viewsets.ModelViewSet):
     """
     Workspace settings management ViewSet.
@@ -729,6 +741,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
         general_custom = (settings_obj.custom_settings or {}).get('general') or {}
         storefront_ui = (settings_obj.custom_settings or {}).get('storefront_ui') or {}
         shop_custom = (settings_obj.custom_settings or {}).get('shop') or {}
+        analytics_custom = (settings_obj.custom_settings or {}).get('analytics') or {}
         default_header_options = {
             'show_search': True,
             'show_cart': True,
@@ -797,6 +810,21 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'allowed_color_modes': allowed_color_modes,
             'default_color_mode': default_color_mode,
             'review_moderation_required': bool(shop_custom.get('review_moderation_required', False)),
+            # Per-workspace web analytics. The GA4 measurement id is a public
+            # client-side tag id, never a secret — and one deployment serves
+            # many storefronts, so it has to travel with the workspace config
+            # rather than a build-time env var.
+            'analytics': {
+                'google_analytics_id': str(analytics_custom.get('google_analytics_id') or '').strip(),
+            },
+            # Branding assets. The admin stores uploads as data URLs under
+            # custom_settings.general, so prefer those and fall back to the
+            # model's file fields for workspaces provisioned another way.
+            'logo': general_custom.get('logo') or _model_file_url(settings_obj.logo),
+            'favicon': general_custom.get('favicon') or _model_file_url(settings_obj.favicon),
+            # With a logo set, the site name is hidden by default — the logo
+            # usually contains the wordmark already. Opt back in per workspace.
+            'show_site_name_with_logo': bool(general_custom.get('show_site_name_with_logo', False)),
         }
 
         try:

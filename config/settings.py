@@ -369,11 +369,16 @@ CORS_ALLOW_CREDENTIALS = True
 # Private-network requests stay on in non-prod so engineers can reach
 # the API from the local network; prod should never need this.
 CORS_ALLOW_PRIVATE_NETWORK = _env_bool('CORS_ALLOW_PRIVATE_NETWORK', default=not IS_PROD)
+# x-bfg-cart-session / x-cart-id carry guest-cart identity. The storefront and the
+# API sit on different registrable domains (geeker.co.nz vs surlex.co.nz), so the
+# sessionid cookie is cross-site and SameSite=Lax keeps the browser from ever sending
+# it back — every request would otherwise land on a brand-new empty cart. Leaving
+# these two out of the allowlist fails the preflight and reinstates that bug.
 CORS_ALLOW_HEADERS = [
     'accept', 'accept-language', 'accept-encoding', 'authorization',
     'content-type', 'dnt', 'origin', 'user-agent', 'x-csrftoken',
     'x-requested-with', 'x-workspace-id', 'x-forwarded-host',
-    'x-api-key', 'x-api-secret',
+    'x-api-key', 'x-api-secret', 'x-bfg-cart-session', 'x-cart-id',
 ]
 CORS_EXPOSE_HEADERS = [
     'X-Request-Id',

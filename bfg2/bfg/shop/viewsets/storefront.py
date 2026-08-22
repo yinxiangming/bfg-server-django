@@ -520,8 +520,16 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                             return cart
                 except (ValueError, TypeError):
                     pass
+            # Same opaque key the guest branch below uses. Without this, everything a
+            # visitor added before signing in stays stranded on the guest cart, because
+            # the merge below only ever looked at the (cross-site, unsent) session cookie.
+            # merge_guest_cart_to_customer deletes the guest cart, so re-sending the key
+            # on later requests is a no-op rather than a double-count.
+            bfg_cart_session = (self.request.headers.get('X-Bfg-Cart-Session') or '').strip()
             session_key = self.request.session.session_key
-            if session_key:
+            if bfg_cart_session:
+                cart = service.merge_guest_cart_to_customer(bfg_cart_session[:255], customer)
+            elif session_key:
                 cart = service.merge_guest_cart_to_customer(session_key, customer)
             else:
                 cart = service.get_or_create_cart(customer)

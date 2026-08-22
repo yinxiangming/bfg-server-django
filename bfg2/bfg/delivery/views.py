@@ -543,19 +543,25 @@ class FreightServiceViewSet(viewsets.ModelViewSet):
             is_active=True
         ).select_related('carrier').prefetch_related('delivery_zones')
         
-        # Filter by delivery zones that include this country
-        delivery_zones = DeliveryZone.objects.filter(
-            workspace=request.workspace,
-            is_active=True,
-            countries__contains=[country]
-        )
+        # Filter by delivery zones that include this country.
+        # A workspace has a handful of zones, and JSONField's `contains` lookup is
+        # backend-specific — MySQL supports it, SQLite (what the test suite runs on) raises
+        # NotSupportedError, which left this endpoint's country matching unverifiable.
+        # Matching in Python gives the same answer on every backend for one small query,
+        # and tolerates a zone stored with lower-case codes.
+        wanted = country.strip().upper()
+        zone_ids = [
+            zone.id
+            for zone in DeliveryZone.objects.filter(workspace=request.workspace, is_active=True)
+            if any(str(c).strip().upper() == wanted for c in (zone.countries or []))
+        ]
         from django.db.models import Count
         # Freight services that either: (1) have no delivery zones (all countries),
         # or (2) have at least one zone containing this country. Avoid delivery_zones__in=[]
         # which can yield no results in some ORM versions.
-        if delivery_zones.exists():
+        if zone_ids:
             queryset = queryset.filter(
-                models.Q(delivery_zones__in=delivery_zones) | models.Q(delivery_zones__isnull=True)
+                models.Q(delivery_zones__id__in=zone_ids) | models.Q(delivery_zones__isnull=True)
             ).distinct()
         else:
             queryset = queryset.annotate(_dz_count=Count('delivery_zones')).filter(_dz_count=0)

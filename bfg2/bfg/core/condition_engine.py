@@ -113,8 +113,14 @@ class ConditionEngine:
         Evaluate a single rule.
         Supports nested conditions.
         """
-        # Nested condition (has 'operator' key)
-        if 'operator' in rule:
+        # A nested group carries its own 'rules' list; a leaf carries a 'field'. Both
+        # also carry an 'operator', so dispatching on that alone sent every leaf down
+        # this branch, where its absent 'rules' list read as "no conditions" and matched
+        # unconditionally — `50 >= 100` returned True, and so did an empty context. The
+        # comparison below was unreachable. In freight pricing, the only consumer, that
+        # meant a conditional service always took its first rule by priority: a
+        # `free_over_amount` config shipped free at every order value.
+        if 'rules' in rule:
             return self.evaluate(rule, context)
         
         # Leaf condition

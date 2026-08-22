@@ -94,6 +94,11 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     'accept-language',
     'x-forwarded-host',
     'x-workspace-id',
+    # Guest cart identity, read by StorefrontCartViewSet._get_or_create_cart. The
+    # storefront reaches the API cross-site, so the session cookie never arrives and
+    # this header is the only thing keeping a guest's cart from resetting per request.
+    'x-bfg-cart-session',
+    'x-cart-id',
 ]
 
 # Phase-0 PR-02: CSP origin lists consumed by SecurityHeadersMiddleware.

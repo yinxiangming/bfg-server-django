@@ -589,6 +589,18 @@ class AddressViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
+def _model_file_url(field_file):
+    """URL for an ImageField/FileField, or '' when nothing is attached.
+
+    ``.url`` raises ValueError on an empty field, and the storefront config is
+    built for anonymous callers where an exception means a blank storefront.
+    """
+    try:
+        return field_file.url if field_file else ''
+    except (ValueError, AttributeError):
+        return ''
+
+
 class SettingsViewSet(viewsets.ModelViewSet):
     """
     Workspace settings management ViewSet.
@@ -805,6 +817,14 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'analytics': {
                 'google_analytics_id': str(analytics_custom.get('google_analytics_id') or '').strip(),
             },
+            # Branding assets. The admin stores uploads as data URLs under
+            # custom_settings.general, so prefer those and fall back to the
+            # model's file fields for workspaces provisioned another way.
+            'logo': general_custom.get('logo') or _model_file_url(settings_obj.logo),
+            'favicon': general_custom.get('favicon') or _model_file_url(settings_obj.favicon),
+            # With a logo set, the site name is hidden by default — the logo
+            # usually contains the wordmark already. Opt back in per workspace.
+            'show_site_name_with_logo': bool(general_custom.get('show_site_name_with_logo', False)),
         }
 
         try:

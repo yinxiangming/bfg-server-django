@@ -116,14 +116,21 @@ def strip_sku_prefix(sku: Optional[str], prefix: Optional[str]) -> str:
     return code
 
 
-def product_stock_level(product) -> Optional[int]:
+def available_units(product, variant=None) -> Optional[int]:
     """
-    Units of ``product`` a visitor could buy right now, or ``None`` when untracked.
+    Units a shopper could buy right now, or ``None`` when the product is untracked.
 
-    Deliberately mirrors ``CartService.add_to_cart``: the same raw ``stock_quantity``
-    figures, with no reservation arithmetic. The badge on the page and the check that
-    refuses the add-to-cart have to agree, and the cheapest way to guarantee that is to
-    read the same numbers.
+    The single definition of "how many are left", shared by the badge on the page and by
+    the check in ``CartService`` that refuses the sale. Two definitions is one too many:
+    a product that reads "In stock" and then refuses to go in the cart is worse than one
+    that admits up front it has run out.
+
+    A named variant is judged on its own count. Without one, a product that has active
+    variants is judged on their sum rather than its own ``stock_quantity`` field — for a
+    variant product that field is bookkeeping, not what gets picked and shipped.
+
+    No reservation arithmetic: this reads the same raw ``stock_quantity`` columns the
+    order path decrements, not ``VariantInventory``, which only some workspaces populate.
 
     Reads ``variants`` through the prefetch the storefront viewset already sets up, so
     filtering happens in Python rather than as a query per product.
@@ -131,10 +138,18 @@ def product_stock_level(product) -> Optional[int]:
     if not getattr(product, 'track_inventory', True):
         return None
 
+    if variant is not None:
+        return max(0, variant.stock_quantity or 0)
+
     active_variants = [v for v in product.variants.all() if v.is_active]
     if active_variants:
         return sum(max(0, v.stock_quantity or 0) for v in active_variants)
     return max(0, product.stock_quantity or 0)
+
+
+def product_stock_level(product) -> Optional[int]:
+    """Units of ``product`` across all its variants. See :func:`available_units`."""
+    return available_units(product)
 
 
 def resolve_product_stock(product, display_settings: Dict[str, str]) -> Dict[str, Any]:

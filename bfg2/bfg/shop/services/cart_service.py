@@ -10,6 +10,7 @@ from django.db import transaction
 from bfg.core.services import BaseService
 from bfg.shop.exceptions import EmptyCart, InsufficientStock
 from bfg.shop.models import Cart, CartItem, Product, ProductVariant
+from bfg.shop.services.storefront_display_service import available_units
 from bfg.common.models import Customer
 
 
@@ -156,10 +157,17 @@ class CartService(BaseService):
         """
         self.validate_workspace_access(product)
 
-        # Check stock availability
-        if product.track_inventory and not self._allows_backorder():
-            available_stock = variant.stock_quantity if variant else product.stock_quantity
-            if available_stock < quantity:
+        # Check stock availability.
+        #
+        # `available_units` is the same function the storefront badge reads, and it
+        # returns None for an untracked product, which subsumes the track_inventory
+        # guard this used to carry. It replaced `product.stock_quantity` for the
+        # no-variant case: on a product that has variants, that column is bookkeeping,
+        # so a card whose Add to Cart sends no variant could offer a product the
+        # variants had run out of — or refuse one they still held.
+        if not self._allows_backorder():
+            available_stock = available_units(product, variant)
+            if available_stock is not None and available_stock < quantity:
                 raise InsufficientStock(
                     f"Only {available_stock} units available"
                 )
@@ -209,11 +217,11 @@ class CartService(BaseService):
         Raises:
             InsufficientStock: If not enough stock available
         """
-        # Check stock availability
+        # Check stock availability — same single definition as add_to_cart.
         product = cart_item.product
-        if product.track_inventory and not self._allows_backorder():
-            available_stock = cart_item.variant.stock_quantity if cart_item.variant else product.stock_quantity
-            if available_stock < quantity:
+        if not self._allows_backorder():
+            available_stock = available_units(product, cart_item.variant)
+            if available_stock is not None and available_stock < quantity:
                 raise InsufficientStock(
                     f"Only {available_stock} units available"
                 )

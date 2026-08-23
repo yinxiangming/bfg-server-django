@@ -382,6 +382,60 @@ class TestBackorderReachesTheCart:
         assert self.add(workspace, product, quantity=50).status_code in (200, 201)
 
 
+class TestBadgeAndCartAgree:
+    """
+    The page and the cart must not contradict each other. Two definitions of "how many
+    are left" is one too many: a product that reads "In stock" and then refuses to go in
+    the cart is worse than one that says up front it has run out.
+    """
+
+    def add(self, workspace, product, quantity=1, variant=None):
+        client = APIClient()
+        client.credentials(
+            HTTP_X_WORKSPACE_ID=str(workspace.id),
+            HTTP_X_BFG_CART_SESSION='agreement-guest-key',
+        )
+        payload = {'product': product.id, 'quantity': quantity}
+        if variant is not None:
+            payload['variant'] = variant.id
+        return client.post('/api/v1/store/cart/add_item/', payload, format='json')
+
+    def test_variants_sold_out_beats_a_stale_product_count(self, workspace):
+        """
+        A card's Add to Cart sends no variant. The cart used to fall back to the
+        product's own `stock_quantity` there — bookkeeping on a variant product — so it
+        would have sold something the variants had run out of.
+        """
+        product = make_product(workspace, stock_quantity=18)
+        ProductVariant.objects.create(product=product, sku='V1', name='Red', stock_quantity=0)
+
+        assert fetch(workspace, product).data['in_stock'] is False
+        assert self.add(workspace, product).status_code == 400
+
+    def test_variant_stock_beats_a_zero_product_count(self, workspace):
+        product = make_product(workspace, stock_quantity=0)
+        ProductVariant.objects.create(product=product, sku='V1', name='Red', stock_quantity=5)
+
+        assert fetch(workspace, product).data['in_stock'] is True
+        assert self.add(workspace, product).status_code in (200, 201)
+
+    def test_a_named_variant_is_judged_on_its_own_count(self, workspace):
+        """The sum says four are available; this particular one has none."""
+        product = make_product(workspace, stock_quantity=0)
+        empty = ProductVariant.objects.create(product=product, sku='V1', name='Red',
+                                              stock_quantity=0)
+        ProductVariant.objects.create(product=product, sku='V2', name='Blue',
+                                      stock_quantity=4)
+
+        assert fetch(workspace, product).data['in_stock'] is True
+        assert self.add(workspace, product, variant=empty).status_code == 400
+
+    def test_untracked_products_are_never_refused(self, workspace):
+        product = make_product(workspace, track_inventory=False, stock_quantity=0)
+        assert fetch(workspace, product).data['purchasable'] is True
+        assert self.add(workspace, product, quantity=999).status_code in (200, 201)
+
+
 class TestNotifyMe:
     def url(self, product):
         return f'{PRODUCTS_URL}{product.slug}/notify-me/'

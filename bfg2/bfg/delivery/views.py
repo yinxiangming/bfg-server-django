@@ -12,6 +12,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
 from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite
+from bfg.common.constants import get_default_country_for_workspace
 from bfg.delivery.models import (
     Warehouse, Carrier, FreightService, Manifest, Consignment,
     Package, TrackingEvent, FreightStatus, DeliveryZone, PackagingType,
@@ -190,7 +191,8 @@ class CarrierViewSet(viewsets.ModelViewSet):
                 'city': pickup_address.get('city', ''),
                 'state': pickup_address.get('state', ''),
                 'postal_code': pickup_address.get('postal_code', ''),
-                'country': pickup_address.get('country', 'NZ'),
+                'country': (pickup_address.get('country') or
+                            get_default_country_for_workspace(request.workspace)),
                 'phone': pickup_address.get('phone', ''),
                 'email': '',
                 'company': '',
@@ -223,7 +225,7 @@ class CarrierViewSet(viewsets.ModelViewSet):
                 'city': warehouse.city,
                 'state': warehouse.state or '',
                 'postal_code': warehouse.postal_code,
-                'country': warehouse.country or 'NZ',
+                'country': warehouse.country or get_default_country_for_workspace(request.workspace),
                 'phone': warehouse.phone or '',
                 'email': warehouse.email or '',
                 'company': '',
@@ -383,7 +385,7 @@ class CarrierViewSet(viewsets.ModelViewSet):
             address_line1=warehouse.address_line1,
             city=warehouse.city,
             postal_code=warehouse.postal_code,
-            country=warehouse.country or 'NZ',
+            country=warehouse.country or get_default_country_for_workspace(request.workspace),
             defaults={
                 'address_line2': warehouse.address_line2 or '',
                 'state': warehouse.state or '',

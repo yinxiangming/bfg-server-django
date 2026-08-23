@@ -127,7 +127,7 @@ class StarshipitCarrier(BaseCarrierPlugin):
             'suburb': address.get('line2', '') or address.get('suburb', ''),
             'city': address.get('city', ''),
             'post_code': address.get('postal_code', ''),
-            'country': address.get('country', 'NZ'),
+            'country': address.get('country') or self.default_country,
         }
     
     # ========================================================================
@@ -184,7 +184,7 @@ class StarshipitCarrier(BaseCarrierPlugin):
                     'city': recipient_address.get('city', ''),
                     'state': recipient_address.get('state', ''),
                     'post_code': recipient_address.get('postal_code', ''),
-                    'country_code': recipient_address.get('country', 'NZ'),
+                    'country_code': recipient_address.get('country') or self.default_country,
                 },
                 'sender': {
                     'street': sender_address.get('line1', ''),
@@ -192,7 +192,7 @@ class StarshipitCarrier(BaseCarrierPlugin):
                     'city': sender_address.get('city', ''),
                     'state': sender_address.get('state', ''),
                     'post_code': sender_address.get('postal_code', ''),
-                    'country_code': sender_address.get('country', 'NZ'),
+                    'country_code': sender_address.get('country') or self.default_country,
                 },
                 'packages': [],
             }
@@ -416,7 +416,7 @@ class StarshipitCarrier(BaseCarrierPlugin):
                 'city': recipient_address.get('city', ''),
                 'state': recipient_address.get('state', ''),
                 'post_code': recipient_address.get('postal_code', ''),
-                'country': recipient_address.get('country', 'NZ'),
+                'country': recipient_address.get('country') or self.default_country,
             },
             'sender': {
                 'name': sender_address.get('name', ''),
@@ -428,7 +428,7 @@ class StarshipitCarrier(BaseCarrierPlugin):
                 'city': sender_address.get('city', ''),
                 'state': sender_address.get('state', ''),
                 'post_code': sender_address.get('postal_code', ''),
-                'country': sender_address.get('country', 'NZ'),
+                'country': sender_address.get('country') or self.default_country,
             },
             'packages': [],
         }

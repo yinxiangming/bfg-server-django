@@ -3,6 +3,7 @@
 Agent capabilities for delivery: ship_order, get_shipping_options.
 Handlers delegate to DeliveryService / existing view logic; required_permission = IsWorkspaceStaff.
 """
+from bfg.common.constants import get_default_country_for_workspace
 from bfg.common.models import Address
 from bfg.core.agent import AgentCapability, registry as agent_registry
 from bfg.core.permissions import IsWorkspaceStaff
@@ -28,7 +29,7 @@ def _ship_order_handler(request, *, order_id: int, carrier_id: int, service_code
         address_line1=warehouse.address_line1,
         city=warehouse.city,
         postal_code=warehouse.postal_code,
-        country=warehouse.country or "NZ",
+        country=warehouse.country or get_default_country_for_workspace(workspace),
         defaults={
             "address_line2": warehouse.address_line2 or "",
             "state": warehouse.state or "",

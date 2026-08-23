@@ -149,7 +149,12 @@ def test_add_to_cart_insufficient_stock_raises(monkeypatch):
     service = CartService(workspace=SimpleNamespace(id=1), user=None)
     monkeypatch.setattr(service, "validate_workspace_access", lambda _obj: None)
 
-    product = SimpleNamespace(id=1, price=Decimal("10.00"), track_inventory=True, stock_quantity=2)
+    # `variants` is part of every real Product; the stock check reads it to decide
+    # whether a product's own count or its variants' is the sellable one.
+    product = SimpleNamespace(
+        id=1, price=Decimal("10.00"), track_inventory=True, stock_quantity=2,
+        variants=SimpleNamespace(all=lambda: []),
+    )
     cart = SimpleNamespace(id=1)
 
     with pytest.raises(InsufficientStock):
@@ -239,7 +244,10 @@ def test_update_cart_item_quantity_exceeds_stock_raises():
 
     cart_item = SimpleNamespace(
         quantity=1,
-        product=SimpleNamespace(track_inventory=True, stock_quantity=3),
+        product=SimpleNamespace(
+            track_inventory=True, stock_quantity=3,
+            variants=SimpleNamespace(all=lambda: []),
+        ),
         variant=None,
     )
 

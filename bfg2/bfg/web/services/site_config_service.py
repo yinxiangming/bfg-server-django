@@ -7,6 +7,7 @@ Load from JSON/YAML config (Site, Theme, Pages, Menus, Product categories) or ex
 from typing import Any, Dict, List, Optional
 from django.utils import timezone
 from django.contrib.auth import get_user_model
+from bfg.common.constants import DEFAULT_CURRENCY_CODE
 from bfg.core.services import BaseService
 from bfg.common.models import Settings, Workspace, normalize_hostname, upsert_custom_workspace_domain
 from bfg.common.utils import first_staff_user_for_workspace
@@ -138,7 +139,7 @@ class SiteConfigService(BaseService):
         if note:
             settings_obj, _ = Settings.objects.get_or_create(
                 workspace=self.workspace,
-                defaults={"default_language": "en", "default_currency": "NZD"},
+                defaults={"default_language": "en", "default_currency": DEFAULT_CURRENCY_CODE},
             )
             custom = dict(settings_obj.custom_settings or {})
             general = dict(custom.get("general") or {})
@@ -153,7 +154,7 @@ class SiteConfigService(BaseService):
             return
         settings_obj, _ = Settings.objects.get_or_create(
             workspace=self.workspace,
-            defaults={"default_language": "en", "default_currency": "NZD"},
+            defaults={"default_language": "en", "default_currency": DEFAULT_CURRENCY_CODE},
         )
         custom = dict(settings_obj.custom_settings or {})
         general = dict(custom.get("general") or {})

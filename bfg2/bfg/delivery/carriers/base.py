@@ -11,7 +11,7 @@ from decimal import Decimal
 from dataclasses import dataclass
 from django.utils import timezone
 
-from bfg.common.constants import get_default_country_for_workspace
+from bfg.common.constants import DEFAULT_CURRENCY_CODE, get_default_country_for_workspace
 
 
 @dataclass
@@ -20,7 +20,7 @@ class ShippingOption:
     service_code: str
     service_name: str
     price: Decimal
-    currency: str = 'NZD'
+    currency: str = DEFAULT_CURRENCY_CODE
     estimated_days_min: int = 1
     estimated_days_max: int = 7
     carrier_service_id: Optional[str] = None

@@ -6,6 +6,7 @@ Settings management service
 
 from typing import Any, Dict
 from bfg.core.services import BaseService
+from bfg.common.constants import DEFAULT_CURRENCY_CODE
 from bfg.common.models import Settings, Workspace
 
 
@@ -32,7 +33,7 @@ class SettingsService(BaseService):
             workspace=workspace,
             defaults={
                 'default_language': 'en',
-                'default_currency': 'NZD',
+                'default_currency': DEFAULT_CURRENCY_CODE,
                 'default_timezone': 'UTC',
                 'supported_languages': ['en'],
                 'features': {},

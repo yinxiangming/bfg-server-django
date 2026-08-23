@@ -8,7 +8,7 @@ from .viewsets import (
     MediaViewSet, ProductMediaViewSet, SalesChannelViewSet, ProductChannelListingViewSet,
     ChannelCollectionViewSet, ReturnViewSet, ReturnLineItemViewSet,
     ProductReviewViewSet, SubscriptionPlanViewSet, OrderPackageViewSet,
-    WishlistViewSet
+    WishlistViewSet, StockNotificationViewSet
 )
 
 router = DefaultRouter()
@@ -30,6 +30,7 @@ router.register(r'returns', ReturnViewSet, basename='return')
 router.register(r'return-items', ReturnLineItemViewSet, basename='return-item')
 router.register(r'order-packages', OrderPackageViewSet, basename='order-package')
 router.register(r'wishlists', WishlistViewSet, basename='wishlist')
+router.register(r'stock-notifications', StockNotificationViewSet, basename='stock-notification')
 
 # Custom nested routes must come BEFORE router.urls to be matched first
 urlpatterns = [

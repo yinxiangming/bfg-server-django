@@ -11,7 +11,10 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 from config.authentication import OptionalBearerTokenAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication as BearerTokenAuthentication
-from django.db import transaction
+from django.db import transaction, IntegrityError
+from django.db.models import IntegerField, OuterRef, Q, Subquery, Sum
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import validate_email
 from django.utils import timezone
 from decimal import Decimal
 from django.contrib.auth import get_user_model
@@ -20,7 +23,7 @@ import uuid
 from bfg.common.models import Customer, Address
 from bfg.shop.models import (
     Product, ProductVariant, ProductCategory, ProductTag,
-    Cart, CartItem, Order, Store, ProductReview
+    Cart, CartItem, Order, Store, ProductReview, StockNotification
 )
 from bfg.shop.serializers.storefront import (
     StorefrontProductSerializer, StorefrontCategorySerializer,
@@ -35,6 +38,7 @@ from bfg.common.services import CustomerService
 from bfg.common.utils import get_required_workspace
 from django.contrib.contenttypes.models import ContentType
 from bfg.shop.services import CartService, OrderService
+from bfg.shop.services.storefront_display_service import get_storefront_display_settings
 from bfg.shop.exceptions import InsufficientStock
 from bfg.finance.models import Payment, PaymentGateway, Currency
 from bfg.finance.services import PaymentService
@@ -62,7 +66,33 @@ class StorefrontProductViewSet(viewsets.ReadOnlyModelViewSet):
         ).prefetch_related(
             'media_links__media', 'variants', 'categories', 'tags'
         )
-        
+
+        # Out-of-stock policy 'hide' takes a sold-out product off the storefront entirely
+        # — out of listings, and 404 on its detail page, since retrieve() resolves through
+        # this same queryset.
+        #
+        # The available count comes from a correlated subquery rather than a join
+        # annotation on purpose: the sort branches below already annotate
+        # Sum('orderitem__quantity'), and a second aggregate over a second join would
+        # multiply both sums by each other's row count.
+        if get_storefront_display_settings(workspace)['out_of_stock_policy'] == 'hide':
+            variant_stock = (
+                ProductVariant.objects
+                .filter(product=OuterRef('pk'), is_active=True)
+                .values('product')
+                .annotate(total=Sum('stock_quantity'))
+                .values('total')
+            )
+            queryset = queryset.annotate(
+                variant_stock_total=Subquery(variant_stock, output_field=IntegerField())
+            ).filter(
+                # Untracked products are always sellable; a product with active variants
+                # is judged on their combined stock; everything else on its own.
+                Q(track_inventory=False)
+                | Q(variant_stock_total__gt=0)
+                | Q(variant_stock_total__isnull=True, stock_quantity__gt=0)
+            )
+
         # Filtering
         q = self.request.query_params.get('q')
         if q:
@@ -272,6 +302,58 @@ class StorefrontProductViewSet(viewsets.ReadOnlyModelViewSet):
                 is_approved=is_approved_new
             )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='notify-me')
+    def notify_me(self, request, *args, **kwargs):
+        """
+        Register an email to be told when a sold-out product returns.
+
+        Only accepted while the workspace's out-of-stock policy is `notify` — under any
+        other policy there is no promise to keep, and an endpoint that quietly banks
+        addresses it will never write to is worse than one that refuses.
+
+        The response is identical whether the address was new or already on the list.
+        Distinguishing them would turn this into an oracle for "is this address a
+        customer here", on an endpoint that needs no authentication.
+        """
+        workspace = get_required_workspace(request)
+        if get_storefront_display_settings(workspace)['out_of_stock_policy'] != 'notify':
+            raise NotFound("Back-in-stock notifications are not enabled")
+
+        product = self._get_product_by_id_or_slug(kwargs)
+
+        email = str(request.data.get('email') or '').strip()
+        try:
+            validate_email(email)
+        except DjangoValidationError:
+            raise ValidationError({'email': 'Enter a valid email address.'})
+
+        variant = None
+        variant_id = request.data.get('variant_id')
+        if variant_id:
+            try:
+                variant = ProductVariant.objects.get(id=variant_id, product=product)
+            except (ProductVariant.DoesNotExist, ValueError, TypeError):
+                raise ValidationError({'variant_id': 'Unknown variant.'})
+
+        customer = None
+        if request.user and request.user.is_authenticated:
+            customer = Customer.objects.filter(workspace=workspace, user=request.user).first()
+
+        try:
+            StockNotification.objects.get_or_create(
+                workspace=workspace,
+                product=product,
+                variant=variant,
+                email=email,
+                defaults={'customer': customer},
+            )
+        except IntegrityError:
+            # Lost a race against a concurrent identical request; the row the caller
+            # wanted exists either way.
+            pass
+
+        return Response({'registered': True}, status=status.HTTP_201_CREATED)
 
     def _get_product_by_id_or_slug(self, kwargs):
         """Resolve product by id_or_slug (numeric id or slug)."""

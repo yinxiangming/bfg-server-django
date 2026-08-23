@@ -115,7 +115,8 @@ class OrderService(BaseService):
         shipping_cost = self._calculate_shipping_cost(
             shipping_method=shipping_method,
             freight_service_id=freight_service_id,
-            weight=weight
+            weight=weight,
+            order_amount=subtotal
         )
         
         # Apply free shipping discount if applicable
@@ -168,7 +169,8 @@ class OrderService(BaseService):
         self, 
         shipping_method: Optional[str] = None,
         freight_service_id: Optional[int] = None,
-        weight: Decimal = Decimal('0')
+        weight: Decimal = Decimal('0'),
+        order_amount: Decimal = Decimal('0')
     ) -> Decimal:
         """
         Calculate shipping cost using FreightService or fallback to legacy method.
@@ -177,6 +179,7 @@ class OrderService(BaseService):
             shipping_method: Legacy shipping method ('standard' or 'express')
             freight_service_id: FreightService ID for dynamic pricing
             weight: Total weight in kg for calculation
+            order_amount: Merchandise subtotal, for value-threshold pricing rules
             
         Returns:
             Decimal: Shipping cost
@@ -189,7 +192,7 @@ class OrderService(BaseService):
                     workspace=self.workspace,
                     is_active=True
                 )
-                return self._calculate_freight_service_cost(freight_service, weight)
+                return self._calculate_freight_service_cost(freight_service, weight, order_amount)
             except FreightService.DoesNotExist:
                 pass  # Fall back to legacy method
         
@@ -201,7 +204,7 @@ class OrderService(BaseService):
                 is_active=True
             ).first()
             if freight_service:
-                return self._calculate_freight_service_cost(freight_service, weight)
+                return self._calculate_freight_service_cost(freight_service, weight, order_amount)
         
         # Priority 3: Legacy fallback for backward compatibility
         if shipping_method == 'express':
@@ -214,7 +217,8 @@ class OrderService(BaseService):
     def _calculate_freight_service_cost(
         self, 
         freight_service: FreightService, 
-        weight: Decimal
+        weight: Decimal,
+        order_amount: Decimal = Decimal('0')
     ) -> Decimal:
         """
         Calculate shipping cost using FreightService config (bfg.delivery freight_calculator).
@@ -222,6 +226,7 @@ class OrderService(BaseService):
         Args:
             freight_service: FreightService instance
             weight: Total weight in kg
+            order_amount: Merchandise subtotal, for value-threshold pricing rules
             
         Returns:
             Decimal: Calculated shipping cost
@@ -238,7 +243,16 @@ class OrderService(BaseService):
         from bfg.shop.services.freight_price_resolver import get_freight_price_value
         context = None
         if config.get('mode') == 'conditional':
-            context = {'freight': {'weight': weight, 'order_amount': None}, 'weight': weight}
+            # order_amount was hardcoded to None here, and the engine treats a None
+            # actual as "no match" — so every `order_amount_gte` rule silently failed and
+            # the shipped `free_over_amount` template could never grant free shipping on
+            # the storefront. It only ever worked in the back office, which passes a real
+            # figure. Use the merchandise subtotal, matching `order.subtotal` there, so a
+            # quote and a later admin recalculation agree.
+            context = {
+                'freight': {'weight': weight, 'order_amount': order_amount},
+                'weight': weight,
+            }
         get_price = get_freight_price_value(self.workspace)
         return calculate_shipping_cost(weight, config, context=context, get_price_value=get_price)
     

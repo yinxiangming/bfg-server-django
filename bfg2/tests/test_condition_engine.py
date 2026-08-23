@@ -59,18 +59,18 @@ def test_a_top_level_field_resolves_without_a_prefix(engine):
 
 
 @pytest.mark.parametrize('operator,value,actual,expected', [
-    ('==', 'NZ', 'NZ', True),
-    ('!=', 'NZ', 'AU', True),
+    ('==', 'gold', 'gold', True),
+    ('!=', 'gold', 'silver', True),
     ('>', 10, 10, False),
     ('<=', 10, 10, True),
-    ('in', ['NZ', 'AU'], 'NZ', True),
-    ('in', ['NZ', 'AU'], 'US', False),
-    ('not_in', ['NZ', 'AU'], 'US', True),
-    ('contains', 'NZ', ['NZ', 'AU'], True),
+    ('in', ['gold', 'silver'], 'gold', True),
+    ('in', ['gold', 'silver'], 'bronze', False),
+    ('not_in', ['gold', 'silver'], 'bronze', True),
+    ('contains', 'gold', ['gold', 'silver'], True),
 ])
 def test_each_operator_actually_compares(engine, operator, value, actual, expected):
-    rule = {'field': 'country', 'operator': operator, 'value': value}
-    assert engine.evaluate(group(rule), {'country': actual}) is expected
+    rule = {'field': 'tier', 'operator': operator, 'value': value}
+    assert engine.evaluate(group(rule), {'tier': actual}) is expected
 
 
 def test_an_unknown_operator_is_an_error_rather_than_a_match(engine):
@@ -97,13 +97,13 @@ def test_or_requires_only_one(engine):
 def test_a_nested_group_is_still_recursed_into(engine):
     """The branch that leaves were wrongly taking still has to work for real groups."""
     nested = group(
-        {'field': 'country', 'operator': '==', 'value': 'NZ'},
+        {'field': 'tier', 'operator': '==', 'value': 'gold'},
         group(GTE_100, {'field': 'weight', 'operator': '>=', 'value': 3}, operator='OR'),
     )
-    assert engine.evaluate(nested, {'country': 'NZ', 'freight': {'order_amount': 120}, 'weight': 1}) is True
-    assert engine.evaluate(nested, {'country': 'NZ', 'freight': {'order_amount': 10}, 'weight': 5}) is True
-    assert engine.evaluate(nested, {'country': 'NZ', 'freight': {'order_amount': 10}, 'weight': 1}) is False
-    assert engine.evaluate(nested, {'country': 'AU', 'freight': {'order_amount': 120}, 'weight': 1}) is False
+    assert engine.evaluate(nested, {'tier': 'gold', 'freight': {'order_amount': 120}, 'weight': 1}) is True
+    assert engine.evaluate(nested, {'tier': 'gold', 'freight': {'order_amount': 10}, 'weight': 5}) is True
+    assert engine.evaluate(nested, {'tier': 'gold', 'freight': {'order_amount': 10}, 'weight': 1}) is False
+    assert engine.evaluate(nested, {'tier': 'bronze', 'freight': {'order_amount': 120}, 'weight': 1}) is False
 
 
 def test_no_condition_at_all_matches(engine):

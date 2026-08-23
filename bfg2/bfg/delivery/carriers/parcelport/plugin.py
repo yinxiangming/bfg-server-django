@@ -214,7 +214,7 @@ class ParcelPortCarrier(BaseCarrierPlugin):
         result = {
             'address_body': line1,  # Full address line
             'address_city': address.get('city', ''),
-            'address_country': address.get('country', 'NZ'),
+            'address_country': address.get('country') or self.default_country,
             'address_postcode': address_postcode,
             'address_number': address_number,
             'address_street': address_street,

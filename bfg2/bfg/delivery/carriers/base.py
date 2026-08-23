@@ -11,6 +11,8 @@ from decimal import Decimal
 from dataclasses import dataclass
 from django.utils import timezone
 
+from bfg.common.constants import get_default_country_for_workspace
+
 
 @dataclass
 class ShippingOption:
@@ -91,7 +93,9 @@ class BaseCarrierPlugin(ABC):
     # Plugin metadata (must be set by subclass)
     carrier_type: str = None  # e.g., 'parcelport', 'nzpost'
     display_name: str = None  # e.g., 'ParcelPort', 'NZ Post'
-    supported_countries: List[str] = ['NZ']  # ISO country codes
+    # ISO country codes. Empty means the plugin has not declared a coverage area —
+    # a subclass that forgets to set it should not inherit somebody else's market.
+    supported_countries: List[str] = []
     
     def __init__(self, carrier):
         """
@@ -121,6 +125,20 @@ class BaseCarrierPlugin(ABC):
         self.carrier = carrier
         self.config = carrier.get_active_config() or {}
         self._validate_config()
+
+    @property
+    def default_country(self) -> str:
+        """
+        Fallback country for an address that arrives without one.
+
+        Plugins used to substitute a fixed country code here. A plugin has no business
+        inventing address data, and the code they picked was the market the platform's
+        first tenant sold in — so any other workspace had its parcels declared from the
+        wrong country. Ask the carrier's own workspace instead; a workspace that has not
+        set one gets an empty string and the carrier rejects the request, which is the
+        honest outcome.
+        """
+        return get_default_country_for_workspace(getattr(self.carrier, 'workspace', None))
     
     def _validate_config(self):
         """

@@ -9,6 +9,7 @@ from datetime import datetime, date
 from django.db import models, transaction
 from django.db.models import QuerySet
 from django.conf import settings
+from bfg.common.constants import get_default_country_for_workspace
 from bfg.core.services import BaseService
 from bfg.core.exceptions import ValidationError
 from bfg.delivery.exceptions import DeliveryUnavailable
@@ -456,7 +457,7 @@ class DeliveryService(BaseService):
             'city': address.city or '',
             'state': address.state or '',
             'postal_code': address.postal_code or '',
-            'country': address.country or 'NZ',
+            'country': address.country or get_default_country_for_workspace(self.workspace),
             'phone': address.phone or '',
             'email': address.email or '',
         }

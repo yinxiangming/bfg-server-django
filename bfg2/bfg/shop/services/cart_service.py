@@ -16,10 +16,24 @@ from bfg.common.models import Customer
 class CartService(BaseService):
     """
     Cart management service
-    
+
     Handles shopping cart operations for both authenticated and anonymous users
     """
-    
+
+    def _allows_backorder(self) -> bool:
+        """
+        Whether this workspace sells past zero.
+
+        Resolved per call rather than cached on the service: a CartService is built per
+        request, so there is nothing to amortise, and reading it live means a change in
+        the back office takes effect on the next add-to-cart instead of the next deploy.
+        """
+        from bfg.shop.services.storefront_display_service import get_storefront_display_settings
+
+        settings = get_storefront_display_settings(self.workspace)
+        return settings['out_of_stock_policy'] == 'backorder'
+
+
     def get_or_create_cart(self, customer: Customer) -> Cart:
         """
         Get or create cart for authenticated customer
@@ -141,15 +155,15 @@ class CartService(BaseService):
             InsufficientStock: If not enough stock available
         """
         self.validate_workspace_access(product)
-        
+
         # Check stock availability
-        if product.track_inventory:
+        if product.track_inventory and not self._allows_backorder():
             available_stock = variant.stock_quantity if variant else product.stock_quantity
             if available_stock < quantity:
                 raise InsufficientStock(
                     f"Only {available_stock} units available"
                 )
-        
+
         # Get current price
         price = variant.price if variant and variant.price else product.price
         
@@ -197,7 +211,7 @@ class CartService(BaseService):
         """
         # Check stock availability
         product = cart_item.product
-        if product.track_inventory:
+        if product.track_inventory and not self._allows_backorder():
             available_stock = cart_item.variant.stock_quantity if cart_item.variant else product.stock_quantity
             if available_stock < quantity:
                 raise InsufficientStock(

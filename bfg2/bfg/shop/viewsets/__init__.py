@@ -34,6 +34,7 @@ from .subscription import (
     SubscriptionPlanViewSet
 )
 from .wishlist import WishlistViewSet
+from .stock_notification import StockNotificationViewSet
 
 __all__ = [
     # Product
@@ -63,4 +64,6 @@ __all__ = [
     'SubscriptionPlanViewSet',
     # Wishlist
     'WishlistViewSet',
+    # Back-in-stock notifications
+    'StockNotificationViewSet',
 ]

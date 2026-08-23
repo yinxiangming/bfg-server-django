@@ -727,6 +727,9 @@ class SettingsViewSet(viewsets.ModelViewSet):
         from django.conf import settings as django_settings
         from bfg.common.cache_policy import cache_ttl
         from bfg.common.storefront_cache import storefront_config_cache_key
+        # Imported here, not at module scope: bfg.shop depends on bfg.common models, so a
+        # top-level import would close the cycle.
+        from bfg.shop.services.storefront_display_service import get_storefront_display_settings
 
         lang = request.query_params.get('lang', 'en')
         cache_key = storefront_config_cache_key(workspace.id, lang)
@@ -810,6 +813,11 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'allowed_color_modes': allowed_color_modes,
             'default_color_mode': default_color_mode,
             'review_moderation_required': bool(shop_custom.get('review_moderation_required', False)),
+            # How much of the SKU and the stock level a visitor sees, and what a sold-out
+            # product does. Resolved through the service so an unset or malformed value
+            # lands on the same default the serializers use, rather than on whatever the
+            # settings JSON happens to hold.
+            'storefront_display': get_storefront_display_settings(workspace),
             # Per-workspace web analytics. The GA4 measurement id is a public
             # client-side tag id, never a secret — and one deployment serves
             # many storefronts, so it has to travel with the workspace config

@@ -11,3 +11,4 @@ from .sales_channel import SalesChannel, ProductChannelListing, ChannelCollectio
 from .returns import Return, ReturnLineItem
 from .batch import ProductBatch, BatchMovement
 from .wishlist import Wishlist
+from .stock_notification import StockNotification

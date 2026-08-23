@@ -13,71 +13,77 @@ from bfg.shop.models import (
 )
 from bfg.common.serializers import MediaLinkSerializer, media_file_url_for_serializer
 from bfg.finance.models import Payment, PaymentGateway
+from bfg.shop.services.product_identifier_service import get_workspace_identifier_prefixes
+from bfg.shop.services.storefront_display_service import (
+    get_storefront_display_settings,
+    resolve_product_stock,
+    strip_sku_prefix,
+)
 
 
 class StorefrontProductVariantSerializer(serializers.ModelSerializer):
-    """Storefront product variant serializer - simplified"""
+    """
+    Storefront product variant serializer - simplified.
+
+    Stock reaches the storefront only as far as the workspace's display policy allows.
+    Two fields that used to sit here are gone rather than gated: `stock_reserved` and
+    `stock_by_warehouse` published warehouse names, codes, per-site quantities and
+    reservation counts on an AllowAny endpoint, which is internal logistics data no
+    storefront ever asked for — nothing in the client read either one.
+    """
     stock_available = serializers.SerializerMethodField()
-    stock_quantity = serializers.IntegerField(read_only=True)
-    stock_reserved = serializers.SerializerMethodField()
-    stock_by_warehouse = serializers.SerializerMethodField()
+    stock_quantity = serializers.SerializerMethodField()
+    in_stock = serializers.SerializerMethodField()
     options = serializers.JSONField(read_only=True, help_text="Variant options (size, color, etc.)")
-    
+
     class Meta:
         model = ProductVariant
-        fields = ['id', 'name', 'sku', 'price', 'compare_price', 'options', 'stock_quantity', 'stock_available', 'stock_reserved', 'stock_by_warehouse', 'is_active']
+        fields = ['id', 'name', 'sku', 'price', 'compare_price', 'options',
+                  'stock_quantity', 'stock_available', 'in_stock', 'is_active']
         read_only_fields = ['id', 'options']
-    
+
+    @property
+    def _stock_display(self):
+        cached = getattr(self, '_stock_display_cache', None)
+        if cached is None:
+            request = self.context.get('request')
+            settings = get_storefront_display_settings(getattr(request, 'workspace', None))
+            cached = settings['stock_display']
+            self._stock_display_cache = cached
+        return cached
+
+    def get_in_stock(self, obj):
+        """Whether this variant can be picked, without saying how many are left."""
+        return max(0, obj.stock_quantity or 0) > 0
+
+    def get_stock_quantity(self, obj):
+        if self._stock_display != 'exact':
+            return None
+        return max(0, obj.stock_quantity or 0)
+
     def get_stock_available(self, obj):
-        """Get available stock quantity (total - reserved)"""
-        # Calculate from VariantInventory if available
+        """
+        Units sellable now (on-hand minus reserved), or null when the shop withholds
+        figures. Kept alongside `stock_quantity` because they differ once warehouse
+        reservations exist.
+        """
+        if self._stock_display != 'exact':
+            return None
+
         from django.db.models import Sum, F
         from bfg.shop.models import VariantInventory
-        
+
         total_available = VariantInventory.objects.filter(
             variant=obj
         ).aggregate(
             available=Sum(F('quantity') - F('reserved'))
         )['available']
-        
+
         if total_available is not None:
             return max(0, total_available)
-        
+
         # Fallback to variant's stock_quantity
         return max(0, obj.stock_quantity)
-    
-    def get_stock_reserved(self, obj):
-        """Get total reserved stock quantity"""
-        from django.db.models import Sum
-        from bfg.shop.models import VariantInventory
-        
-        total_reserved = VariantInventory.objects.filter(
-            variant=obj
-        ).aggregate(
-            reserved=Sum('reserved')
-        )['reserved']
-        
-        return total_reserved or 0
-    
-    def get_stock_by_warehouse(self, obj):
-        """Get stock breakdown by warehouse"""
-        from bfg.shop.models import VariantInventory
-        
-        inventories = VariantInventory.objects.filter(
-            variant=obj
-        ).select_related('warehouse')
-        
-        return [
-            {
-                'warehouse_id': inv.warehouse.id,
-                'warehouse_name': inv.warehouse.name,
-                'warehouse_code': inv.warehouse.code,
-                'quantity': inv.quantity,
-                'reserved': inv.reserved,
-                'available': inv.available,
-            }
-            for inv in inventories
-        ]
 
 
 # StorefrontProductMediaSerializer removed - use MediaLinkSerializer from bfg.common.serializers
@@ -95,7 +101,14 @@ class StorefrontProductSerializer(serializers.ModelSerializer):
     is_new = serializers.SerializerMethodField()
     rating = serializers.SerializerMethodField()
     reviews_count = serializers.SerializerMethodField()
-    stock_quantity = serializers.IntegerField(read_only=True)
+    # Stock is reported through the workspace's display policy, never raw. `stock_quantity`
+    # is null unless the shop has chosen to publish the figure; `in_stock` / `low_stock` /
+    # `purchasable` carry everything a storefront needs to render without it.
+    stock_quantity = serializers.SerializerMethodField()
+    in_stock = serializers.SerializerMethodField()
+    low_stock = serializers.SerializerMethodField()
+    purchasable = serializers.SerializerMethodField()
+    sku = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -104,14 +117,69 @@ class StorefrontProductSerializer(serializers.ModelSerializer):
             'description', 'short_description', 'media', 'variants',
             'categories', 'tags', 'primary_image', 'images',
             'discount_percentage', 'is_new', 'is_featured', 'rating', 'reviews_count',
-            'condition', 'stock_quantity',
+            'condition', 'stock_quantity', 'in_stock', 'low_stock', 'purchasable',
             # SEO overrides: already stored per product, needed by the storefront so a
             # product can set its own <title>/meta description instead of falling back
             # to name/description.
             'sku', 'barcode', 'meta_title', 'meta_description',
         ]
         read_only_fields = ['id']
-    
+
+    @property
+    def _display_settings(self):
+        """
+        Workspace display policy, resolved once per serializer rather than per product —
+        a 55-product listing would otherwise walk the settings JSON 55 times.
+        """
+        cached = getattr(self, '_display_settings_cache', None)
+        if cached is None:
+            request = self.context.get('request')
+            cached = get_storefront_display_settings(getattr(request, 'workspace', None))
+            self._display_settings_cache = cached
+        return cached
+
+    @property
+    def _sku_prefix(self):
+        cached = getattr(self, '_sku_prefix_cache', None)
+        if cached is None:
+            request = self.context.get('request')
+            workspace = getattr(request, 'workspace', None)
+            cached = get_workspace_identifier_prefixes(workspace)[0] if workspace else ''
+            self._sku_prefix_cache = cached
+        return cached
+
+    def _stock(self, obj):
+        """Per-product stock resolution, memoised for the four fields that share it."""
+        cache = getattr(self, '_stock_cache', None)
+        if cache is None:
+            cache = {}
+            self._stock_cache = cache
+        if obj.pk not in cache:
+            cache[obj.pk] = resolve_product_stock(obj, self._display_settings)
+        return cache[obj.pk]
+
+    def get_stock_quantity(self, obj):
+        return self._stock(obj)['stock_quantity']
+
+    def get_in_stock(self, obj):
+        return self._stock(obj)['in_stock']
+
+    def get_low_stock(self, obj):
+        return self._stock(obj)['low_stock']
+
+    def get_purchasable(self, obj):
+        return self._stock(obj)['purchasable']
+
+    def get_sku(self, obj):
+        """SKU as the shop chose to publish it — hidden, prefix-stripped, or verbatim."""
+        mode = self._display_settings['sku_display']
+        if mode == 'hidden':
+            return ''
+        if mode == 'full':
+            return obj.sku or ''
+        return strip_sku_prefix(obj.sku, self._sku_prefix)
+
+
     def get_categories(self, obj):
         """Get category names"""
         return [{'id': cat.id, 'name': cat.name, 'slug': cat.slug} 

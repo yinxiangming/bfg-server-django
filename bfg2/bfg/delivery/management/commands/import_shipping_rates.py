@@ -18,19 +18,19 @@ Usage:
 JSON shape:
     {
       "zones": [
-        {"code": "NZ", "name": "New Zealand", "countries": ["NZ"], "order": 10}
+        {"code": "HOME", "name": "Home market", "countries": ["GB"], "order": 10}
       ],
       "carriers": [
         {
-          "code": "NZPOST", "name": "NZ Post",
+          "code": "ACME", "name": "Acme Freight",
           "tracking_url_template": "https://.../{tracking_number}",
           "services": [
             {
-              "code": "NZ_ECONOMY", "name": "Economy", "description": "...",
+              "code": "STANDARD", "name": "Standard", "description": "...",
               "estimated_days_min": 2, "estimated_days_max": 3, "order": 10,
-              "zones": ["NZ"],
+              "zones": ["HOME"],
               "template": "free_over_amount",
-              "params": {"threshold_amount": 100, "fallback_base": 6.5, "fallback_per_kg": 0}
+              "params": {"threshold_amount": 100, "fallback_base": 5, "fallback_per_kg": 0}
             }
           ]
         }

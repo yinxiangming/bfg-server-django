@@ -1,5 +1,5 @@
 """
-Freight services on the storefront: value thresholds, flat rates, and the importer.
+Freight service pricing on the storefront, and the rate importer that configures it.
 
 Two things are pinned down here.
 
@@ -15,6 +15,9 @@ recalculation, and never learn that customers were being charged.
 **A workspace with no FreightService cannot take an order at all** — the checkout
 renders "no shipping options available for this country" — which is what
 ``import_shipping_rates`` exists to fix, repeatably, on every environment.
+
+The rate table below is a fixture, not anybody's price list: one service per
+pricing shape that behaves differently, so the assertions stay about the mechanism.
 """
 
 import json
@@ -33,42 +36,42 @@ CART_URL = '/api/v1/store/cart/'
 SERVICES_URL = '/api/v1/delivery/freight-services/for_country/'
 CART_KEY = 'shipping-key-2b7f4d10-9a3e-4c6b-8f21-5d0e7a9c4b83'
 
-# The geeker rate table, trimmed to the two shapes that matter: one value-threshold
-# service and one flat rate. Mirrors scripts/shipping/geeker/nz_shipping.json.
+HOME = 'GB'
+ELSEWHERE = 'FR'
+
 RATES = {
     "zones": [
-        {"code": "NZ", "name": "New Zealand", "countries": ["NZ"], "order": 10},
+        {"code": "HOME", "name": "Home market", "countries": [HOME], "order": 10},
     ],
     "carriers": [
         {
-            "code": "NZPOST",
-            "name": "NZ Post",
-            "tracking_url_template": "https://www.nzpost.co.nz/tools/tracking/item/{tracking_number}",
+            "code": "ACME",
+            "name": "Acme Freight",
+            "tracking_url_template": "https://example.test/track/{tracking_number}",
             "services": [
                 {
-                    "code": "NZ_ECONOMY",
-                    "name": "Economy (Tracked)",
+                    "code": "STANDARD",
+                    "name": "Standard",
                     "estimated_days_min": 2,
                     "estimated_days_max": 3,
                     "order": 10,
-                    "zones": ["NZ"],
+                    "zones": ["HOME"],
                     "template": "free_over_amount",
                     "params": {
                         "threshold_amount": 100,
-                        "fallback_base": 6.5,
+                        "fallback_base": 5,
                         "fallback_per_kg": 0,
-                        "currency": "NZD",
                     },
                 },
                 {
-                    "code": "NZ_COURIER",
-                    "name": "Courier (Next Working Day)",
+                    "code": "EXPRESS",
+                    "name": "Express",
                     "estimated_days_min": 1,
                     "estimated_days_max": 2,
                     "order": 20,
-                    "zones": ["NZ"],
+                    "zones": ["HOME"],
                     "template": "flat_rate",
-                    "params": {"amount": 8.9, "currency": "NZD"},
+                    "params": {"amount": 9},
                 },
             ],
         }
@@ -78,17 +81,17 @@ RATES = {
 
 @pytest.fixture
 def workspace(db):
-    return Workspace.objects.create(name='Geeker Test', slug='geeker-test', is_active=True)
+    return Workspace.objects.create(name='Rates Test', slug='rates-test', is_active=True)
 
 
 @pytest.fixture
 def product(workspace):
-    # No weight, like every product in the geeker catalogue. Flat rates must not
-    # depend on one being present.
+    # Deliberately weightless. Catalogues migrated from other systems routinely arrive
+    # with a null weight, and a flat rate must not quietly depend on one being present.
     return Product.objects.create(
         workspace=workspace,
-        name='Keyes Active Buzzer',
-        slug='keyes-active-buzzer',
+        name='Widget',
+        slug='widget',
         price=Decimal('5.00'),
         is_active=True,
         track_inventory=False,
@@ -97,7 +100,7 @@ def product(workspace):
 
 @pytest.fixture
 def rates_file(tmp_path):
-    path = tmp_path / 'nz_shipping.json'
+    path = tmp_path / 'rates.json'
     path.write_text(json.dumps(RATES), encoding='utf-8')
     return str(path)
 
@@ -141,36 +144,34 @@ def preview(workspace, product, quantity, service):
 
 
 def test_below_the_threshold_the_fallback_rate_is_charged(workspace, product, imported):
-    # 10 x $5.00 = $50.00, under the $100 free-shipping threshold.
-    data = preview(workspace, product, 10, imported['NZ_ECONOMY'])
+    data = preview(workspace, product, 10, imported['STANDARD'])
     assert Decimal(data['subtotal']) == Decimal('50.00')
-    assert Decimal(data['shipping_cost']) == Decimal('6.50')
+    assert Decimal(data['shipping_cost']) == Decimal('5.00')
 
 
 def test_at_the_threshold_shipping_becomes_free(workspace, product, imported):
     # 20 x $5.00 = $100.00, exactly the threshold. This is the regression: with
-    # order_amount pinned to None the engine matched nothing and charged $6.50.
-    data = preview(workspace, product, 20, imported['NZ_ECONOMY'])
+    # order_amount pinned to None the engine matched nothing and charged the fallback.
+    data = preview(workspace, product, 20, imported['STANDARD'])
     assert Decimal(data['subtotal']) == Decimal('100.00')
     assert Decimal(data['shipping_cost']) == Decimal('0.00')
 
 
 def test_above_the_threshold_shipping_stays_free(workspace, product, imported):
-    data = preview(workspace, product, 25, imported['NZ_ECONOMY'])
+    data = preview(workspace, product, 25, imported['STANDARD'])
     assert Decimal(data['shipping_cost']) == Decimal('0.00')
 
 
 def test_a_flat_rate_ignores_order_value(workspace, product, imported):
-    # Courier is the paid upgrade: no threshold, so a $125 basket still pays.
-    data = preview(workspace, product, 25, imported['NZ_COURIER'])
+    data = preview(workspace, product, 25, imported['EXPRESS'])
     assert Decimal(data['subtotal']) == Decimal('125.00')
-    assert Decimal(data['shipping_cost']) == Decimal('8.90')
+    assert Decimal(data['shipping_cost']) == Decimal('9.00')
 
 
 def test_a_flat_rate_ignores_weightless_products(workspace, product, imported):
-    """One item and twenty-five both ship for $8.90 — nothing multiplies by a null weight."""
-    one = preview(workspace, product, 1, imported['NZ_COURIER'])
-    assert Decimal(one['shipping_cost']) == Decimal('8.90')
+    """One item and twenty-five both ship for the same price — nothing multiplies by null."""
+    one = preview(workspace, product, 1, imported['EXPRESS'])
+    assert Decimal(one['shipping_cost']) == Decimal('9.00')
 
 
 # ---------------------------------------------------------------- importer
@@ -178,15 +179,21 @@ def test_a_flat_rate_ignores_weightless_products(workspace, product, imported):
 
 def test_the_storefront_lists_the_imported_services(workspace, imported):
     """The symptom being fixed: for_country returned [] and checkout said no options."""
-    response = client_for(workspace).get(f'{SERVICES_URL}?country=NZ')
+    response = client_for(workspace).get(f'{SERVICES_URL}?country={HOME}')
     assert response.status_code == 200
     codes = [s['code'] for s in response.data]
-    assert codes == ['NZ_ECONOMY', 'NZ_COURIER']
+    assert codes == ['STANDARD', 'EXPRESS']
+
+
+def test_the_country_match_is_case_insensitive(workspace, imported):
+    response = client_for(workspace).get(f'{SERVICES_URL}?country={HOME.lower()}')
+    assert response.status_code == 200
+    assert len(response.data) == 2
 
 
 def test_a_country_with_no_zone_gets_nothing(workspace, imported):
-    """Only NZ is configured, so Australia correctly has no options rather than a default."""
-    response = client_for(workspace).get(f'{SERVICES_URL}?country=AU')
+    """An unserved country gets no options rather than a wrong default."""
+    response = client_for(workspace).get(f'{SERVICES_URL}?country={ELSEWHERE}')
     assert response.status_code == 200
     assert response.data == []
 
@@ -209,15 +216,15 @@ def test_rerunning_the_import_updates_rather_than_duplicates(workspace, rates_fi
 
 def test_a_changed_price_is_applied_on_reimport(workspace, product, imported, tmp_path):
     dearer = json.loads(json.dumps(RATES))
-    dearer['carriers'][0]['services'][1]['params']['amount'] = 9.9
+    dearer['carriers'][0]['services'][1]['params']['amount'] = 11
     path = tmp_path / 'dearer.json'
     path.write_text(json.dumps(dearer), encoding='utf-8')
 
     call_command('import_shipping_rates', str(path),
                  workspace=workspace.slug, confirm=True, stdout=StringIO())
 
-    service = FreightService.objects.get(workspace=workspace, code='NZ_COURIER')
-    assert Decimal(preview(workspace, product, 1, service)['shipping_cost']) == Decimal('9.90')
+    service = FreightService.objects.get(workspace=workspace, code='EXPRESS')
+    assert Decimal(preview(workspace, product, 1, service)['shipping_cost']) == Decimal('11.00')
 
 
 def test_an_unknown_template_is_rejected_before_anything_is_written(workspace, tmp_path):
@@ -238,7 +245,7 @@ def test_an_unknown_template_is_rejected_before_anything_is_written(workspace, t
 
 def test_a_zone_a_service_references_but_does_not_define_is_rejected(workspace, tmp_path):
     broken = json.loads(json.dumps(RATES))
-    broken['carriers'][0]['services'][0]['zones'] = ['AU']
+    broken['carriers'][0]['services'][0]['zones'] = ['NOWHERE']
     path = tmp_path / 'badzone.json'
     path.write_text(json.dumps(broken), encoding='utf-8')
 
@@ -246,7 +253,7 @@ def test_a_zone_a_service_references_but_does_not_define_is_rejected(workspace, 
     call_command('import_shipping_rates', str(path),
                  workspace=workspace.slug, confirm=True, stdout=out)
 
-    assert 'AU' in out.getvalue()
+    assert 'NOWHERE' in out.getvalue()
     assert not DeliveryZone.objects.filter(workspace=workspace).exists()
 
 
@@ -258,11 +265,11 @@ def test_services_omitted_from_the_file_are_retired_only_when_asked(workspace, r
 
     call_command('import_shipping_rates', str(path),
                  workspace=workspace.slug, confirm=True, stdout=StringIO())
-    assert FreightService.objects.get(workspace=workspace, code='NZ_COURIER').is_active
+    assert FreightService.objects.get(workspace=workspace, code='EXPRESS').is_active
 
     call_command('import_shipping_rates', str(path), workspace=workspace.slug,
                  confirm=True, deactivate_missing=True, stdout=StringIO())
-    assert not FreightService.objects.get(workspace=workspace, code='NZ_COURIER').is_active
+    assert not FreightService.objects.get(workspace=workspace, code='EXPRESS').is_active
 
 
 def test_the_importer_does_not_touch_another_workspace(workspace, rates_file, imported, db):

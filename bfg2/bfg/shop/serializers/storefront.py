@@ -395,14 +395,17 @@ class StorefrontOrderSerializer(serializers.ModelSerializer):
     freight_service = serializers.SerializerMethodField()
     packages = serializers.SerializerMethodField()
     fulfillment_method = serializers.CharField(read_only=True)
+    # Checkout accepts a note, so the shopper has to be able to read it back and
+    # confirm it was recorded. admin_note stays internal.
+    customer_note = serializers.CharField(read_only=True)
 
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'status', 'payment_status', 'fulfillment_method',
+            'id', 'order_number', 'status', 'payment_status', 'fulfillment_method', 'customer_note',
             'amounts', 'addresses', 'items', 'timestamps', 'customer', 'activities', 'freight_service', 'packages'
         ]
-        read_only_fields = ['id', 'order_number']
+        read_only_fields = ['id', 'order_number', 'customer_note']
     
     def get_amounts(self, obj):
         """Get order amounts"""

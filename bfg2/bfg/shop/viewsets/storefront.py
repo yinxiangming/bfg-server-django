@@ -483,7 +483,13 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
     """Storefront cart ViewSet - supports anonymous and authenticated users"""
     serializer_class = StorefrontCartSerializer
     permission_classes = [AllowAny]
-    authentication_classes = []
+    # Guests are welcome (AllowAny), but a signed-in shopper must be recognised:
+    # without this the token was ignored on every cart action, so items landed on
+    # a session-bound guest cart while `checkout` — which does authenticate —
+    # looked at the customer's own cart and found it empty. Clients with no cookie
+    # jar (the mini-program) hit that on every request. The Optional variant keeps
+    # an expired token from 401-ing a shopper who could still browse as a guest.
+    authentication_classes = [OptionalBearerTokenAuthentication]
     
     def _get_workspace(self, request):
         """

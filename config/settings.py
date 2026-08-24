@@ -329,6 +329,13 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
+# WeChat mini-program login (apps.wechat_identity). The wxstore cutover reuses
+# the legacy mini-program's AppID, so the openids backfilled by the legacy
+# importer match what jscode2session returns and returning members log in to
+# their existing account.
+WECHAT_MINIPROGRAM_APPID = os.environ.get('WECHAT_MINIPROGRAM_APPID', '').strip()
+WECHAT_MINIPROGRAM_APPSECRET = os.environ.get('WECHAT_MINIPROGRAM_APPSECRET', '').strip()
+
 # JWT
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),

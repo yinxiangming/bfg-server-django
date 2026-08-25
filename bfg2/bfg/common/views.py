@@ -829,6 +829,11 @@ class SettingsViewSet(viewsets.ModelViewSet):
             # custom_settings.general, so prefer those and fall back to the
             # model's file fields for workspaces provisioned another way.
             'logo': general_custom.get('logo') or _model_file_url(settings_obj.logo),
+            # The dark-surface variant has no model field to fall back to: it is a
+            # newer setting and lives only in the admin's JSON. Blank means the
+            # storefront uses `logo` on dark surfaces too, which is the behaviour
+            # every workspace had before this existed.
+            'logo_dark': general_custom.get('logo_dark') or '',
             'favicon': general_custom.get('favicon') or _model_file_url(settings_obj.favicon),
             # With a logo set, the site name is hidden by default — the logo
             # usually contains the wordmark already. Opt back in per workspace.

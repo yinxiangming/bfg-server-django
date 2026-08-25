@@ -9,6 +9,15 @@ class CommonConfig(AppConfig):
     
     def ready(self):
         """Import signals when app is ready."""
+        # Python 3.12's mimetypes table knows .avif and .heic but not .webp, and the
+        # slim images we deploy on carry no /etc/mime.types to fill the gap. Storage
+        # backends guess an object's Content-Type from this table, so every .webp
+        # upload lands in S3 as application/octet-stream while .png and .jpg are typed
+        # correctly. An <img> renders it anyway by sniffing, which is what makes this
+        # easy to miss; opening the URL directly downloads the file instead.
+        import mimetypes
+        mimetypes.add_type('image/webp', '.webp')
+
         try:
             import bfg.common.signals  # noqa
         except ImportError:

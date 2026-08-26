@@ -343,7 +343,7 @@ class PageService(BaseService):
             from bfg.marketing.promo_views import get_promo_available
         except ImportError:
             return blocks
-        promo = get_promo_available(self.workspace, request)
+        promo = get_promo_available(self.workspace, request, context='home')
         slides = promo.get('slides') or []
         featured_categories = promo.get('featured_categories') or []
 

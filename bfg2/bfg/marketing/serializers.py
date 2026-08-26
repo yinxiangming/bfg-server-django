@@ -161,7 +161,7 @@ class CampaignDisplaySerializer(serializers.ModelSerializer):
     class Meta:
         model = CampaignDisplay
         fields = [
-            'id', 'workspace', 'campaign', 'campaign_name', 'display_type', 'order',
+            'id', 'workspace', 'campaign', 'campaign_name', 'display_type', 'context', 'order',
             'title', 'subtitle',
             'image', 'link_url', 'link_target',
             'rules', 'post', 'is_active',

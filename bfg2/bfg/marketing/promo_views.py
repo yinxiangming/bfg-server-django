@@ -2,6 +2,9 @@
 """
 Storefront promo API: GET /api/v1/store/promo/?context=home
 Returns types_present + available (slides, featured_categories, flash_sales, group_buys).
+
+``context`` selects the storefront page: a display is returned when its own
+context matches, or when it is blank (meaning every page).
 """
 from django.utils import timezone
 from django.db.models import Q
@@ -15,10 +18,14 @@ from bfg.shop.models import Product, ProductCategory
 from bfg.shop.schemas import apply_rules_to_product_queryset
 
 
-def get_promo_available(workspace, request):
+def get_promo_available(workspace, request, context=None):
     """
     Build promo 'available' dict (slides, featured_categories, flash_sales, group_buys).
     Used by PromoView and by web page_service when rendering home page blocks with source='promo'.
+
+    context: storefront page to build for ('home', 'category', ...). Displays
+    scoped to another page are left out; a display with a blank context belongs
+    to every page, which is what rows created before contexts existed hold.
     """
     now = timezone.now()
     campaigns_qs = Campaign.objects.filter(
@@ -32,7 +39,10 @@ def get_promo_available(workspace, request):
         is_active=True,
     ).filter(
         Q(campaign_id__in=campaign_ids) | Q(workspace=workspace, campaign__isnull=True)
-    ).select_related('campaign', 'post').order_by('order')
+    )
+    if context:
+        displays = displays.filter(Q(context='') | Q(context=context))
+    displays = displays.select_related('campaign', 'post').order_by('order')
 
     slides = []
     featured_categories = []
@@ -134,7 +144,7 @@ class PromoView(APIView):
         if not workspace:
             raise NotFound("No workspace available.")
         context = request.query_params.get('context', 'home')
-        available = get_promo_available(workspace, request)
+        available = get_promo_available(workspace, request, context=context)
         types_present = list(available.keys())
         return Response({
             'context': context,

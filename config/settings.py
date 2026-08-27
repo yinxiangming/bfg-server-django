@@ -336,6 +336,14 @@ REST_FRAMEWORK = {
 WECHAT_MINIPROGRAM_APPID = os.environ.get('WECHAT_MINIPROGRAM_APPID', '').strip()
 WECHAT_MINIPROGRAM_APPSECRET = os.environ.get('WECHAT_MINIPROGRAM_APPSECRET', '').strip()
 
+# Google Maps, server side (apps.geo). Address suggestions and reverse geocoding
+# run here rather than in the client because the mini-program cannot load Google's
+# JavaScript SDK, and a key shipped in a mini-program bundle is a key anyone can
+# extract and spend. Restrict this key to the Places and Geocoding APIs, and to the
+# server's IP — it is never sent to a client. Which workspaces may use it, and the
+# country each is restricted to, is a per-workspace setting, not an env var.
+GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '').strip()
+
 # JWT
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),

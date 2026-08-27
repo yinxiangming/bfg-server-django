@@ -2,6 +2,7 @@
 """
 Campaign display models for homepage and promo blocks.
 A display can be linked to a campaign (optional) and has display_type: slide, category_entry, featured.
+Each display also names the storefront page it belongs to (``context``).
 Product/category selection uses a rules JSON list (same concept as ProductCategoryRule).
 """
 
@@ -20,6 +21,15 @@ class CampaignDisplay(models.Model):
         ('featured', _('Featured')),
     )
 
+    # Which storefront page asks for this display. Blank means every page:
+    # that is what existing rows hold, so they keep appearing where they do now.
+    CONTEXT_ALL = ''
+    CONTEXT_CHOICES = (
+        (CONTEXT_ALL, _('All pages')),
+        ('home', _('Home page')),
+        ('category', _('Category page')),
+    )
+
     workspace = models.ForeignKey(
         'common.Workspace',
         on_delete=models.CASCADE,
@@ -36,6 +46,14 @@ class CampaignDisplay(models.Model):
         blank=True,
     )
     display_type = models.CharField(_("Display Type"), max_length=30, choices=DISPLAY_TYPE_CHOICES)
+    context = models.CharField(
+        _("Context"),
+        max_length=30,
+        choices=CONTEXT_CHOICES,
+        blank=True,
+        default=CONTEXT_ALL,
+        help_text=_('Storefront page this display belongs to. Leave blank to show it on every page that asks.'),
+    )
     order = models.PositiveSmallIntegerField(_("Order"), default=0)
 
     title = models.CharField(_("Title"), max_length=255, blank=True)

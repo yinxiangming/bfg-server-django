@@ -20,7 +20,11 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 import uuid
 
-from bfg.common.models import Customer, Address
+from bfg.common.models import Customer, Address, Media, MediaLink
+from bfg.common.serializers import signed_media_url
+from bfg.common.storage import store_sensitive_file
+from rest_framework.parsers import MultiPartParser, FormParser
+from django.utils.translation import gettext_lazy as _
 from bfg.shop.models import (
     Product, ProductVariant, ProductCategory, ProductTag,
     Cart, CartItem, Order, Store, ProductReview, StockNotification
@@ -1243,6 +1247,75 @@ class StorefrontOrderViewSet(viewsets.ReadOnlyModelViewSet):
         
         return queryset.order_by('-created_at')
     
+    # Shoppers attach payment proof from the storefront; keep both limits here so
+    # the endpoint is not a general-purpose upload for anyone with an order.
+    ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+    ATTACHMENT_CONTENT_TYPES = ('image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif')
+    ATTACHMENT_KIND = 'payment_proof'
+
+    def _attachment_payload(self, link, request):
+        return {
+            'id': link.id,
+            'media_id': link.media_id,
+            'url': signed_media_url(link.media, request),
+            'kind': link.description or '',
+            'created_at': link.created_at.isoformat() if link.created_at else None,
+        }
+
+    def _order_attachment_links(self, order):
+        return MediaLink.objects.filter(
+            content_type=ContentType.objects.get_for_model(Order),
+            object_id=order.id,
+        ).select_related('media').order_by('created_at')
+
+    @action(detail=True, methods=['get', 'post'], parser_classes=[MultiPartParser, FormParser])
+    def attachments(self, request, pk=None):
+        """Files the shopper attaches to their own order — a payment screenshot, typically.
+
+        Stored as sensitive Media: a payment screenshot shows the shopper's bank
+        or wallet, so it goes to the private bucket and is read back through a
+        short-lived signed URL rather than a world-readable one (WI-393).
+
+        get_object() runs against get_queryset(), which is already scoped to the
+        requesting customer, so one shopper cannot attach to another's order.
+        """
+        order = self.get_object()
+
+        if request.method == 'GET':
+            links = self._order_attachment_links(order)
+            return Response([self._attachment_payload(link, request) for link in links])
+
+        upload = request.FILES.get('file')
+        if not upload:
+            raise ValidationError({'file': _('No file was uploaded.')})
+        if upload.size > self.ATTACHMENT_MAX_BYTES:
+            raise ValidationError({'file': _('File is larger than 10 MB.')})
+        content_type = (getattr(upload, 'content_type', '') or '').lower()
+        if content_type not in self.ATTACHMENT_CONTENT_TYPES:
+            raise ValidationError({'file': _('Only image files can be attached.')})
+
+        suffix = (upload.name or '').rsplit('.', 1)
+        extension = suffix[1].lower() if len(suffix) == 2 and len(suffix[1]) <= 8 else 'jpg'
+        key = f"media/{request.workspace.id}/orders/{order.id}/{uuid.uuid4().hex}.{extension}"
+
+        media = Media(
+            workspace=request.workspace,
+            media_type='image',
+            is_sensitive=True,
+            uploaded_by=request.user,
+            alt_text=self.ATTACHMENT_KIND,
+        )
+        media.file.name = store_sensitive_file(key, upload)
+        media.save()
+
+        link = MediaLink.objects.create(
+            media=media,
+            content_type=ContentType.objects.get_for_model(Order),
+            object_id=order.id,
+            description=self.ATTACHMENT_KIND,
+        )
+        return Response(self._attachment_payload(link, request), status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         """Cancel order"""

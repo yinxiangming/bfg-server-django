@@ -600,11 +600,37 @@ class OrderListSerializer(serializers.ModelSerializer):
         return 0
     
     def get_items(self, obj):
-        """Brief item summary for list: product_name, quantity"""
+        """Brief item summary for list: name, quantity and a thumbnail."""
+        request = self.context.get('request')
         return [
-            {'product_name': item.product_name, 'quantity': item.quantity}
+            {
+                'product_name': item.product_name,
+                'quantity': item.quantity,
+                'image': self._item_image_url(item, request),
+            }
             for item in obj.items.all()[:20]
         ]
+
+    @staticmethod
+    def _item_image_url(item, request):
+        """First product image for an order line, or None.
+
+        Walks the prefetched ``media_links`` in Python instead of calling
+        ``Product.primary_image``: that property runs its own ``.filter()``,
+        which bypasses the prefetch cache and would fire a query per line —
+        on a 20-row order list that is a hundred extra round trips.
+        """
+        product = getattr(item, 'product', None)
+        if product is None:
+            return None
+        images = [
+            link for link in product.media_links.all()
+            if link.media is not None and link.media.media_type == 'image'
+        ]
+        if not images:
+            return None
+        media = min(images, key=lambda link: link.position).media
+        return media.external_url or media_file_url_for_serializer(media, request)
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):

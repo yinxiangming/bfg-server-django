@@ -12,10 +12,13 @@ from bfg.common.models import (
 )
 from django.conf import settings
 
-# Order statuses that count as money the customer actually spent. Shared by the
-# list serializer's `total_spent` and the detail serializer's `experience_points`
-# so the two figures can never drift apart.
-SPEND_ORDER_STATUSES = ('delivered', 'completed', 'paid')
+# What counts as money the customer actually spent. Keyed on `payment_status`,
+# not `status`: `Order.STATUS_CHOICES` has no "paid" or "completed" member, so
+# the status-based tuple this replaces could only ever match "delivered" and
+# ignored every paid order still in flight. Shared by the list serializer's
+# `total_spent` and the detail serializer's `experience_points` so the two
+# figures can never drift apart.
+SPEND_PAYMENT_STATUS = 'paid'
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -191,7 +194,7 @@ class CustomerListSerializer(serializers.ModelSerializer):
         return obj.user.last_login if obj.user else None
 
     def get_total_spent(self, obj):
-        """Money spent across orders counted by ``SPEND_ORDER_STATUSES``.
+        """Money spent across orders whose payment reached ``SPEND_PAYMENT_STATUS``.
 
         ``CustomerViewSet`` annotates this on the list queryset; the fallback
         below keeps the serializer correct (just slower) if it is ever used on
@@ -209,7 +212,7 @@ class CustomerListSerializer(serializers.ModelSerializer):
         total = Order.objects.filter(
             customer=obj,
             workspace=obj.workspace,
-            status__in=SPEND_ORDER_STATUSES,
+            payment_status=SPEND_PAYMENT_STATUS,
         ).aggregate(total=Sum('total'))['total']
         return total or Decimal('0')
 
@@ -256,7 +259,7 @@ class CustomerDetailSerializer(serializers.ModelSerializer):
             completed_orders = Order.objects.filter(
                 customer=obj,
                 workspace=obj.workspace,
-                status__in=SPEND_ORDER_STATUSES
+                payment_status=SPEND_PAYMENT_STATUS
             )
             
             order_count = completed_orders.count()

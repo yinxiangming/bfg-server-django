@@ -389,6 +389,9 @@ class OrderViewSet(viewsets.ModelViewSet):
             'customer', 'customer__user', 'store', 'shipping_address', 'billing_address'
         ).prefetch_related(
             'items', 'items__product', 'items__variant',
+            # Order-list thumbnails read these in Python; without the prefetch
+            # each line would cost its own query.
+            'items__product__media_links', 'items__product__media_links__media',
             'invoices', 'invoices__items', 'invoices__currency',
             'payments', 'payments__gateway', 'payments__currency',
             'packages'

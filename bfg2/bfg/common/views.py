@@ -225,11 +225,11 @@ class CustomerViewSet(viewsets.ModelViewSet):
             from django.db.models import DecimalField, Q, Sum
             from django.db.models.functions import Coalesce
 
-            from bfg.common.serializers import SPEND_ORDER_STATUSES
+            from bfg.common.serializers import SPEND_PAYMENT_STATUS
 
             qs = qs.annotate(
                 total_spent=Coalesce(
-                    Sum('orders__total', filter=Q(orders__status__in=SPEND_ORDER_STATUSES)),
+                    Sum('orders__total', filter=Q(orders__payment_status=SPEND_PAYMENT_STATUS)),
                     0,
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 )

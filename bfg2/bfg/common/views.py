@@ -219,6 +219,21 @@ class CustomerViewSet(viewsets.ModelViewSet):
             ).select_related('user')
         if self.action == 'retrieve':
             qs = qs.prefetch_related('addresses')
+        else:
+            # `total_spent` column on the admin list. Annotated here rather than
+            # computed per row so the page stays one query instead of N+1.
+            from django.db.models import DecimalField, Q, Sum
+            from django.db.models.functions import Coalesce
+
+            from bfg.common.serializers import SPEND_ORDER_STATUSES
+
+            qs = qs.annotate(
+                total_spent=Coalesce(
+                    Sum('orders__total', filter=Q(orders__status__in=SPEND_ORDER_STATUSES)),
+                    0,
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
         return qs
     
     def perform_create(self, serializer):

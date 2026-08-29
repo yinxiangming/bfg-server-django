@@ -10,7 +10,12 @@ from bfg.common.models import (
     CustomerSegment, CustomerTag, UserPreferences, Media, MediaLink, EmailConfig,
     APIKey, Invitation,
 )
-from django.conf import settings    
+from django.conf import settings
+
+# Order statuses that count as money the customer actually spent. Shared by the
+# list serializer's `total_spent` and the detail serializer's `experience_points`
+# so the two figures can never drift apart.
+SPEND_ORDER_STATUSES = ('delivered', 'completed', 'paid')
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -165,19 +170,48 @@ class CustomerListSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     user_id = serializers.IntegerField(write_only=True, required=False)
     user_email = serializers.SerializerMethodField()
-    
+    last_login = serializers.SerializerMethodField()
+    total_spent = serializers.SerializerMethodField()
+
     class Meta:
         model = Customer
         fields = [
             'id', 'workspace', 'user', 'user_id', 'user_email', 'customer_number',
             'company_name', 'tax_number', 'credit_limit', 'balance',
-            'is_active', 'is_verified', 'created_at'
+            'is_active', 'is_verified', 'created_at', 'last_login', 'total_spent'
         ]
         read_only_fields = ['id', 'workspace', 'customer_number', 'created_at']
     
     def get_user_email(self, obj):
         """Get user email for display"""
         return obj.user.email if obj.user else None
+
+    def get_last_login(self, obj):
+        """Last time this customer signed in (admin list column)."""
+        return obj.user.last_login if obj.user else None
+
+    def get_total_spent(self, obj):
+        """Money spent across orders counted by ``SPEND_ORDER_STATUSES``.
+
+        ``CustomerViewSet`` annotates this on the list queryset; the fallback
+        below keeps the serializer correct (just slower) if it is ever used on
+        an un-annotated queryset.
+        """
+        annotated = getattr(obj, 'total_spent', None)
+        if annotated is not None:
+            return annotated
+        from decimal import Decimal
+
+        from django.db.models import Sum
+
+        from bfg.shop.models import Order
+
+        total = Order.objects.filter(
+            customer=obj,
+            workspace=obj.workspace,
+            status__in=SPEND_ORDER_STATUSES,
+        ).aggregate(total=Sum('total'))['total']
+        return total or Decimal('0')
 
 
 class CustomerDetailSerializer(serializers.ModelSerializer):
@@ -222,7 +256,7 @@ class CustomerDetailSerializer(serializers.ModelSerializer):
             completed_orders = Order.objects.filter(
                 customer=obj,
                 workspace=obj.workspace,
-                status__in=['delivered', 'completed', 'paid']
+                status__in=SPEND_ORDER_STATUSES
             )
             
             order_count = completed_orders.count()

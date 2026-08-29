@@ -332,8 +332,16 @@ class BlockService(BaseService):
                 queryset = queryset.filter(id__in=category_ids)
         
         queryset = queryset.order_by('order', 'name')
-        
-        block['resolvedData'] = CategorySerializer(queryset, many=True).data
+
+        # `Category` here is the CMS post category, not shop.ProductCategory. A shop
+        # workspace has none, so this resolver used to stamp resolvedData=[] on every
+        # category grid — and the clients read any resolvedData list as the final
+        # answer, which left the block rendering nothing instead of falling back to
+        # the workspace's product categories. Claim the block only when there is
+        # something to put in it.
+        resolved = CategorySerializer(queryset, many=True).data
+        if resolved:
+            block['resolvedData'] = resolved
         return block
     
     def get_available_block_types(self) -> List[Dict[str, Any]]:

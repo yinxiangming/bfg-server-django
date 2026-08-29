@@ -362,13 +362,16 @@ class PageService(BaseService):
                 continue
             if block_type == 'hero_carousel_v1':
                 # Client expects: image, title?, subtitle?, buttonText?, buttonLink?
+                # Localised strings are keyed 'en' / 'zh-hans' — the same codes the
+                # storefront and the mini-program resolve their locale to. A bare 'zh'
+                # matches neither, so both clients fell through to the English string.
                 block['data'] = dict(data)
                 block['data']['slides'] = [
                     {
                         'image': s.get('image') or '',
-                        'title': {'en': s.get('title') or '', 'zh': s.get('title') or ''},
-                        'subtitle': {'en': s.get('subtitle') or '', 'zh': s.get('subtitle') or ''},
-                        'buttonText': {'en': 'Shop Now', 'zh': '立即选购'} if s.get('link_url') else None,
+                        'title': {'en': s.get('title') or '', 'zh-hans': s.get('title') or ''},
+                        'subtitle': {'en': s.get('subtitle') or '', 'zh-hans': s.get('subtitle') or ''},
+                        'buttonText': {'en': 'Shop Now', 'zh-hans': '立即选购'} if s.get('link_url') else None,
                         'buttonLink': s.get('link_url') or None,
                     }
                     for s in sorted(slides, key=lambda x: x.get('order', 0))
@@ -376,7 +379,7 @@ class PageService(BaseService):
             elif block_type == 'category_grid_v1':
                 # Client CategoryGridV1 uses resolvedData: [{ name, slug, image, product_count }]
                 # Prefer CampaignDisplay.title for name; fallback to category.name
-                block['resolvedData'] = [
+                resolved_categories = [
                     {
                         'name': (item.get('title') or '').strip() or item.get('category', {}).get('name', ''),
                         'slug': item.get('category', {}).get('slug', ''),
@@ -386,6 +389,13 @@ class PageService(BaseService):
                     }
                     for item in sorted(category_entry, key=lambda x: x.get('order', 0))
                 ]
+                # Only claim to have resolved the block when a campaign actually
+                # featured something. The client treats *any* resolvedData list as
+                # the final answer, so sending [] for a workspace with no campaign
+                # entries rendered an empty grid instead of letting it fall back to
+                # the workspace's own categories.
+                if resolved_categories:
+                    block['resolvedData'] = resolved_categories
             elif block_type == 'banner_grid_v1':
                 # Client expects: banners: [{ image, title?: {en,zh}, link? }]
                 block['data'] = dict(data)
@@ -394,7 +404,7 @@ class PageService(BaseService):
                         'image': item.get('image') or item.get('category', {}).get('image', ''),
                         'title': {
                             'en': item.get('title') or item.get('category', {}).get('name', ''),
-                            'zh': item.get('title') or item.get('category', {}).get('name', ''),
+                            'zh-hans': item.get('title') or item.get('category', {}).get('name', ''),
                         },
                         'link': item.get('link_url') or (
                             f"/category/{item.get('category', {}).get('slug', '')}"

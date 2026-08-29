@@ -68,6 +68,13 @@ def get_page_cache_ttl(slug: str) -> int:
     return 0
 
 
+# The languages a rendered page can be cached under. These must be the codes the
+# clients actually request — a page cached under "zh-hans" and invalidated for
+# "zh" simply never clears, so a deploy or a content edit keeps serving the old
+# payload until the TTL runs out.
+CACHE_INVALIDATION_LANGS = ["en", "zh-hans", "zh-hant"]
+
+
 def invalidate_home_page_cache_for_workspace(
     workspace_id: int, languages: Optional[List[str]] = None
 ) -> None:
@@ -76,7 +83,7 @@ def invalidate_home_page_cache_for_workspace(
     Call this when promo/CampaignDisplay/Campaign data changes so storefront gets fresh data.
     """
     if languages is None:
-        languages = ["en", "zh"]
+        languages = CACHE_INVALIDATION_LANGS
     for lang in languages:
         cache.delete(get_page_rendered_cache_key(workspace_id, HOME_SLUG, lang))
 
@@ -86,7 +93,7 @@ def invalidate_page_rendered_cache(
 ) -> None:
     """Invalidate rendered cache for a specific page slug and languages."""
     if languages is None:
-        languages = ["en", "zh"]
+        languages = CACHE_INVALIDATION_LANGS
     for lang in languages:
         cache.delete(get_page_rendered_cache_key(workspace_id, slug, lang))
 

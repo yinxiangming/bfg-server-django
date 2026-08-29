@@ -72,3 +72,15 @@ def test_home_promo_blocks_localise_with_zh_hans_not_zh(db, monkeypatch):
         assert "zh-hans" in slide[key], key
         assert "zh" not in slide[key], key
     assert slide["buttonText"]["zh-hans"] == "立即选购"
+
+
+def test_cache_invalidation_covers_the_language_codes_clients_request():
+    """A page cached under 'zh-hans' has to be reachable by the invalidator.
+
+    The default list used to be ["en", "zh"], so a zh-hans home page kept serving
+    a stale payload after a deploy or a content edit until its TTL ran out.
+    """
+    from bfg.web.services.page_service import CACHE_INVALIDATION_LANGS
+
+    assert "zh-hans" in CACHE_INVALIDATION_LANGS
+    assert "zh" not in CACHE_INVALIDATION_LANGS

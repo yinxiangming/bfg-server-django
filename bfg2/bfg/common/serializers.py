@@ -609,8 +609,15 @@ def media_file_url_for_serializer(media_obj, request=None):
     Using file.url can yield upload-style paths (e.g. 1/products/xxx) when
     the DB stores seed path (seed_images/store/xxx); building from name avoids that.
     """
-    if not media_obj or not media_obj.file or not media_obj.file.name:
+    if not media_obj:
         return None
+    if not media_obj.file or not media_obj.file.name:
+        # Media imported from elsewhere carries no local file at all — the asset
+        # lives on a CDN and `external_url` is the only address it has. Returning
+        # None here blanked every legacy image across the admin (2281 of 2284
+        # media rows on the wxstore workspace). `signed_media_url` below has
+        # always fallen back this way; this one simply forgot to.
+        return media_obj.external_url or None
     # Join on the boundary only. The old `.replace('//', '/')` also collapsed the
     # `//` in an absolute MEDIA_URL, turning `https://cdn/...` into `https:/cdn/...`
     # — harmless while MEDIA_URL was the relative `/media/`, fatal once it points

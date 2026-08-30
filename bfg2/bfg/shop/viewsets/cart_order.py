@@ -3,7 +3,8 @@ Cart and Order ViewSets
 """
 from datetime import date, timedelta
 
-from django.db.models import Sum, Count
+from django.contrib.contenttypes.models import ContentType
+from django.db.models import Count, Exists, OuterRef, Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -15,7 +16,7 @@ from bfg.core.permissions import IsWorkspaceStaff
 from rest_framework.exceptions import PermissionDenied, ValidationError as APIValidationError
 from decimal import Decimal
 
-from bfg.common.models import Customer, Address
+from bfg.common.models import Customer, Address, MediaLink
 from bfg.shop.models import Cart, CartItem, Order, OrderItem, Product, ProductVariant, Store
 from bfg.delivery.models import PackageTemplate
 from bfg.delivery.models import Package
@@ -390,6 +391,15 @@ class OrderViewSet(viewsets.ModelViewSet):
         queryset = Order.objects.filter(workspace=workspace).select_related(
             'customer', 'customer__user', 'store', 'shipping_address', 'billing_address',
             'pickup_point'
+        ).annotate(
+            # One EXISTS instead of a query per row: the list shows this on
+            # every order, and a bank-transfer shop has one on most of them.
+            has_payment_proof_flag=Exists(
+                MediaLink.objects.filter(
+                    content_type=ContentType.objects.get_for_model(Order),
+                    object_id=OuterRef('pk'),
+                )
+            )
         ).prefetch_related(
             'items', 'items__product', 'items__variant',
             # Order-list thumbnails read these in Python; without the prefetch
@@ -414,6 +424,12 @@ class OrderViewSet(viewsets.ModelViewSet):
             status_filter = self.request.query_params.get('status')
             if status_filter:
                 queryset = queryset.filter(status=status_filter)
+            # "Show me the ones waiting on a human to check a screenshot."
+            proof = (self.request.query_params.get('has_payment_proof') or '').lower()
+            if proof in ('1', 'true', 'yes'):
+                queryset = queryset.filter(has_payment_proof_flag=True)
+            elif proof in ('0', 'false', 'no'):
+                queryset = queryset.filter(has_payment_proof_flag=False)
             payment_status = self.request.query_params.get('payment_status')
             if payment_status:
                 queryset = queryset.filter(payment_status=payment_status)

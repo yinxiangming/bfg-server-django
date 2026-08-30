@@ -546,17 +546,58 @@ class CartSerializer(serializers.ModelSerializer):
         return obj.items.count()
 
 
+def order_attachment_links(order):
+    """MediaLinks hanging off an Order — what the shopper uploaded against it.
+
+    Order has no GenericRelation to MediaLink, so the content-type lookup is
+    spelled out here rather than repeated at each call site.
+    """
+    from django.contrib.contenttypes.models import ContentType
+    from bfg.common.models import MediaLink
+
+    return MediaLink.objects.filter(
+        content_type=ContentType.objects.get_for_model(Order),
+        object_id=order.id,
+    ).order_by('created_at')
+
+
+def order_item_image_url(item, request):
+    """First product image for an order line, or None.
+
+    Walks the prefetched ``media_links`` in Python instead of calling
+    ``Product.primary_image``: that property runs its own ``.filter()``,
+    which bypasses the prefetch cache and would fire a query per line —
+    on a 20-row order list that is a hundred extra round trips.
+    """
+    product = getattr(item, 'product', None)
+    if product is None:
+        return None
+    images = [
+        link for link in product.media_links.all()
+        if link.media is not None and link.media.media_type == 'image'
+    ]
+    if not images:
+        return None
+    media = min(images, key=lambda link: link.position).media
+    return media.external_url or media_file_url_for_serializer(media, request)
+
+
 class OrderItemSerializer(serializers.ModelSerializer):
     """Order item serializer"""
+    image = serializers.SerializerMethodField()
     
     class Meta:
         model = OrderItem
         fields = [
             'id', 'product', 'variant', 'product_name', 'variant_name',
-            'sku', 'quantity', 'price', 'subtotal'
+            'sku', 'quantity', 'price', 'subtotal', 'image'
         ]
         read_only_fields = ['id', 'price', 'subtotal']
-    
+
+    def get_image(self, obj):
+        """First product image, so the order page shows what was bought."""
+        return order_item_image_url(obj, self.context.get('request'))
+
     def validate_quantity(self, value):
         """Validate quantity is positive"""
         if value is None:
@@ -578,6 +619,9 @@ class OrderListSerializer(serializers.ModelSerializer):
     customer_note = serializers.CharField(read_only=True, allow_blank=True)
     packages_count = serializers.SerializerMethodField()
     pickup_point_name = serializers.CharField(source='pickup_point.name', read_only=True, allow_null=True)
+    # Annotated by OrderViewSet.get_queryset; the fallback keeps any other
+    # caller of this serializer working, one query at a time.
+    has_payment_proof = serializers.SerializerMethodField()
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
     
     class Meta:
@@ -587,6 +631,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             'store', 'store_name', 'sales_channel', 'sales_channel_name',
             'status', 'payment_status', 'fulfillment_method',
             'pickup_point', 'pickup_point_name', 'pickup_code',
+            'has_payment_proof',
             'total', 'item_count', 'items', 'customer_note', 'packages_count', 'created_at'
         ]
         read_only_fields = ['id', 'order_number', 'created_at']
@@ -595,6 +640,22 @@ class OrderListSerializer(serializers.ModelSerializer):
         """Get order item count"""
         return obj.items.count()
     
+    def get_has_payment_proof(self, obj):
+        """Whether the shopper has attached anything to this order.
+
+        A bank-transfer shopper uploads a screenshot and then waits for a human
+        to look at it. Nothing in the list said so, so the only way to find
+        those orders was to open them one by one.
+
+        It deliberately does not touch `payment_status`: an uploaded screenshot
+        is a claim, not a payment, and marking it `paid` would be the shop
+        believing the claim on the shopper's word.
+        """
+        annotated = getattr(obj, 'has_payment_proof_flag', None)
+        if annotated is not None:
+            return bool(annotated)
+        return order_attachment_links(obj).exists()
+
     def get_packages_count(self, obj):
         """Get order packages count for logistics column"""
         if hasattr(obj, 'packages'):
@@ -608,32 +669,10 @@ class OrderListSerializer(serializers.ModelSerializer):
             {
                 'product_name': item.product_name,
                 'quantity': item.quantity,
-                'image': self._item_image_url(item, request),
+                'image': order_item_image_url(item, request),
             }
             for item in obj.items.all()[:20]
         ]
-
-    @staticmethod
-    def _item_image_url(item, request):
-        """First product image for an order line, or None.
-
-        Walks the prefetched ``media_links`` in Python instead of calling
-        ``Product.primary_image``: that property runs its own ``.filter()``,
-        which bypasses the prefetch cache and would fire a query per line —
-        on a 20-row order list that is a hundred extra round trips.
-        """
-        product = getattr(item, 'product', None)
-        if product is None:
-            return None
-        images = [
-            link for link in product.media_links.all()
-            if link.media is not None and link.media.media_type == 'image'
-        ]
-        if not images:
-            return None
-        media = min(images, key=lambda link: link.position).media
-        return media.external_url or media_file_url_for_serializer(media, request)
-
 
 class OrderCreateSerializer(serializers.ModelSerializer):
     """Order create serializer (for direct order creation)"""
@@ -693,6 +732,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     payments = serializers.SerializerMethodField()
     activities = serializers.SerializerMethodField()
     packages = serializers.SerializerMethodField()
+    attachments = serializers.SerializerMethodField()
     freight_service = serializers.SerializerMethodField()
     
     class Meta:
@@ -705,7 +745,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'subtotal', 'shipping_cost', 'tax', 'discount', 'total',
             'shipping_address', 'billing_address', 'shipping_address_id', 'billing_address_id',
             'customer_note', 'admin_note', 'items', 'packages', 'invoices', 'payments', 'activities',
-            'freight_service',
+            'attachments', 'freight_service',
             'created_at', 'updated_at',
             'paid_at', 'shipped_at', 'delivered_at'
         ]
@@ -714,6 +754,28 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'paid_at', 'shipped_at', 'delivered_at'
         ]
     
+    def get_attachments(self, obj):
+        """Files the shopper attached — a payment screenshot, all but always.
+
+        Stored as sensitive media in a private bucket, so each one is handed
+        over as a short-lived signed URL rather than a public path. Staff could
+        not see them at all before: the upload endpoint lives on the storefront
+        viewset, scoped to the shopper who owns the order.
+        """
+        from bfg.common.serializers import signed_media_url
+
+        request = self.context.get('request')
+        return [
+            {
+                'id': link.id,
+                'media_id': link.media_id,
+                'url': signed_media_url(link.media, request),
+                'kind': link.description or '',
+                'created_at': link.created_at.isoformat() if link.created_at else None,
+            }
+            for link in order_attachment_links(obj).select_related('media')
+        ]
+
     def get_pickup_point(self, obj):
         """Where the customer collects, flattened for the order page."""
         point = obj.pickup_point

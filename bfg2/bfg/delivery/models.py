@@ -158,6 +158,22 @@ class PickupPoint(TenantScopedModel):
     created_at = models.DateTimeField(_("Created At"), default=timezone.now)
     updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
 
+    @property
+    def full_address(self) -> str:
+        """One-line address, without repeating itself.
+
+        Google answers "Auckland" for both the city and the region of an
+        Auckland address, and printing it twice reads as a bug rather than as
+        data.
+        """
+        parts = []
+        for part in (self.address_line1, self.address_line2, self.city,
+                     self.state, self.postal_code, self.country):
+            part = (part or '').strip()
+            if part and part not in parts:
+                parts.append(part)
+        return ', '.join(parts)
+
     class Meta:
         verbose_name = _("Pickup Point")
         verbose_name_plural = _("Pickup Points")

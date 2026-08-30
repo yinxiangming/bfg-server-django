@@ -19,7 +19,8 @@ from bfg.delivery.models import (
     FreightState, PackageTemplate
 )
 from bfg.delivery.serializers import (
-    WarehouseSerializer, PickupPointSerializer, CarrierSerializer, FreightServiceSerializer,
+    WarehouseSerializer, PickupPointSerializer, StorefrontPickupPointSerializer,
+    CarrierSerializer, FreightServiceSerializer,
     ManifestListSerializer, ManifestDetailSerializer,
     ConsignmentListSerializer, ConsignmentDetailSerializer,
     PackageSerializer, TrackingEventSerializer, FreightStatusSerializer,
@@ -83,6 +84,26 @@ class PickupPointViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(workspace=self.request.workspace)
+
+    @action(detail=False, methods=['get'], permission_classes=[AllowAny], authentication_classes=[])
+    def for_storefront(self, request):
+        """Active pickup points, for the checkout picker.
+
+        Public, like `freight-services/for_country/` next door: the shopper has
+        to see the options before there is an account to attach them to.
+        """
+        workspace = getattr(request, 'workspace', None)
+        if not workspace:
+            return Response(
+                {'detail': 'Workspace is required. Send X-Workspace-ID header or use a configured domain.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        points = PickupPoint.objects.filter(
+            workspace=workspace, is_active=True
+        ).order_by('-is_default', 'sort_order', 'name')
+
+        return Response(StorefrontPickupPointSerializer(points, many=True).data)
 
     @action(detail=True, methods=['post'])
     def set_default(self, request, pk=None):

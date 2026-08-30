@@ -62,6 +62,23 @@ class PickupPointSerializer(CoordinateFieldsMixin, serializers.ModelSerializer):
         }
 
 
+class StorefrontPickupPointSerializer(serializers.ModelSerializer):
+    """What a shopper needs to choose a collection point, and nothing else.
+
+    No email, no warehouse, no sort order: this is served to anonymous callers,
+    so it carries only what the checkout page actually renders.
+    """
+    address = serializers.CharField(source='full_address', read_only=True)
+
+    class Meta:
+        model = PickupPoint
+        fields = [
+            'id', 'name', 'code', 'address', 'phone', 'instructions',
+            'latitude', 'longitude', 'fee',
+        ]
+        read_only_fields = fields
+
+
 class CarrierSerializer(serializers.ModelSerializer):
     """Carrier serializer"""
     

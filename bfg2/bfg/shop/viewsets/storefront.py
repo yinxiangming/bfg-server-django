@@ -666,6 +666,8 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         Query params:
             shipping_method: Shipping method ('standard' or 'express', default: 'standard')
             freight_service_id: FreightService ID (preferred over shipping_method)
+            fulfillment_method: 'shipping' (default) or 'pickup'
+            pickup_point: PickupPoint id, when collecting
         """
         from decimal import Decimal
         
@@ -680,6 +682,8 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         # Get freight_service_id (preferred) or shipping_method (backward compatibility)
         freight_service_id = request.query_params.get('freight_service_id')
         shipping_method = request.query_params.get('shipping_method', 'standard')
+        fulfillment_method = request.query_params.get('fulfillment_method', 'shipping')
+        pickup_point_id = request.query_params.get('pickup_point')
         
         # Use unified price calculation from OrderService
         from bfg.shop.services import OrderService
@@ -706,6 +710,17 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             except Exception:
                 pass  # Ignore errors, will use default tax rate
         
+        # A preview must not 400 the way checkout does when no point is named --
+        # the shopper is still deciding. Price what we can and let checkout be
+        # the thing that insists.
+        pickup_point = None
+        if fulfillment_method == 'pickup':
+            from bfg.delivery.models import PickupPoint
+            pickup_point = PickupPoint.objects.filter(
+                workspace=workspace, is_active=True,
+                **({'id': pickup_point_id} if pickup_point_id else {'is_default': True}),
+            ).first()
+
         totals = order_service.calculate_order_totals(
             cart=cart,
             shipping_method=shipping_method if not freight_service_id else None,
@@ -713,7 +728,9 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             coupon_code=None,  # No coupon code for preview
             gift_card_code=None,  # No gift card for preview
             user=request.user if request.user.is_authenticated else None,
-            shipping_address=shipping_address
+            shipping_address=shipping_address,
+            fulfillment_method=fulfillment_method,
+            pickup_point=pickup_point
         )
         
         return Response({

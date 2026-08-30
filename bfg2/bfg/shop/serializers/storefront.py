@@ -12,7 +12,6 @@ from bfg.shop.models import (
     Cart, CartItem, Order, OrderItem, ProductReview
 )
 from bfg.common.serializers import MediaLinkSerializer, media_file_url_for_serializer
-from bfg.shop._serializers import _join_address
 from bfg.finance.models import Payment, PaymentGateway
 from bfg.shop.services.product_identifier_service import get_workspace_identifier_prefixes
 from bfg.shop.services.storefront_display_service import (
@@ -424,7 +423,7 @@ class StorefrontOrderSerializer(serializers.ModelSerializer):
         return {
             'id': point.id,
             'name': point.name,
-            'address': _join_address(point),
+            'address': point.full_address,
             'phone': point.phone,
             'instructions': point.instructions,
             'latitude': point.latitude,

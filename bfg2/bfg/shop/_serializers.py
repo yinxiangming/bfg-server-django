@@ -635,21 +635,6 @@ class OrderListSerializer(serializers.ModelSerializer):
         return media.external_url or media_file_url_for_serializer(media, request)
 
 
-def _join_address(point):
-    """One-line address for a pickup point, without repeating itself.
-
-    Google answers "Auckland" for both the city and the region of an Auckland
-    address, and printing it twice reads as a bug rather than as data.
-    """
-    parts = []
-    for part in (point.address_line1, point.address_line2, point.city,
-                 point.state, point.postal_code, point.country):
-        part = (part or '').strip()
-        if part and part not in parts:
-            parts.append(part)
-    return ', '.join(parts)
-
-
 class OrderCreateSerializer(serializers.ModelSerializer):
     """Order create serializer (for direct order creation)"""
     customer_id = serializers.IntegerField(write_only=True, required=False)
@@ -738,7 +723,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'id': point.id,
             'name': point.name,
             'code': point.code,
-            'address': _join_address(point),
+            'address': point.full_address,
             'phone': point.phone,
             'instructions': point.instructions,
             'latitude': point.latitude,

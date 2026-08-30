@@ -862,6 +862,12 @@ class OrderService(BaseService):
         if new_status == 'shipped' and not order.shipped_at:
             order.shipped_at = timezone.now()
             self.emit_event('order.shipped', {'order': order})
+        elif new_status == 'ready_for_pickup' and not order.shipped_at:
+            # Same column, different sentence: the moment the order stopped
+            # waiting on us. It must not raise `order.shipped` -- that event's
+            # handler tells the customer a parcel is on its way, and nothing is.
+            order.shipped_at = timezone.now()
+            self.emit_event('order.ready_for_pickup', {'order': order})
         elif new_status == 'delivered' and not order.delivered_at:
             order.delivered_at = timezone.now()
             self.emit_event('order.delivered', {'order': order})

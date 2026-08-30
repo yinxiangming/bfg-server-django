@@ -226,3 +226,32 @@ def test_a_guest_can_collect_too(client, workspace, store):
     order = Order.all_objects.get(id=response.data['id'])
     assert order.pickup_point_id == point.id
     assert order.shipping_address_id is None
+
+
+# ---------------------------------------------------------------------------
+# ready_for_pickup
+# ---------------------------------------------------------------------------
+
+def test_ready_for_pickup_stamps_the_time_without_claiming_a_parcel_moved(workspace, store):
+    """`order.shipped` tells the customer a parcel is on its way. Nothing is."""
+    from bfg.common.models import Customer, User
+    from bfg.shop.models import Order
+    from bfg.shop.services import OrderService
+
+    user = User.objects.create(username='ready', email='ready@example.com', is_active=True)
+    customer = Customer.objects.create(workspace=workspace, user=user, is_active=True)
+    order = Order.objects.create(
+        workspace=workspace, customer=customer, store=store, order_number='ORD-READY-1',
+        fulfillment_method='pickup', subtotal=Decimal('10'), total=Decimal('10'),
+    )
+
+    events = []
+    service = OrderService(workspace=workspace, user=user)
+    service.emit_event = lambda name, data: events.append(name)
+
+    service.update_order_status(order, 'ready_for_pickup')
+
+    order.refresh_from_db()
+    assert order.status == 'ready_for_pickup'
+    assert order.shipped_at is not None      # the moment it stopped waiting on us
+    assert events == ['order.ready_for_pickup']

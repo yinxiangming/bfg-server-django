@@ -13,6 +13,11 @@ class Order(TenantScopedModel):
         ('pending', _('Pending')),
         ('processing', _('Processing')),
         ('shipped', _('Shipped')),
+        # A collection order used to borrow `shipped` to mean "waiting at the
+        # counter", which four separate screens then had to relabel. It gets its
+        # own word instead. `delivered` still ends both journeys: it means the
+        # customer has the goods, however they came by them.
+        ('ready_for_pickup', _('Ready for Pickup')),
         ('delivered', _('Delivered')),
         ('cancelled', _('Cancelled')),
         ('refunded', _('Refunded')),

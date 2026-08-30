@@ -8,6 +8,7 @@ from rest_framework import serializers
 from pydantic import ValidationError as PydanticValidationError
 
 from bfg.core.schema_convert import validation_error_to_message
+from bfg.core.serializer_fields import CoordinateFieldsMixin
 from bfg.delivery.models import (
     Warehouse, Carrier, FreightService, DeliveryZone,
     Manifest, Consignment, Package, TrackingEvent, FreightStatus, PackagingType,
@@ -22,7 +23,7 @@ from bfg.delivery.schemas import (
 )
 
 
-class WarehouseSerializer(serializers.ModelSerializer):
+class WarehouseSerializer(CoordinateFieldsMixin, serializers.ModelSerializer):
     """Warehouse serializer"""
     
     class Meta:

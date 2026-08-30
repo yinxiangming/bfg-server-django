@@ -5,6 +5,7 @@ Serializers for common module models
 """
 
 from rest_framework import serializers
+from bfg.core.serializer_fields import CoordinateFieldsMixin
 from bfg.common.models import (
     Workspace, Customer, Address, User, StaffRole, StaffMember, Settings,
     CustomerSegment, CustomerTag, UserPreferences, Media, MediaLink, EmailConfig,
@@ -286,7 +287,7 @@ class CustomerDetailSerializer(serializers.ModelSerializer):
         ).data
 
 
-class AddressSerializer(serializers.ModelSerializer):
+class AddressSerializer(CoordinateFieldsMixin, serializers.ModelSerializer):
     """Address serializer"""
     customer_id = serializers.IntegerField(write_only=True, required=False)
 

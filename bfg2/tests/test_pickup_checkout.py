@@ -129,3 +129,100 @@ def test_preview_does_not_refuse_a_shopper_who_has_not_chosen_yet(client, worksp
     body = client.get(PREVIEW_URL, {'fulfillment_method': 'pickup'}).json()
 
     assert body['shipping_cost'] == '0.00'
+
+
+# ---------------------------------------------------------------------------
+# Placing the order
+# ---------------------------------------------------------------------------
+
+CHECKOUT_URL = f'{CART_URL}checkout/'
+GUEST_CHECKOUT_URL = f'{CART_URL}guest_checkout/'
+
+
+@pytest.fixture
+def store(workspace):
+    from bfg.shop.models import Store
+    return Store.objects.create(workspace=workspace, name='Main', code='main', is_active=True)
+
+
+def test_collecting_needs_no_delivery_address(client, workspace, store):
+    """The regression this whole feature exists to remove.
+
+    Checkout used to refuse any order without a shipping address, so a shop
+    whose customers collect had to invent one for every order.
+    """
+    from bfg.common.models import User
+    from bfg.shop.models import Order
+
+    user = User.objects.create(username='collector', email='collector@example.com', is_active=True)
+    client.force_authenticate(user=user)
+    fill_cart(client, workspace)
+    point = make_point(workspace, 'albany', is_default=True, fee=Decimal('2.50'))
+
+    response = client.post(
+        CHECKOUT_URL,
+        {'store': store.id, 'fulfillment_method': 'pickup'},
+        format='json',
+    )
+
+    assert response.status_code == 201, response.data
+    order = Order.all_objects.get(id=response.data['id'])
+    assert order.fulfillment_method == 'pickup'
+    assert order.pickup_point_id == point.id
+    assert order.shipping_address_id is None
+    assert order.shipping_cost == Decimal('2.50')
+
+
+def test_shipping_still_demands_an_address(client, workspace, store):
+    from bfg.common.models import User
+
+    user = User.objects.create(username='poster', email='poster@example.com', is_active=True)
+    client.force_authenticate(user=user)
+    fill_cart(client, workspace)
+
+    response = client.post(CHECKOUT_URL, {'store': store.id}, format='json')
+
+    assert response.status_code == 400
+
+
+def test_collecting_without_any_point_configured_is_refused(client, workspace, store):
+    # No point and no default: the order would be uncollectable, so checkout
+    # says so rather than recording a place nobody can go to.
+    from bfg.common.models import User
+
+    user = User.objects.create(username='nowhere', email='nowhere@example.com', is_active=True)
+    client.force_authenticate(user=user)
+    fill_cart(client, workspace)
+
+    response = client.post(
+        CHECKOUT_URL, {'store': store.id, 'fulfillment_method': 'pickup'}, format='json'
+    )
+
+    assert response.status_code == 400
+    assert 'pickup_point' in response.data
+
+
+def test_a_guest_can_collect_too(client, workspace, store):
+    from bfg.shop.models import Order
+
+    fill_cart(client, workspace)
+    point = make_point(workspace, 'albany', is_default=True)
+
+    response = client.post(
+        GUEST_CHECKOUT_URL,
+        {
+            'store': store.id,
+            'fulfillment_method': 'pickup',
+            # Name, email and phone still matter: that is how the shop says
+            # "ready". The street address does not.
+            'email': 'walkin@example.com',
+            'full_name': 'Walk In',
+            'phone': '0211234567',
+        },
+        format='json',
+    )
+
+    assert response.status_code == 201, response.data
+    order = Order.all_objects.get(id=response.data['id'])
+    assert order.pickup_point_id == point.id
+    assert order.shipping_address_id is None

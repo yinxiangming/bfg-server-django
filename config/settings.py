@@ -4,6 +4,7 @@ Django settings for BFG Framework (open-source core).
 Core-only build: no apps.* (business modules). Use this for the public repo.
 """
 
+import json
 import os
 import sys
 from datetime import timedelta
@@ -85,6 +86,27 @@ if SENTRY_DSN and not TESTING:
         send_default_pii=True,
         traces_sample_rate=float(os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0') or 0),
     )
+
+# ─── Server-side Google Analytics 4 (Measurement Protocol) ────────────
+# A JSON object mapping GA4 measurement id -> Measurement Protocol api_secret,
+# e.g. {"G-XXXXXXXXXX": "…"}. Keyed by measurement id rather than workspace id so
+# the secret follows the GA4 property, and because the measurement id is what
+# bfg.core.analytics already resolves from the workspace's settings.
+#
+# It is *not* stored per workspace in the database: SettingsSerializer echoes
+# `custom_settings` wholesale, which would expose this write credential to every
+# workspace admin. Unset simply disables server-side reporting.
+try:
+    GA4_MP_API_SECRETS = json.loads(os.environ.get('GA4_MP_API_SECRETS', '') or '{}')
+    if not isinstance(GA4_MP_API_SECRETS, dict):
+        raise ValueError('GA4_MP_API_SECRETS must be a JSON object')
+except (ValueError, TypeError) as exc:
+    # Never take the whole app down over an analytics misconfiguration — but say so
+    # loudly, because the symptom otherwise is silently missing data.
+    import warnings
+
+    warnings.warn(f'Ignoring malformed GA4_MP_API_SECRETS: {exc}')
+    GA4_MP_API_SECRETS = {}
 
 # Application definition (BFG core only; no apps.* business modules)
 INSTALLED_APPS = [

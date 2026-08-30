@@ -313,6 +313,76 @@ def on_consignment_delivered(event_data):
         logger.error(f"Error handling consignment.delivered event: {e}", exc_info=True)
 
 
+def on_order_paid_analytics(event_data):
+    """
+    Report a paid order to GA4 as a ``purchase``.
+
+    This is the only place order revenue reaches GA4. The web storefront's gtag
+    sends page views and nothing else, and the WeChat mini-program cannot run gtag
+    at all — so without this, the mini-program's entire contribution is invisible
+    and no property has any revenue in it.
+
+    Hung off ``order.paid`` rather than ``order.created`` because GA4's ``purchase``
+    is a revenue event: counting orders that were placed but never paid would
+    overstate it, and abandoned checkouts are the common case.
+    """
+    try:
+        order = event_data.get('data', {}).get('order')
+        workspace = event_data.get('workspace')
+        if not order or not workspace:
+            return
+
+        from bfg.core.analytics import client_id_for_customer, track
+
+        client_id = client_id_for_customer(order.customer_id, workspace.id)
+        if not client_id:
+            return
+
+        items = [
+            {
+                'item_id': item.sku or str(item.product_id),
+                'item_name': item.product_name,
+                'item_variant': item.variant_name or None,
+                'price': float(item.price),
+                'quantity': item.quantity,
+            }
+            for item in order.items.all()
+        ]
+
+        params = {
+            'transaction_id': order.order_number,
+            'value': float(order.total),
+            'tax': float(order.tax),
+            'shipping': float(order.shipping_cost),
+            'currency': _order_currency(workspace),
+            'items': items,
+            # The whole point of the exercise: lets GA4 separate mini-program
+            # revenue from web revenue, which is otherwise unknowable once both
+            # arrive through the same server-side stream.
+            'sales_channel': order.sales_channel.code if order.sales_channel else 'unknown',
+        }
+
+        track(workspace.id, client_id, 'purchase', params, user_id=order.customer_id)
+    except Exception as e:
+        # Analytics must never break order processing.
+        logger.error(f"Error reporting order.paid to GA4: {e}", exc_info=True)
+
+
+def _order_currency(workspace):
+    """
+    The currency to report the sale in.
+
+    Orders carry no currency of their own — a workspace prices everything in its
+    single default — so that setting is the only source. GA4 discards a `purchase`
+    whose currency is missing or malformed, hence the explicit fallback.
+    """
+    from bfg.common.constants import DEFAULT_CURRENCY_CODE
+    from bfg.common.models import Settings
+
+    settings_obj = Settings.objects.filter(workspace=workspace).only('default_currency').first()
+    return (getattr(settings_obj, 'default_currency', None) or DEFAULT_CURRENCY_CODE).upper()
+
+
 # Register event listeners
 def register_event_handlers():
     """Register all order event handlers."""
@@ -326,7 +396,8 @@ def register_event_handlers():
     global_dispatcher.listen('order.cancelled', on_order_cancelled)
     global_dispatcher.listen('order.refunded', on_order_refunded)
     global_dispatcher.listen('order.paid', on_order_paid)
-    
+    global_dispatcher.listen('order.paid', on_order_paid_analytics)
+
     logger.info("Registered shop order event handlers")
 
 

@@ -16,6 +16,7 @@ from .viewsets.storefront import (
 )
 from .viewsets.wishlist import StorefrontWishlistViewSet
 from .viewsets.storefront_auth import StorefrontRegisterView
+from .viewsets.storefront_analytics import StorefrontAnalyticsView
 from bfg.marketing.promo_views import PromoView
 
 router = DefaultRouter()
@@ -37,6 +38,7 @@ urlpatterns = [
             name='storefront-payment-callback'),
     path('promo/', PromoView.as_view(), name='storefront-promo'),
     path('auth/register/', StorefrontRegisterView.as_view(), name='storefront-register'),
+    path('analytics/collect/', StorefrontAnalyticsView.as_view(), name='storefront-analytics-collect'),
     path('', include(router.urls)),
 ]
 

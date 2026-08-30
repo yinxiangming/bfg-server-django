@@ -40,7 +40,9 @@ class OrderService(BaseService):
         coupon_code: Optional[str] = None,
         gift_card_code: Optional[str] = None,
         user: Optional[Any] = None,
-        shipping_address: Optional[Address] = None
+        shipping_address: Optional[Address] = None,
+        fulfillment_method: str = 'shipping',
+        pickup_point: Optional[Any] = None
     ) -> Dict[str, Decimal]:
         """
         Calculate order totals (unified calculation for preview and order creation)
@@ -53,6 +55,8 @@ class OrderService(BaseService):
             gift_card_code: Optional gift card code
             user: User instance (for discount calculation)
             shipping_address: Optional shipping address for location-based tax calculation
+            fulfillment_method: 'shipping' or 'pickup'
+            pickup_point: PickupPoint the customer collects from, when picking up
             
         Returns:
             Dict with:
@@ -108,16 +112,22 @@ class OrderService(BaseService):
         discount = discount_result.get('discount', Decimal('0.00'))
         shipping_discount = discount_result.get('shipping_discount', Decimal('0.00'))
         
-        # Calculate cart weight for shipping calculation
-        weight = self._calculate_cart_weight(cart)
-        
-        # Calculate shipping cost using FreightService or legacy method
-        shipping_cost = self._calculate_shipping_cost(
-            shipping_method=shipping_method,
-            freight_service_id=freight_service_id,
-            weight=weight,
-            order_amount=subtotal
-        )
+        if fulfillment_method == 'pickup':
+            # Nothing is being carried, so weight bands and freight services have
+            # nothing to say here. What the shopper pays, if anything, is what the
+            # point charges for holding the order.
+            shipping_cost = pickup_point.fee if pickup_point is not None else Decimal('0.00')
+        else:
+            # Calculate cart weight for shipping calculation
+            weight = self._calculate_cart_weight(cart)
+
+            # Calculate shipping cost using FreightService or legacy method
+            shipping_cost = self._calculate_shipping_cost(
+                shipping_method=shipping_method,
+                freight_service_id=freight_service_id,
+                weight=weight,
+                order_amount=subtotal
+            )
         
         # Apply free shipping discount if applicable
         if shipping_discount > Decimal('0.00'):
@@ -317,6 +327,42 @@ class OrderService(BaseService):
             # No tax rate configured, return 0
             return Decimal('0.00')
     
+    def resolve_pickup_point(self, fulfillment_method: str, pickup_point: Any = None):
+        """The PickupPoint an order is collected from, or None when it ships.
+
+        Takes an instance or an id. A pickup order that names no point falls back
+        to the workspace default -- that is what ``is_default`` is for, and it
+        saves single-point shops from sending an id they have no choice about.
+        With no default configured there is nothing sensible to guess, so it is a
+        400 rather than a pickup order nobody can collect.
+        """
+        if fulfillment_method != 'pickup':
+            return None
+
+        from bfg.delivery.models import PickupPoint
+
+        if pickup_point is not None and not isinstance(pickup_point, PickupPoint):
+            pickup_point = PickupPoint.objects.filter(
+                id=pickup_point, workspace=self.workspace, is_active=True
+            ).first()
+            if pickup_point is None:
+                raise APIValidationError(
+                    {'pickup_point': 'No such active pickup point in this workspace.'}
+                )
+
+        if pickup_point is None:
+            pickup_point = PickupPoint.objects.filter(
+                workspace=self.workspace, is_active=True, is_default=True
+            ).first()
+
+        if pickup_point is None:
+            raise APIValidationError(
+                {'pickup_point': 'Pickup point is required for pickup orders.'}
+            )
+
+        self.validate_workspace_access(pickup_point)
+        return pickup_point
+
     @transaction.atomic
     def create_order_from_cart(
         self,
@@ -354,6 +400,7 @@ class OrderService(BaseService):
         fulfillment_method = kwargs.get('fulfillment_method', 'shipping')
         if fulfillment_method == 'shipping' and not shipping_address:
             raise APIValidationError({'shipping_address': 'Shipping address is required for shipping orders.'})
+        pickup_point = self.resolve_pickup_point(fulfillment_method, kwargs.get('pickup_point'))
         if not billing_address:
             billing_address = shipping_address
         
@@ -373,7 +420,9 @@ class OrderService(BaseService):
                 coupon_code=coupon_code,
                 gift_card_code=gift_card_code,
                 user=kwargs.get('user'),
-                shipping_address=shipping_address
+                shipping_address=shipping_address,
+                fulfillment_method=fulfillment_method,
+                pickup_point=pickup_point
             )
             subtotal = totals['subtotal']
             discount = totals['discount']
@@ -390,7 +439,9 @@ class OrderService(BaseService):
                 coupon_code=coupon_code,
                 gift_card_code=gift_card_code,
                 user=kwargs.get('user'),
-                shipping_address=shipping_address
+                shipping_address=shipping_address,
+                fulfillment_method=fulfillment_method,
+                pickup_point=pickup_point
             )
             subtotal = totals['subtotal']
             discount = totals['discount']
@@ -466,6 +517,8 @@ class OrderService(BaseService):
             status='pending',
             payment_status='pending',
             fulfillment_method=fulfillment_method,
+            pickup_point=pickup_point,
+            pickup_code=kwargs.get('pickup_code', ''),
             subtotal=subtotal,
             shipping_cost=shipping_cost,
             tax=tax,
@@ -597,6 +650,7 @@ class OrderService(BaseService):
         fulfillment_method = kwargs.get('fulfillment_method', 'shipping')
         if fulfillment_method == 'shipping' and not shipping_address:
             raise APIValidationError({'shipping_address': 'Shipping address is required for shipping orders.'})
+        pickup_point = self.resolve_pickup_point(fulfillment_method, kwargs.get('pickup_point'))
         if not billing_address:
             billing_address = shipping_address
         
@@ -621,6 +675,8 @@ class OrderService(BaseService):
             status=status,
             payment_status=payment_status,
             fulfillment_method=fulfillment_method,
+            pickup_point=pickup_point,
+            pickup_code=kwargs.get('pickup_code', ''),
             subtotal=subtotal,
             shipping_cost=shipping_cost,
             tax=tax,
@@ -806,6 +862,12 @@ class OrderService(BaseService):
         if new_status == 'shipped' and not order.shipped_at:
             order.shipped_at = timezone.now()
             self.emit_event('order.shipped', {'order': order})
+        elif new_status == 'ready_for_pickup' and not order.shipped_at:
+            # Same column, different sentence: the moment the order stopped
+            # waiting on us. It must not raise `order.shipped` -- that event's
+            # handler tells the customer a parcel is on its way, and nothing is.
+            order.shipped_at = timezone.now()
+            self.emit_event('order.ready_for_pickup', {'order': order})
         elif new_status == 'delivered' and not order.delivered_at:
             order.delivered_at = timezone.now()
             self.emit_event('order.delivered', {'order': order})

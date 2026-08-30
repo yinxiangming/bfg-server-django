@@ -5,12 +5,21 @@ Serializers for common module models
 """
 
 from rest_framework import serializers
+from bfg.core.serializer_fields import CoordinateFieldsMixin
 from bfg.common.models import (
     Workspace, Customer, Address, User, StaffRole, StaffMember, Settings,
     CustomerSegment, CustomerTag, UserPreferences, Media, MediaLink, EmailConfig,
     APIKey, Invitation,
 )
-from django.conf import settings    
+from django.conf import settings
+
+# What counts as money the customer actually spent. Keyed on `payment_status`,
+# not `status`: `Order.STATUS_CHOICES` has no "paid" or "completed" member, so
+# the status-based tuple this replaces could only ever match "delivered" and
+# ignored every paid order still in flight. Shared by the list serializer's
+# `total_spent` and the detail serializer's `experience_points` so the two
+# figures can never drift apart.
+SPEND_PAYMENT_STATUS = 'paid'
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -165,19 +174,48 @@ class CustomerListSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     user_id = serializers.IntegerField(write_only=True, required=False)
     user_email = serializers.SerializerMethodField()
-    
+    last_login = serializers.SerializerMethodField()
+    total_spent = serializers.SerializerMethodField()
+
     class Meta:
         model = Customer
         fields = [
             'id', 'workspace', 'user', 'user_id', 'user_email', 'customer_number',
             'company_name', 'tax_number', 'credit_limit', 'balance',
-            'is_active', 'is_verified', 'created_at'
+            'is_active', 'is_verified', 'created_at', 'last_login', 'total_spent'
         ]
         read_only_fields = ['id', 'workspace', 'customer_number', 'created_at']
     
     def get_user_email(self, obj):
         """Get user email for display"""
         return obj.user.email if obj.user else None
+
+    def get_last_login(self, obj):
+        """Last time this customer signed in (admin list column)."""
+        return obj.user.last_login if obj.user else None
+
+    def get_total_spent(self, obj):
+        """Money spent across orders whose payment reached ``SPEND_PAYMENT_STATUS``.
+
+        ``CustomerViewSet`` annotates this on the list queryset; the fallback
+        below keeps the serializer correct (just slower) if it is ever used on
+        an un-annotated queryset.
+        """
+        annotated = getattr(obj, 'total_spent', None)
+        if annotated is not None:
+            return annotated
+        from decimal import Decimal
+
+        from django.db.models import Sum
+
+        from bfg.shop.models import Order
+
+        total = Order.objects.filter(
+            customer=obj,
+            workspace=obj.workspace,
+            payment_status=SPEND_PAYMENT_STATUS,
+        ).aggregate(total=Sum('total'))['total']
+        return total or Decimal('0')
 
 
 class CustomerDetailSerializer(serializers.ModelSerializer):
@@ -222,7 +260,7 @@ class CustomerDetailSerializer(serializers.ModelSerializer):
             completed_orders = Order.objects.filter(
                 customer=obj,
                 workspace=obj.workspace,
-                status__in=['delivered', 'completed', 'paid']
+                payment_status=SPEND_PAYMENT_STATUS
             )
             
             order_count = completed_orders.count()
@@ -249,7 +287,7 @@ class CustomerDetailSerializer(serializers.ModelSerializer):
         ).data
 
 
-class AddressSerializer(serializers.ModelSerializer):
+class AddressSerializer(CoordinateFieldsMixin, serializers.ModelSerializer):
     """Address serializer"""
     customer_id = serializers.IntegerField(write_only=True, required=False)
 
@@ -572,8 +610,15 @@ def media_file_url_for_serializer(media_obj, request=None):
     Using file.url can yield upload-style paths (e.g. 1/products/xxx) when
     the DB stores seed path (seed_images/store/xxx); building from name avoids that.
     """
-    if not media_obj or not media_obj.file or not media_obj.file.name:
+    if not media_obj:
         return None
+    if not media_obj.file or not media_obj.file.name:
+        # Media imported from elsewhere carries no local file at all — the asset
+        # lives on a CDN and `external_url` is the only address it has. Returning
+        # None here blanked every legacy image across the admin (2281 of 2284
+        # media rows on the wxstore workspace). `signed_media_url` below has
+        # always fallen back this way; this one simply forgot to.
+        return media_obj.external_url or None
     # Join on the boundary only. The old `.replace('//', '/')` also collapsed the
     # `//` in an absolute MEDIA_URL, turning `https://cdn/...` into `https:/cdn/...`
     # — harmless while MEDIA_URL was the relative `/media/`, fatal once it points

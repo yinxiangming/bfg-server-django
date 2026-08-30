@@ -577,6 +577,7 @@ class OrderListSerializer(serializers.ModelSerializer):
     items = serializers.SerializerMethodField()
     customer_note = serializers.CharField(read_only=True, allow_blank=True)
     packages_count = serializers.SerializerMethodField()
+    pickup_point_name = serializers.CharField(source='pickup_point.name', read_only=True, allow_null=True)
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
     
     class Meta:
@@ -584,7 +585,8 @@ class OrderListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'customer', 'customer_name',
             'store', 'store_name', 'sales_channel', 'sales_channel_name',
-            'status', 'payment_status',
+            'status', 'payment_status', 'fulfillment_method',
+            'pickup_point', 'pickup_point_name', 'pickup_code',
             'total', 'item_count', 'items', 'customer_note', 'packages_count', 'created_at'
         ]
         read_only_fields = ['id', 'order_number', 'created_at']
@@ -600,11 +602,37 @@ class OrderListSerializer(serializers.ModelSerializer):
         return 0
     
     def get_items(self, obj):
-        """Brief item summary for list: product_name, quantity"""
+        """Brief item summary for list: name, quantity and a thumbnail."""
+        request = self.context.get('request')
         return [
-            {'product_name': item.product_name, 'quantity': item.quantity}
+            {
+                'product_name': item.product_name,
+                'quantity': item.quantity,
+                'image': self._item_image_url(item, request),
+            }
             for item in obj.items.all()[:20]
         ]
+
+    @staticmethod
+    def _item_image_url(item, request):
+        """First product image for an order line, or None.
+
+        Walks the prefetched ``media_links`` in Python instead of calling
+        ``Product.primary_image``: that property runs its own ``.filter()``,
+        which bypasses the prefetch cache and would fire a query per line —
+        on a 20-row order list that is a hundred extra round trips.
+        """
+        product = getattr(item, 'product', None)
+        if product is None:
+            return None
+        images = [
+            link for link in product.media_links.all()
+            if link.media is not None and link.media.media_type == 'image'
+        ]
+        if not images:
+            return None
+        media = min(images, key=lambda link: link.position).media
+        return media.external_url or media_file_url_for_serializer(media, request)
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
@@ -612,6 +640,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     customer_id = serializers.IntegerField(write_only=True, required=False)
     store_id = serializers.IntegerField(write_only=True, required=True)
     fulfillment_method = serializers.ChoiceField(choices=['shipping', 'pickup'], required=False, default='shipping')
+    pickup_point_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     shipping_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     billing_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     
@@ -632,7 +661,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'customer', 'customer_id', 'store', 'store_id',
-            'fulfillment_method', 'shipping_address_id', 'billing_address_id',
+            'fulfillment_method', 'pickup_point_id', 'pickup_code',
+            'shipping_address_id', 'billing_address_id',
             'subtotal', 'shipping_cost', 'tax', 'discount', 'total',
             'status', 'payment_status', 'customer_note', 'admin_note',
             'created_at'
@@ -651,6 +681,10 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     store_name = serializers.CharField(source='store.name', read_only=True)
     sales_channel_name = serializers.CharField(source='sales_channel.name', read_only=True, allow_null=True)
     fulfillment_method = serializers.CharField(read_only=True)
+    pickup_point = serializers.SerializerMethodField()
+    # Writable as `<fk>_id`, the same trick shipping_address_id uses: Django
+    # exposes the column, so ModelSerializer.update() sets it directly.
+    pickup_point_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     shipping_address = serializers.SerializerMethodField()
     billing_address = serializers.SerializerMethodField()
     shipping_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
@@ -666,7 +700,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'customer', 'customer_name',
             'store', 'store_name', 'sales_channel', 'sales_channel_name',
-            'fulfillment_method', 'status', 'payment_status',
+            'fulfillment_method', 'pickup_point', 'pickup_point_id', 'pickup_code',
+            'status', 'payment_status',
             'subtotal', 'shipping_cost', 'tax', 'discount', 'total',
             'shipping_address', 'billing_address', 'shipping_address_id', 'billing_address_id',
             'customer_note', 'admin_note', 'items', 'packages', 'invoices', 'payments', 'activities',
@@ -679,6 +714,23 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'paid_at', 'shipped_at', 'delivered_at'
         ]
     
+    def get_pickup_point(self, obj):
+        """Where the customer collects, flattened for the order page."""
+        point = obj.pickup_point
+        if point is None:
+            return None
+        return {
+            'id': point.id,
+            'name': point.name,
+            'code': point.code,
+            'address': point.full_address,
+            'phone': point.phone,
+            'instructions': point.instructions,
+            'latitude': point.latitude,
+            'longitude': point.longitude,
+            'fee': point.fee,
+        }
+
     def get_customer(self, obj):
         """Get customer details"""
         if obj.customer:

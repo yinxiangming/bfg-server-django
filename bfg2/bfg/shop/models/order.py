@@ -13,6 +13,11 @@ class Order(TenantScopedModel):
         ('pending', _('Pending')),
         ('processing', _('Processing')),
         ('shipped', _('Shipped')),
+        # A collection order used to borrow `shipped` to mean "waiting at the
+        # counter", which four separate screens then had to relabel. It gets its
+        # own word instead. `delivered` still ends both journeys: it means the
+        # customer has the goods, however they came by them.
+        ('ready_for_pickup', _('Ready for Pickup')),
         ('delivered', _('Delivered')),
         ('cancelled', _('Cancelled')),
         ('refunded', _('Refunded')),
@@ -64,6 +69,25 @@ class Order(TenantScopedModel):
         max_length=20,
         choices=FULFILLMENT_METHOD_CHOICES,
         default='shipping'
+    )
+
+    pickup_point = models.ForeignKey(
+        'delivery.PickupPoint',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='orders',
+        help_text=_("Where the customer collects this order. Required when fulfillment_method is 'pickup'."),
+    )
+    pickup_code = models.CharField(
+        _("Pickup Code"),
+        max_length=64,
+        blank=True,
+        help_text=_(
+            "Whatever the customer quotes on collection: a locker PIN handed to us by the "
+            "provider, or a code we generated for the counter to check. One field on purpose "
+            "— shops use one or the other, never both."
+        ),
     )
     
     # Order Info

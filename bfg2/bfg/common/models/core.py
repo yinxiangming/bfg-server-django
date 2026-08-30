@@ -92,6 +92,24 @@ class User(AbstractUser):
         verbose_name = _("User")
         verbose_name_plural = _("Users")
     
+    def get_full_name(self):
+        """Full name in the order the name's own script reads.
+
+        Django concatenates ``first last``, which turns 尹湘红 into "湘红 尹"
+        everywhere a name is shown — the order list, invitations, ``__str__``.
+        CJK names put the family name first and take no separator, so detect the
+        script rather than the locale: the name travels with the person, not with
+        whoever is looking at the screen.
+        """
+        first = (self.first_name or '').strip()
+        last = (self.last_name or '').strip()
+        if not first or not last:
+            return first or last
+
+        if any('\u4e00' <= ch <= '\u9fff' for ch in f'{first}{last}'):
+            return f'{last}{first}'
+        return f'{first} {last}'
+
     def __str__(self):
         return self.get_full_name() or self.username
 

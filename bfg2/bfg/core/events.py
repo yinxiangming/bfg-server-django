@@ -15,6 +15,7 @@ product_created = Signal()
 order_created = Signal()
 order_paid = Signal()
 order_shipped = Signal()
+order_ready_for_pickup = Signal()
 order_delivered = Signal()
 payment_confirmed = Signal()
 payment_failed = Signal()
@@ -37,6 +38,7 @@ class EventDispatcher:
             'order.created': order_created,
             'order.paid': order_paid,
             'order.shipped': order_shipped,
+            'order.ready_for_pickup': order_ready_for_pickup,
             'order.delivered': order_delivered,
             'payment.confirmed': payment_confirmed,
             'payment.failed': payment_failed,

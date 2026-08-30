@@ -8,8 +8,9 @@ from rest_framework import serializers
 from pydantic import ValidationError as PydanticValidationError
 
 from bfg.core.schema_convert import validation_error_to_message
+from bfg.core.serializer_fields import CoordinateFieldsMixin
 from bfg.delivery.models import (
-    Warehouse, Carrier, FreightService, DeliveryZone,
+    Warehouse, PickupPoint, Carrier, FreightService, DeliveryZone,
     Manifest, Consignment, Package, TrackingEvent, FreightStatus, PackagingType,
     PackageTemplate
 )
@@ -22,7 +23,7 @@ from bfg.delivery.schemas import (
 )
 
 
-class WarehouseSerializer(serializers.ModelSerializer):
+class WarehouseSerializer(CoordinateFieldsMixin, serializers.ModelSerializer):
     """Warehouse serializer"""
     
     class Meta:
@@ -39,6 +40,43 @@ class WarehouseSerializer(serializers.ModelSerializer):
             'postal_code': {'required': False},
             'country': {'required': False},
         }
+
+
+class PickupPointSerializer(CoordinateFieldsMixin, serializers.ModelSerializer):
+    """Pickup point serializer"""
+    warehouse_name = serializers.CharField(source='warehouse.name', read_only=True, allow_null=True)
+
+    class Meta:
+        model = PickupPoint
+        fields = [
+            'id', 'name', 'code', 'warehouse', 'warehouse_name',
+            'address_line1', 'address_line2', 'city', 'state', 'postal_code', 'country',
+            'latitude', 'longitude', 'phone', 'email',
+            'instructions', 'fee',
+            'is_active', 'is_default', 'sort_order', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'address_line1': {'required': False},
+            'city': {'required': False},
+        }
+
+
+class StorefrontPickupPointSerializer(serializers.ModelSerializer):
+    """What a shopper needs to choose a collection point, and nothing else.
+
+    No email, no warehouse, no sort order: this is served to anonymous callers,
+    so it carries only what the checkout page actually renders.
+    """
+    address = serializers.CharField(source='full_address', read_only=True)
+
+    class Meta:
+        model = PickupPoint
+        fields = [
+            'id', 'name', 'code', 'address', 'phone', 'instructions',
+            'latitude', 'longitude', 'fee',
+        ]
+        read_only_fields = fields
 
 
 class CarrierSerializer(serializers.ModelSerializer):

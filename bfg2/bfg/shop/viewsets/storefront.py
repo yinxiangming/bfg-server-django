@@ -666,6 +666,8 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         Query params:
             shipping_method: Shipping method ('standard' or 'express', default: 'standard')
             freight_service_id: FreightService ID (preferred over shipping_method)
+            fulfillment_method: 'shipping' (default) or 'pickup'
+            pickup_point: PickupPoint id, when collecting
         """
         from decimal import Decimal
         
@@ -680,6 +682,8 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         # Get freight_service_id (preferred) or shipping_method (backward compatibility)
         freight_service_id = request.query_params.get('freight_service_id')
         shipping_method = request.query_params.get('shipping_method', 'standard')
+        fulfillment_method = request.query_params.get('fulfillment_method', 'shipping')
+        pickup_point_id = request.query_params.get('pickup_point')
         
         # Use unified price calculation from OrderService
         from bfg.shop.services import OrderService
@@ -706,6 +710,17 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             except Exception:
                 pass  # Ignore errors, will use default tax rate
         
+        # A preview must not 400 the way checkout does when no point is named --
+        # the shopper is still deciding. Price what we can and let checkout be
+        # the thing that insists.
+        pickup_point = None
+        if fulfillment_method == 'pickup':
+            from bfg.delivery.models import PickupPoint
+            pickup_point = PickupPoint.objects.filter(
+                workspace=workspace, is_active=True,
+                **({'id': pickup_point_id} if pickup_point_id else {'is_default': True}),
+            ).first()
+
         totals = order_service.calculate_order_totals(
             cart=cart,
             shipping_method=shipping_method if not freight_service_id else None,
@@ -713,7 +728,9 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             coupon_code=None,  # No coupon code for preview
             gift_card_code=None,  # No gift card for preview
             user=request.user if request.user.is_authenticated else None,
-            shipping_address=shipping_address
+            shipping_address=shipping_address,
+            fulfillment_method=fulfillment_method,
+            pickup_point=pickup_point
         )
         
         return Response({
@@ -935,6 +952,8 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             )
         
         store_id = request.data.get('store')
+        fulfillment_method = request.data.get('fulfillment_method', 'shipping')
+        pickup_point_id = request.data.get('pickup_point')
         shipping_address_id = request.data.get('shipping_address')
         billing_address_id = request.data.get('billing_address')
         customer_note = request.data.get('customer_note', '')
@@ -943,7 +962,8 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         shipping_cost = request.data.get('shipping_cost')  # Backward compatibility
         tax = request.data.get('tax')  # Backward compatibility
         
-        if not store_id or not shipping_address_id:
+        # An order the customer collects has no delivery address to ask for.
+        if not store_id or (fulfillment_method != 'pickup' and not shipping_address_id):
             return Response(
                 {'detail': 'store and shipping_address are required'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -951,21 +971,22 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         
         try:
             store = Store.objects.get(id=store_id, workspace=workspace)
-            shipping_address = Address.objects.get(id=shipping_address_id)
             
-            # Verify address belongs to customer
             customer, _ = Customer.objects.get_or_create(
                 user=request.user,
                 workspace=workspace,
                 defaults={'is_active': True}
             )
             
-            # Check if address belongs to customer (simplified check)
-            if shipping_address.content_object != customer:
-                return Response(
-                    {'detail': 'Shipping address not found or does not belong to you'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+            shipping_address = None
+            if shipping_address_id:
+                shipping_address = Address.objects.get(id=shipping_address_id)
+                # Check if address belongs to customer (simplified check)
+                if shipping_address.content_object != customer:
+                    return Response(
+                        {'detail': 'Shipping address not found or does not belong to you'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
             
             billing_address = None
             if billing_address_id:
@@ -987,6 +1008,10 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                 'user': request.user
             }
             
+            order_kwargs['fulfillment_method'] = fulfillment_method
+            if fulfillment_method == 'pickup':
+                order_kwargs['pickup_point'] = pickup_point_id
+
             # Prefer freight_service_id over shipping_method over shipping_cost/tax
             if freight_service_id:
                 try:
@@ -1073,6 +1098,8 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             )
 
         store_id = request.data.get('store')
+        fulfillment_method = request.data.get('fulfillment_method', 'shipping')
+        pickup_point_id = request.data.get('pickup_point')
         shipping_data = request.data.get('shipping_address') or {}
         billing_same_as_shipping = request.data.get('billing_same_as_shipping', True)
         billing_data = request.data.get('billing_address') or {}
@@ -1093,9 +1120,13 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             return Response({'detail': 'email and full_name are required for guest checkout'}, status=status.HTTP_400_BAD_REQUEST)
 
         required_fields = ['address_line1', 'city', 'postal_code', 'country']
-        for field in required_fields:
-            if not shipping_data.get(field):
-                return Response({'detail': f'Shipping address missing field: {field}'}, status=status.HTTP_400_BAD_REQUEST)
+        # A guest who is collecting still owes us a name, an email and a phone --
+        # that is how we reach them when the order is ready -- but not a street
+        # address for a parcel that is never posted.
+        if fulfillment_method != 'pickup':
+            for field in required_fields:
+                if not shipping_data.get(field):
+                    return Response({'detail': f'Shipping address missing field: {field}'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Create or get user by email
         user = User.objects.filter(email=email).first()
@@ -1131,7 +1162,7 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             return Response({'detail': 'Store not found'}, status=status.HTTP_404_NOT_FOUND)
 
         # Create shipping address
-        shipping_address = Address.objects.create(
+        shipping_address = None if fulfillment_method == 'pickup' else Address.objects.create(
             workspace=workspace,
             content_object=customer,
             full_name=shipping_data.get('full_name') or full_name,
@@ -1146,7 +1177,7 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         )
 
         billing_address = shipping_address
-        if not billing_same_as_shipping:
+        if not billing_same_as_shipping and fulfillment_method != 'pickup':
             for field in required_fields:
                 if not billing_data.get(field):
                     return Response({'detail': f'Billing address missing field: {field}'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1178,6 +1209,10 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             'customer_note': customer_note
         }
         
+        order_kwargs['fulfillment_method'] = fulfillment_method
+        if fulfillment_method == 'pickup':
+            order_kwargs['pickup_point'] = pickup_point_id
+
         # Prefer freight_service_id over shipping_method over shipping_cost/tax
         if freight_service_id:
             try:

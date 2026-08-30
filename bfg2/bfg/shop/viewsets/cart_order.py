@@ -284,6 +284,7 @@ class CartViewSet(viewsets.ModelViewSet):
         
         store_id = request.data.get('store')
         fulfillment_method = request.data.get('fulfillment_method', 'shipping')
+        pickup_point_id = request.data.get('pickup_point')
         shipping_address_id = request.data.get('shipping_address')
         billing_address_id = request.data.get('billing_address')
         coupon_code = request.data.get('coupon_code')
@@ -324,6 +325,7 @@ class CartViewSet(viewsets.ModelViewSet):
                 shipping_address=shipping_address,
                 billing_address=billing_address,
                 fulfillment_method=fulfillment_method,
+                pickup_point=pickup_point_id,
                 customer_note=request.data.get('customer_note', ''),
                 coupon_code=coupon_code,
                 gift_card_code=gift_card_code,
@@ -386,7 +388,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         user = self.request.user
         
         queryset = Order.objects.filter(workspace=workspace).select_related(
-            'customer', 'customer__user', 'store', 'shipping_address', 'billing_address'
+            'customer', 'customer__user', 'store', 'shipping_address', 'billing_address',
+            'pickup_point'
         ).prefetch_related(
             'items', 'items__product', 'items__variant',
             # Order-list thumbnails read these in Python; without the prefetch
@@ -551,6 +554,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         
         # Get or create shipping address
         fulfillment_method = serializer.validated_data.get('fulfillment_method', 'shipping')
+        pickup_point_id = serializer.validated_data.pop('pickup_point_id', None)
         shipping_address_id = serializer.validated_data.pop('shipping_address_id', None)
         from bfg.common.models import Address
         shipping_address = None
@@ -608,7 +612,10 @@ class OrderViewSet(viewsets.ModelViewSet):
                 'price': price,
                 'subtotal': line,
             })
-        shipping_cost = Decimal('0')
+        # A staff-created order carries no freight quote, so the only delivery
+        # charge that can apply is what the pickup point asks for.
+        pickup_point = service.resolve_pickup_point(fulfillment_method, pickup_point_id)
+        shipping_cost = pickup_point.fee if pickup_point is not None else Decimal('0')
         tax = Decimal('0')
         discount = Decimal('0')
         total = subtotal + shipping_cost + tax - discount
@@ -619,6 +626,8 @@ class OrderViewSet(viewsets.ModelViewSet):
             shipping_address=shipping_address,
             billing_address=billing_address,
             fulfillment_method=fulfillment_method,
+            pickup_point=pickup_point,
+            pickup_code=serializer.validated_data.get('pickup_code', ''),
             status=status,
             payment_status=payment_status,
             customer_note=customer_note,

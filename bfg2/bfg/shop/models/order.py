@@ -65,6 +65,25 @@ class Order(TenantScopedModel):
         choices=FULFILLMENT_METHOD_CHOICES,
         default='shipping'
     )
+
+    pickup_point = models.ForeignKey(
+        'delivery.PickupPoint',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='orders',
+        help_text=_("Where the customer collects this order. Required when fulfillment_method is 'pickup'."),
+    )
+    pickup_code = models.CharField(
+        _("Pickup Code"),
+        max_length=64,
+        blank=True,
+        help_text=_(
+            "Whatever the customer quotes on collection: a locker PIN handed to us by the "
+            "provider, or a code we generated for the counter to check. One field on purpose "
+            "— shops use one or the other, never both."
+        ),
+    )
     
     # Order Info
     order_number = models.CharField(_("Order Number"), max_length=50, unique=True)

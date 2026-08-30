@@ -12,6 +12,7 @@ from bfg.shop.models import (
     Cart, CartItem, Order, OrderItem, ProductReview
 )
 from bfg.common.serializers import MediaLinkSerializer, media_file_url_for_serializer
+from bfg.shop._serializers import _join_address
 from bfg.finance.models import Payment, PaymentGateway
 from bfg.shop.services.product_identifier_service import get_workspace_identifier_prefixes
 from bfg.shop.services.storefront_display_service import (
@@ -395,6 +396,8 @@ class StorefrontOrderSerializer(serializers.ModelSerializer):
     freight_service = serializers.SerializerMethodField()
     packages = serializers.SerializerMethodField()
     fulfillment_method = serializers.CharField(read_only=True)
+    pickup_point = serializers.SerializerMethodField()
+    pickup_code = serializers.CharField(read_only=True)
     # Checkout accepts a note, so the shopper has to be able to read it back and
     # confirm it was recorded. admin_note stays internal.
     customer_note = serializers.CharField(read_only=True)
@@ -402,11 +405,32 @@ class StorefrontOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'status', 'payment_status', 'fulfillment_method', 'customer_note',
+            'id', 'order_number', 'status', 'payment_status', 'fulfillment_method',
+            'pickup_point', 'pickup_code', 'customer_note',
             'amounts', 'addresses', 'items', 'timestamps', 'customer', 'activities', 'freight_service', 'packages'
         ]
-        read_only_fields = ['id', 'order_number', 'customer_note']
+        read_only_fields = ['id', 'order_number', 'customer_note', 'pickup_code']
     
+    def get_pickup_point(self, obj):
+        """Where to collect, for a pickup order. None when it ships.
+
+        The shopper needs the address and the opening hours as much as a
+        shipping order needs its delivery address -- without them "ready for
+        pickup" is not actionable.
+        """
+        point = obj.pickup_point
+        if point is None:
+            return None
+        return {
+            'id': point.id,
+            'name': point.name,
+            'address': _join_address(point),
+            'phone': point.phone,
+            'instructions': point.instructions,
+            'latitude': point.latitude,
+            'longitude': point.longitude,
+        }
+
     def get_amounts(self, obj):
         """Get order amounts"""
         return {

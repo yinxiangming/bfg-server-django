@@ -577,6 +577,7 @@ class OrderListSerializer(serializers.ModelSerializer):
     items = serializers.SerializerMethodField()
     customer_note = serializers.CharField(read_only=True, allow_blank=True)
     packages_count = serializers.SerializerMethodField()
+    pickup_point_name = serializers.CharField(source='pickup_point.name', read_only=True, allow_null=True)
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
     
     class Meta:
@@ -585,6 +586,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             'id', 'order_number', 'customer', 'customer_name',
             'store', 'store_name', 'sales_channel', 'sales_channel_name',
             'status', 'payment_status', 'fulfillment_method',
+            'pickup_point', 'pickup_point_name', 'pickup_code',
             'total', 'item_count', 'items', 'customer_note', 'packages_count', 'created_at'
         ]
         read_only_fields = ['id', 'order_number', 'created_at']
@@ -633,11 +635,27 @@ class OrderListSerializer(serializers.ModelSerializer):
         return media.external_url or media_file_url_for_serializer(media, request)
 
 
+def _join_address(point):
+    """One-line address for a pickup point, without repeating itself.
+
+    Google answers "Auckland" for both the city and the region of an Auckland
+    address, and printing it twice reads as a bug rather than as data.
+    """
+    parts = []
+    for part in (point.address_line1, point.address_line2, point.city,
+                 point.state, point.postal_code, point.country):
+        part = (part or '').strip()
+        if part and part not in parts:
+            parts.append(part)
+    return ', '.join(parts)
+
+
 class OrderCreateSerializer(serializers.ModelSerializer):
     """Order create serializer (for direct order creation)"""
     customer_id = serializers.IntegerField(write_only=True, required=False)
     store_id = serializers.IntegerField(write_only=True, required=True)
     fulfillment_method = serializers.ChoiceField(choices=['shipping', 'pickup'], required=False, default='shipping')
+    pickup_point_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     shipping_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     billing_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     
@@ -658,7 +676,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'customer', 'customer_id', 'store', 'store_id',
-            'fulfillment_method', 'shipping_address_id', 'billing_address_id',
+            'fulfillment_method', 'pickup_point_id', 'pickup_code',
+            'shipping_address_id', 'billing_address_id',
             'subtotal', 'shipping_cost', 'tax', 'discount', 'total',
             'status', 'payment_status', 'customer_note', 'admin_note',
             'created_at'
@@ -677,6 +696,10 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     store_name = serializers.CharField(source='store.name', read_only=True)
     sales_channel_name = serializers.CharField(source='sales_channel.name', read_only=True, allow_null=True)
     fulfillment_method = serializers.CharField(read_only=True)
+    pickup_point = serializers.SerializerMethodField()
+    # Writable as `<fk>_id`, the same trick shipping_address_id uses: Django
+    # exposes the column, so ModelSerializer.update() sets it directly.
+    pickup_point_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     shipping_address = serializers.SerializerMethodField()
     billing_address = serializers.SerializerMethodField()
     shipping_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
@@ -692,7 +715,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'customer', 'customer_name',
             'store', 'store_name', 'sales_channel', 'sales_channel_name',
-            'fulfillment_method', 'status', 'payment_status',
+            'fulfillment_method', 'pickup_point', 'pickup_point_id', 'pickup_code',
+            'status', 'payment_status',
             'subtotal', 'shipping_cost', 'tax', 'discount', 'total',
             'shipping_address', 'billing_address', 'shipping_address_id', 'billing_address_id',
             'customer_note', 'admin_note', 'items', 'packages', 'invoices', 'payments', 'activities',
@@ -705,6 +729,23 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'paid_at', 'shipped_at', 'delivered_at'
         ]
     
+    def get_pickup_point(self, obj):
+        """Where the customer collects, flattened for the order page."""
+        point = obj.pickup_point
+        if point is None:
+            return None
+        return {
+            'id': point.id,
+            'name': point.name,
+            'code': point.code,
+            'address': _join_address(point),
+            'phone': point.phone,
+            'instructions': point.instructions,
+            'latitude': point.latitude,
+            'longitude': point.longitude,
+            'fee': point.fee,
+        }
+
     def get_customer(self, obj):
         """Get customer details"""
         if obj.customer:

@@ -2,6 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     WarehouseViewSet,
+    PickupPointViewSet,
     ConsignmentViewSet,
     CarrierViewSet,
     FreightServiceViewSet,
@@ -15,6 +16,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register(r'warehouses', WarehouseViewSet, basename='warehouse')
+router.register(r'pickup-points', PickupPointViewSet, basename='pickup-point')
 router.register(r'consignments', ConsignmentViewSet, basename='consignment')
 router.register(r'carriers', CarrierViewSet, basename='carrier')
 router.register(r'freight-services', FreightServiceViewSet, basename='freight-service')

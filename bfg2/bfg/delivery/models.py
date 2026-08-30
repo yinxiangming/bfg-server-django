@@ -86,6 +86,93 @@ class StorageLocation(models.Model):
         return f"{self.warehouse.code} - {self.code}"
 
 
+class PickupPoint(TenantScopedModel):
+    """Somewhere a customer collects an order from.
+
+    Deliberately **not** a ``FreightService``: a freight service answers "how
+    does the parcel travel and what does that cost" — weight bands, transit
+    days, a carrier — and has nowhere to put an address. One row per location
+    would also turn a service-level table into a location table.
+
+    Deliberately **not** a ``Warehouse`` either, tempting as it looks (a
+    warehouse already carries an address and coordinates): a warehouse is an
+    internal fulfilment centre that manifests ship *from* and packages are
+    stored in, so listing customer-facing collection points among them leaks
+    into every logistics screen. Where the two genuinely coincide — a depot the
+    public also collects from — say so with ``warehouse`` instead of merging
+    the tables.
+
+    Scoped to the workspace, not to a store: no shop here runs a point that
+    only some of its stores offer, and an always-empty M2M is worse than none.
+    Same reasoning for per-locale name/instructions — add a ``translations``
+    JSON field (never the row-per-language scheme ``ProductCategory`` uses, as
+    an order has to point at exactly one row) when the storefront picker needs
+    it.
+    """
+    workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='pickup_points')
+
+    warehouse = models.ForeignKey(
+        Warehouse,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='pickup_points',
+        help_text=_("Where the stock collected here comes from, if it is one of our own."),
+    )
+
+    name = models.CharField(_("Name"), max_length=255)
+    code = models.CharField(_("Code"), max_length=50)
+
+    # Same shape as Warehouse, so a depot that is both can be set up by copying.
+    address_line1 = models.CharField(_("Address Line 1"), max_length=255)
+    address_line2 = models.CharField(_("Address Line 2"), max_length=255, blank=True)
+    city = models.CharField(_("City"), max_length=100)
+    state = models.CharField(_("State/Province"), max_length=100, blank=True)
+    postal_code = models.CharField(_("Postal Code"), max_length=20, blank=True)
+    country = models.CharField(_("Country"), max_length=2, blank=True)
+
+    latitude = models.DecimalField(_("Latitude"), max_digits=10, decimal_places=7, null=True, blank=True)
+    longitude = models.DecimalField(_("Longitude"), max_digits=10, decimal_places=7, null=True, blank=True)
+
+    phone = models.CharField(_("Phone"), max_length=50, blank=True)
+    email = models.EmailField(_("Email"), blank=True)
+
+    instructions = models.TextField(
+        _("Pickup Instructions"),
+        blank=True,
+        help_text=_("Opening hours, which door, where to park — shown to the shopper."),
+    )
+
+    fee = models.DecimalField(
+        _("Pickup Fee"),
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0'),
+        help_text=_("Charged on the order's shipping_cost line, which is the delivery charge line."),
+    )
+
+    is_active = models.BooleanField(_("Active"), default=True)
+    is_default = models.BooleanField(_("Default"), default=False)
+    sort_order = models.PositiveSmallIntegerField(_("Sort Order"), default=100)
+
+    created_at = models.DateTimeField(_("Created At"), default=timezone.now)
+    updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("Pickup Point")
+        verbose_name_plural = _("Pickup Points")
+        ordering = ['sort_order', 'name']
+        unique_together = ('workspace', 'code')
+        indexes = [
+            models.Index(fields=['workspace', 'is_active']),
+        ]
+        # Keep reverse FK / migration access unscoped, as every other model here.
+        base_manager_name = 'all_objects'
+
+    def __str__(self):
+        return self.name
+
+
 class Carrier(TenantScopedModel):
     """
     Shipping carrier/courier with plugin support.

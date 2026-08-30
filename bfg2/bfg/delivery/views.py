@@ -14,12 +14,12 @@ from django.db import models
 from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite
 from bfg.common.constants import get_default_country_for_workspace
 from bfg.delivery.models import (
-    Warehouse, Carrier, FreightService, Manifest, Consignment,
+    Warehouse, PickupPoint, Carrier, FreightService, Manifest, Consignment,
     Package, TrackingEvent, FreightStatus, DeliveryZone, PackagingType,
     FreightState, PackageTemplate
 )
 from bfg.delivery.serializers import (
-    WarehouseSerializer, CarrierSerializer, FreightServiceSerializer,
+    WarehouseSerializer, PickupPointSerializer, CarrierSerializer, FreightServiceSerializer,
     ManifestListSerializer, ManifestDetailSerializer,
     ConsignmentListSerializer, ConsignmentDetailSerializer,
     PackageSerializer, TrackingEventSerializer, FreightStatusSerializer,
@@ -68,6 +68,36 @@ class WarehouseViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(warehouse)
         return Response(serializer.data)
+
+
+class PickupPointViewSet(viewsets.ModelViewSet):
+    """Pickup point management ViewSet. Reads: any staff. Writes: admin only."""
+    serializer_class = PickupPointSerializer
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
+
+    def get_queryset(self):
+        """Pickup points for the current workspace, in display order."""
+        return PickupPoint.objects.filter(
+            workspace=self.request.workspace
+        ).select_related('warehouse')
+
+    def perform_create(self, serializer):
+        serializer.save(workspace=self.request.workspace)
+
+    @action(detail=True, methods=['post'])
+    def set_default(self, request, pk=None):
+        """Make this the point orders fall back to when none is chosen."""
+        point = self.get_object()
+
+        PickupPoint.objects.filter(
+            workspace=request.workspace,
+            is_default=True,
+        ).exclude(id=point.id).update(is_default=False)
+
+        point.is_default = True
+        point.save(update_fields=['is_default', 'updated_at'])
+
+        return Response(self.get_serializer(point).data)
 
 
 class CarrierViewSet(viewsets.ModelViewSet):

@@ -39,8 +39,11 @@ class ProductCategorySerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
     
     def get_children(self, obj):
-        """Get children categories recursively"""
-        children = obj.children.filter(is_active=True).order_by('order', 'name')
+        """Children, recursively. Inactive ones are included: this serializer is
+        only ever used by the staff ProductCategoryViewSet, and filtering them
+        out would drop a whole branch out of the admin tree the moment its
+        parent was switched off."""
+        children = obj.children.all().order_by('order', 'name')
         return ProductCategorySerializer(children, many=True).data
 
     def validate_rules(self, value):

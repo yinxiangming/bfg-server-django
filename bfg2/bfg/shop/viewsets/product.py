@@ -41,33 +41,53 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     
     def get_queryset(self):
-        """Get categories for current workspace. Fallback to English when requested language has no categories (for list)."""
+        """
+        Categories for the current workspace.
+
+        ``lang`` scopes the *list* — a category tree is per-language, so listing
+        without it would interleave translations. A detail lookup is by primary
+        key, which already names one row: narrowing it by language as well only
+        turns "open this category" into a 404 whenever the row's language is not
+        the one asked for. ``lang`` defaults to English, and the clients do not
+        send it on detail requests, so a catalogue held in any other language
+        could not be opened, edited or deleted from the admin at all.
+        """
         workspace = getattr(self.request, 'workspace', None)
         if not workspace:
             from rest_framework.exceptions import NotFound
             raise NotFound("No workspace available. Please ensure a workspace exists and is active.")
-        
-        language = self.request.query_params.get('lang', 'en')
+
         queryset = ProductCategory.objects.filter(
-            workspace=workspace,
-            language=language
+            workspace=workspace
         ).select_related('parent').prefetch_related('children').order_by('order', 'name')
-        
-        # Filter active by default only for list actions
-        if self.action == 'list':
-            queryset = queryset.filter(is_active=True)
-            # If current language has no categories, fallback to English so selectors always have options
-            if language != 'en' and not queryset.exists():
-                queryset = ProductCategory.objects.filter(
-                    workspace=workspace,
-                    language='en'
-                ).select_related('parent').prefetch_related('children').filter(is_active=True).order_by('order', 'name')
-        
+
+        if self.action != 'list':
+            return queryset
+
+        # Fall back rather than return nothing: the admin asks with the language
+        # of its own UI, which need not be the one the catalogue is written in.
+        # A shop whose categories are all Chinese used to come back empty to an
+        # English admin — and empty reads as "no categories", not "none in en".
+        # The list carries a language column, so showing what does exist is
+        # both honest and usable.
+        language = self.request.query_params.get('lang', 'en')
+        listed = queryset.filter(language=language)
+        if not listed.exists():
+            english = queryset.filter(language='en')
+            listed = english if english.exists() else queryset
+
+        # Staff endpoint: an inactive category stays listed, otherwise switching
+        # one off in the admin would hide it and leave no way to switch it back
+        # on. Callers wanting only the live tree ask for it explicitly.
+        is_active = self.request.query_params.get('is_active')
+        if is_active is not None:
+            listed = listed.filter(is_active=is_active.lower() in ('1', 'true', 'yes'))
+
         # If tree=true, return only root categories (categories without parent)
         if self.request.query_params.get('tree', '').lower() == 'true':
-            queryset = queryset.filter(parent__isnull=True)
-        
-        return queryset
+            listed = listed.filter(parent__isnull=True)
+
+        return listed
     
     def list(self, request, *args, **kwargs):
         """List categories, optionally as a tree structure"""
@@ -104,12 +124,13 @@ class ProductTagViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     
     def get_queryset(self):
-        """Get tags for current workspace"""
-        language = self.request.query_params.get('lang', 'en')
-        return ProductTag.objects.filter(
-            workspace=self.request.workspace,
-            language=language
-        ).order_by('name')
+        """Get tags for current workspace. See ProductCategoryViewSet: the
+        language filter belongs to the list only, or a detail lookup 404s on
+        every tag whose language is not the requested one."""
+        queryset = ProductTag.objects.filter(workspace=self.request.workspace).order_by('name')
+        if self.action != 'list':
+            return queryset
+        return queryset.filter(language=self.request.query_params.get('lang', 'en'))
 
     def perform_create(self, serializer):
         """Persist tag with workspace (FK required)."""

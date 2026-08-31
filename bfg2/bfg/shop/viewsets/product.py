@@ -18,7 +18,7 @@ class PDFRenderer(BaseRenderer):
         return data
 from django.utils.text import slugify
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import ProtectedError, Sum
 import logging
 
 from bfg.core.permissions import IsWorkspaceStaff
@@ -141,6 +141,19 @@ class ProductTagViewSet(viewsets.ModelViewSet):
         serializer.save(workspace=workspace)
 
 
+def _query_bool(request, *names):
+    """First of `names` present in the query string, as a bool.
+
+    Returns None when none was sent, which is what separates "show me the
+    unpublished ones" from "I did not ask about publishing".
+    """
+    for name in names:
+        raw = request.query_params.get(name)
+        if raw is not None and raw != '':
+            return raw.lower() in ('1', 'true', 'yes', 'on')
+    return None
+
+
 def _filter_products_queryset(queryset, request):
     """Shared filter helper used by both public and admin product viewsets."""
     category_id = request.query_params.get('category')
@@ -152,9 +165,15 @@ def _filter_products_queryset(queryset, request):
     lang_param = request.query_params.get('lang')
     if lang_param is not None:
         queryset = queryset.filter(language=lang_param)
-    featured = request.query_params.get('featured')
-    if featured == 'true':
-        queryset = queryset.filter(is_featured=True)
+    # The admin list filters on publication, so both halves have to work. The
+    # public viewset has already narrowed to is_active=True before it gets here,
+    # so `is_active=false` there yields nothing rather than exposing drafts.
+    is_active = _query_bool(request, 'is_active')
+    if is_active is not None:
+        queryset = queryset.filter(is_active=is_active)
+    featured = _query_bool(request, 'is_featured', 'featured')
+    if featured is not None:
+        queryset = queryset.filter(is_featured=featured)
     condition = request.query_params.get('condition')
     if condition:
         queryset = queryset.filter(condition=condition)
@@ -246,6 +265,39 @@ class AdminProductViewSet(viewsets.ModelViewSet):
             raise
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def destroy(self, request, *args, **kwargs):
+        """Delete a product, unless an order depends on it.
+
+        ``OrderItem.product`` is PROTECT on purpose: an order line names what was
+        actually bought, and deleting the product would either take the line with
+        it or leave the order describing nothing. Django raises ProtectedError,
+        which reached the client as a bare 500 — so deleting a product looked
+        like it worked at random, succeeding only for the ones never ordered.
+        Answer with the reason and the thing to do instead.
+        """
+        instance = self.get_object()
+        try:
+            self.perform_destroy(instance)
+        except ProtectedError:
+            from bfg.shop.models import OrderItem
+            order_count = (
+                OrderItem.objects.filter(product=instance)
+                .values('order').distinct().count()
+            )
+            return Response(
+                {
+                    'detail': (
+                        f'This product appears in {order_count} order(s), so it cannot be '
+                        f'deleted without breaking them. Unpublish it instead to take it '
+                        f'off the storefront.'
+                    ),
+                    'code': 'product_in_orders',
+                    'order_count': order_count,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def perform_create(self, serializer):
         """Create product using service"""

@@ -402,6 +402,7 @@ class StorefrontOrderSerializer(serializers.ModelSerializer):
     fulfillment_method = serializers.CharField(read_only=True)
     pickup_point = serializers.SerializerMethodField()
     pickup_code = serializers.CharField(read_only=True)
+    consignments = serializers.SerializerMethodField()
     # Checkout accepts a note, so the shopper has to be able to read it back and
     # confirm it was recorded. admin_note stays internal.
     customer_note = serializers.CharField(read_only=True)
@@ -410,11 +411,38 @@ class StorefrontOrderSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'status', 'payment_status', 'fulfillment_method',
-            'pickup_point', 'pickup_code', 'customer_note',
+            'pickup_point', 'pickup_code', 'customer_note', 'consignments',
             'amounts', 'addresses', 'items', 'timestamps', 'customer', 'activities', 'freight_service', 'packages'
         ]
         read_only_fields = ['id', 'order_number', 'customer_note', 'pickup_code']
     
+    def get_consignments(self, obj):
+        """The courier numbers for this order, for the shopper to quote or track.
+
+        Only consignments that actually carry a ``tracking_number`` come back.
+        A consignment without one has been booked but not yet given a number by
+        the carrier, and its ``consignment_number`` is our own booking
+        reference -- offering that as something to "track" sends the shopper to
+        a courier site that has never heard of it.
+
+        Always a list, including for an order that has shipped nothing. The
+        order page renders a copyable row per entry, and an absent key leaves
+        that section permanently dead with nothing to say why.
+        """
+        consignments = (
+            obj.consignments.exclude(tracking_number='')
+            .select_related('service__carrier')
+            .order_by('created_at')
+        )
+        return [
+            {
+                'id': c.id,
+                'tracking_number': c.tracking_number,
+                'carrier_name': c.service.carrier.name if c.service_id and c.service.carrier_id else '',
+            }
+            for c in consignments
+        ]
+
     def get_pickup_point(self, obj):
         """Where to collect, for a pickup order. None when it ships.
 

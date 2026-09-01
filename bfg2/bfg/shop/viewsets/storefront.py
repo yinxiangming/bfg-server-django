@@ -1119,7 +1119,10 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         if not email or not full_name:
             return Response({'detail': 'email and full_name are required for guest checkout'}, status=status.HTTP_400_BAD_REQUEST)
 
-        required_fields = ['address_line1', 'city', 'postal_code', 'country']
+        # No postcode: it is optional on the model and labelled optional on every
+        # form, so requiring it only here rejected an address the shopper had
+        # already saved. Couriers derive it from the street and city anyway.
+        required_fields = ['address_line1', 'city', 'country']
         # A guest who is collecting still owes us a name, an email and a phone --
         # that is how we reach them when the order is ready -- but not a street
         # address for a parcel that is never posted.

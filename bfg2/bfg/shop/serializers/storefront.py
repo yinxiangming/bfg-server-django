@@ -122,6 +122,12 @@ class StorefrontProductSerializer(serializers.ModelSerializer):
             # product can set its own <title>/meta description instead of falling back
             # to name/description.
             'sku', 'barcode', 'meta_title', 'meta_description',
+            # Feeds <lastmod> in the storefront sitemap. Without it the sitemap had no
+            # honest per-URL date and fell back to stamping every entry with generation
+            # time, which Google reads as an unreliable lastmod and discounts wholesale.
+            # `auto_now`, so it also moves on non-content saves such as a stock decrement;
+            # that over-reports freshness slightly, still far closer than one shared "now".
+            'updated_at',
         ]
         read_only_fields = ['id']
 

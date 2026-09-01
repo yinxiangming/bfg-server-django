@@ -345,12 +345,11 @@ class StorefrontAddressSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id']
     
-    def validate_postal_code(self, value):
-        """Validate postal code format"""
-        if not value:
-            raise serializers.ValidationError("Postal code is required")
-        return value
-    
+    # No postal-code requirement here. This serializer only ever reads (it
+    # renders an order's shipping and billing addresses), so the rule never
+    # fired -- but it stated a policy the write path does not hold: a postcode
+    # is optional, in the model and in every form that collects one.
+
     def validate_country(self, value):
         """Validate country code"""
         if value and len(value) != 2:

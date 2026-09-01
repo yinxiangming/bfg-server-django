@@ -139,7 +139,11 @@ class Address(TenantScopedModel):
     address_line2 = models.CharField(_("Address Line 2"), max_length=255, blank=True)
     city = models.CharField(_("City"), max_length=100)
     state = models.CharField(_("State/Province"), max_length=100, blank=True)
-    postal_code = models.CharField(_("Postal Code"), max_length=20)
+    # Optional, like every other locality field. Not every address has one
+    # a shopper knows — and every form that collects this, storefront and
+    # mini-program alike, labels it optional. Leaving it required here made
+    # the serializer reject those forms with a 400 they could not explain.
+    postal_code = models.CharField(_("Postal Code"), max_length=20, blank=True)
     country = models.CharField(_("Country"), max_length=2, blank=True)  # ISO 3166-1 alpha-2
     
     # Coordinates

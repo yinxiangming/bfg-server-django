@@ -284,8 +284,12 @@ class StorefrontCategorySerializer(serializers.ModelSerializer):
         return None
     
     def get_product_count(self, obj):
-        """Get product count for this category"""
-        return obj.products.filter(is_active=True).count()
+        """Count for this category and everything below it — matches what the
+        category page itself lists, rather than only products tagged directly
+        onto this exact node."""
+        return Product.objects.filter(
+            is_active=True, categories__id__in=obj.get_descendant_ids()
+        ).distinct().count()
 
 
 class StorefrontCartItemSerializer(serializers.ModelSerializer):

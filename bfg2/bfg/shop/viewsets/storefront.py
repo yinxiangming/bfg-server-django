@@ -104,8 +104,15 @@ class StorefrontProductViewSet(viewsets.ReadOnlyModelViewSet):
         
         category = self.request.query_params.get('category')
         if category:
-            queryset = queryset.filter(categories__slug=category)
-        
+            # A parent category's page should show its own products plus every
+            # descendant's — otherwise a page linked from the nav (which only ever
+            # points at top-level categories) shows nothing, since products are
+            # tagged on the leaf category they actually belong to.
+            category_ids = set()
+            for cat in ProductCategory.all_objects.filter(workspace=workspace, slug=category):
+                category_ids.update(cat.get_descendant_ids())
+            queryset = queryset.filter(categories__id__in=category_ids) if category_ids else queryset.none()
+
         tag = self.request.query_params.get('tag')
         if tag:
             queryset = queryset.filter(tags__slug=tag)

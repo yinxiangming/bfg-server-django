@@ -45,3 +45,19 @@ class ProductCategory(TenantScopedModel):
     
     def __str__(self):
         return self.name
+
+    def get_descendant_ids(self, include_self=True):
+        """IDs of this category and everything below it in the tree.
+
+        Plain-Python breadth-first walk rather than a recursive CTE: there is no
+        MPTT/closure-table here, only a `parent` FK, and a workspace's category tree
+        is small enough (tens of rows) that a query per level is cheap and simple.
+        """
+        ids = [self.pk] if include_self else []
+        frontier = [self.pk]
+        while frontier:
+            frontier = list(
+                ProductCategory.all_objects.filter(parent_id__in=frontier).values_list('pk', flat=True)
+            )
+            ids.extend(frontier)
+        return ids

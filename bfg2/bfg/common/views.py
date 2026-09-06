@@ -20,7 +20,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
 from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, IsOwnerOrStaff, StaffReadAdminWrite
-from bfg.common.models import Workspace, Customer, Address, CustomerSegment, CustomerTag, User, UserPreferences, StaffRole, EmailConfig
+from bfg.common.models import Workspace, Customer, Address, CustomerSegment, CustomerTag, User, UserPreferences, StaffRole, EmailConfig, SocialAuthConfig
 from bfg.common.serializers import (
     WorkspaceSerializer,
     CustomerListSerializer,
@@ -28,6 +28,7 @@ from bfg.common.serializers import (
     AddressSerializer,
     SettingsSerializer,
     EmailConfigSerializer,
+    SocialAuthConfigSerializer,
     CustomerSegmentSerializer,
     CustomerTagSerializer,
     MeSerializer,
@@ -766,6 +767,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'show_language_switcher': True,
             'show_style_selector': True,
             'show_login': True,
+            'show_register': False,
         }
         header_options = storefront_ui.get('header_options')
         if isinstance(header_options, dict):
@@ -797,6 +799,25 @@ class SettingsViewSet(viewsets.ModelViewSet):
         if default_color_mode in ('light', 'dark') and default_color_mode not in allowed_color_modes:
             default_color_mode = allowed_color_modes[0]
 
+        default_currency = str(settings_obj.default_currency or DEFAULT_CURRENCY_CODE).strip().upper()
+        raw_supported_currencies = (
+            storefront_ui.get('supported_currencies')
+            or shop_custom.get('supported_currencies')
+            or general_custom.get('supported_currencies')
+        )
+        if isinstance(raw_supported_currencies, list):
+            supported_currencies = []
+            for code in raw_supported_currencies:
+                normalized_code = str(code or '').strip().upper()
+                if normalized_code and normalized_code not in supported_currencies:
+                    supported_currencies.append(normalized_code)
+        else:
+            supported_currencies = []
+        if default_currency and default_currency not in supported_currencies:
+            supported_currencies.insert(0, default_currency)
+        if not supported_currencies:
+            supported_currencies = [DEFAULT_CURRENCY_CODE]
+
         payload = {
             'workspace_id': workspace.id,
             'workspace_slug': workspace.slug,
@@ -808,7 +829,8 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'facebook_url': settings_obj.facebook_url or '',
             'twitter_url': settings_obj.twitter_url or '',
             'instagram_url': settings_obj.instagram_url or '',
-            'default_currency': settings_obj.default_currency or DEFAULT_CURRENCY_CODE,
+            'default_currency': default_currency,
+            'supported_currencies': supported_currencies,
             # ISO 3166-1 alpha-2 or ''. The storefront uses it for hreflang region, schema.org
             # shipping destination and areaServed, and omits those claims when it is blank.
             'country': (settings_obj.country or '').upper(),
@@ -1158,6 +1180,88 @@ class EmailConfigViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         return Response({'detail': 'Test email sent successfully'})
+
+
+class SocialAuthConfigViewSet(viewsets.ModelViewSet):
+    """Workspace-owned OAuth credentials for storefront social login.
+
+    Each shop registers its own OAuth client with the provider, because the
+    provider ties the client to the shop's own domain and shows the client
+    owner's name on the consent screen. This is where those credentials are
+    entered; :mod:`config.social_adapter` is what reads them at login time.
+    """
+    serializer_class = SocialAuthConfigSerializer
+    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
+
+    def get_queryset(self):
+        # Workspace rows only. The platform default (workspace NULL) is the
+        # operator's, not the shop's — a tenant may inherit it but never see or
+        # edit its credentials.
+        return SocialAuthConfig.objects.filter(workspace=self.request.workspace)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['workspace'] = getattr(self.request, 'workspace', None)
+        return context
+
+    def perform_create(self, serializer):
+        serializer.save(workspace=self.request.workspace)
+
+    @action(detail=False, methods=['get'], url_path='providers')
+    def providers(self, request):
+        """Everything the admin needs to fill in the provider's console.
+
+        Registering an OAuth client fails in ways that are invisible from our
+        side — a missing JavaScript origin, a redirect URI that is one slash
+        off — so the exact values to paste are served here rather than left to
+        a screenshot in a wiki that drifts.
+        """
+        from django.conf import settings as django_settings
+        from bfg.common.social_apps import resolve_social_configs
+
+        # The OAuth views live in the host project, not in this library, so the
+        # path is a setting with the conventional default rather than a
+        # reverse() on a URL name bfg cannot see.
+        template = getattr(
+            django_settings, 'SOCIAL_AUTH_CALLBACK_PATH', '/api/v1/auth/{provider}/callback/'
+        )
+        workspace = getattr(request, 'workspace', None)
+        origins = self._storefront_origins(request)
+        in_force = resolve_social_configs(workspace)
+        platform_providers = set(
+            SocialAuthConfig.objects.filter(workspace__isnull=True).values_list('provider', flat=True)
+        )
+
+        providers = []
+        for value, label in SocialAuthConfig.PROVIDER_CHOICES:
+            active = in_force.get(value)
+            providers.append({
+                'id': value,
+                'label': str(label),
+                'required_fields': list(SocialAuthConfig.REQUIRED_FIELDS.get(value) or ()),
+                'redirect_uri': request.build_absolute_uri(template.format(provider=value)),
+                'javascript_origins': origins,
+                # Whether the platform operator offers a shared client at all,
+                # and whether this shop is currently riding on it. Without this
+                # the admin sees an empty table while Google sign-in plainly
+                # works, and has no way to tell where the client came from.
+                'platform_default_available': value in platform_providers,
+                'inherited_from_platform': bool(active) and active.workspace_id is None,
+            })
+        return Response(providers)
+
+    def _storefront_origins(self, request):
+        """HTTPS origins for every hostname this workspace answers on.
+
+        These are the "Authorized JavaScript origins" the provider checks when
+        the sign-in button renders, so they must come from the workspace's real
+        domains rather than from whatever host happens to be calling the admin.
+        """
+        workspace = getattr(request, 'workspace', None)
+        if workspace is None:
+            return []
+        hostnames = workspace.domains.values_list('hostname', flat=True)
+        return [f'https://{hostname}' for hostname in hostnames if hostname]
 
 
 class UserViewSet(viewsets.ModelViewSet):

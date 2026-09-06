@@ -15,4 +15,5 @@ from .staff import StaffRole, StaffMember
 from .invitation import Invitation, generate_invitation_token, hash_invitation_token
 from .preferences import UserPreferences
 from .email import EmailConfig
+from .social_auth import SocialAuthConfig
 from .api_key import APIKey

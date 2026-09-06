@@ -141,9 +141,16 @@ SaaS platform APIs (**clusters, workspaces, billing, token exchange, SSO**) are 
 | `BFG_INSTANCE_TYPE` | workspace | Instance type (workspace/platform) |
 | `WORKSPACE_API_URL` | http://localhost:8000 | Cross-instance workspace API |
 | `PLATFORM_API_KEY` | local-dev-key | Platform-to-workspace auth key |
-| `GOOGLE_CLIENT_ID/SECRET` | — | Google OAuth |
-| `FACEBOOK_APP_ID/SECRET` | — | Facebook OAuth |
-| `APPLE_CLIENT_ID/SECRET/KEY_ID/PRIVATE_KEY` | — | Apple OAuth |
+
+Social-login credentials are **not** env vars. They live in
+`bfg.common.models.SocialAuthConfig` and are read per request by
+`config.social_adapter.WorkspaceSocialAccountAdapter`, at two levels: a
+**platform default** (row with no workspace, managed in Django admin) inherited
+by every tenant, and an optional **workspace client** (Admin → Settings →
+General → Social login) that overrides it. A shop only needs its own when it
+wants its own name on the consent screen or One Tap on its own domain. The old
+`GOOGLE_CLIENT_ID/SECRET`, `FACEBOOK_APP_ID/SECRET` and `APPLE_*` variables
+survive only as the source for the one-time migration that seeds the default.
 
 ## Skills
 

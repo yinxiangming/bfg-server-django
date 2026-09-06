@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     WorkspaceViewSet, CustomerViewSet, AddressViewSet, SettingsViewSet,
     EmailConfigViewSet,
+    SocialAuthConfigViewSet,
     UserViewSet, OptionsView,
     CustomerSegmentViewSet, CustomerTagViewSet,
     StaffRoleViewSet, StaffMemberViewSet,
@@ -22,6 +23,7 @@ router.register(r'customers', CustomerViewSet, basename='customer')
 router.register(r'addresses', AddressViewSet, basename='address')
 router.register(r'settings', SettingsViewSet, basename='settings')
 router.register(r'email-configs', EmailConfigViewSet, basename='email-config')
+router.register(r'social-auth-configs', SocialAuthConfigViewSet, basename='social-auth-config')
 router.register(r'users', UserViewSet, basename='user')
 # New model ViewSets
 router.register(r'customer-segments', CustomerSegmentViewSet, basename='customer-segment')

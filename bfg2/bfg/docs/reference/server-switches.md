@@ -119,17 +119,33 @@ It focuses on runtime behavior toggles rather than secrets. Secret values such a
 
 ## 5. Authentication / Social Auth
 
-### `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
-- Purpose:
-  - Google social login.
+Social-login credentials are **not** environment variables. They live in
+`bfg.common.models.SocialAuthConfig`, and
+`config.social_adapter.WorkspaceSocialAccountAdapter` reads them per request, so
+the redirect flow, the OAuth callback and Google One Tap all resolve the same
+client for the calling shop.
 
-### `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET`
-- Purpose:
-  - Facebook social login.
+There are two levels:
 
-### `APPLE_CLIENT_ID` / `APPLE_SECRET` / `APPLE_KEY_ID` / `APPLE_PRIVATE_KEY`
-- Purpose:
-  - Apple social login.
+- **Platform default** — a row with no workspace, managed by the operator in
+  Django admin. Inherited by every workspace. This is enough for most shops: the
+  redirect flow only ever returns to our own API domain, so one client
+  registered for the platform carries all tenants.
+- **Workspace client** — a row owned by a workspace, edited under **Admin →
+  Settings → General → Social login**. It overrides the default. A shop needs
+  one when it wants its own name on the provider's consent screen, or One Tap on
+  its own domain: One Tap renders in the storefront's page and the provider
+  checks that origin, with no wildcard support.
+
+Precedence, per provider: a usable workspace row wins; a workspace row switched
+to inactive means "off for this shop" and does *not* fall back; anything else
+(no row, or a half-filled draft) inherits the platform default. A request that
+cannot be traced to a workspace gets no social login at all.
+
+The former `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, `FACEBOOK_APP_ID` /
+`FACEBOOK_APP_SECRET` and `APPLE_CLIENT_ID` / `APPLE_SECRET` / `APPLE_KEY_ID` /
+`APPLE_PRIVATE_KEY` variables are read exactly once more, by the migration that
+turns them into the platform default row, and are ignored after that.
 
 ### Built-in behavior toggles (code-level)
 These are set in Django settings rather than through env vars, but they are still important switches:

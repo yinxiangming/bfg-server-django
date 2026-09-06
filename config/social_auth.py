@@ -23,6 +23,12 @@ from allauth.socialaccount.providers.facebook.views import (
     oauth2_callback as facebook_oauth2_callback,
 )
 
+from bfg.common.social_apps import (
+    remember_social_workspace,
+    resolve_social_workspace,
+    social_apps_for_workspace,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -89,13 +95,37 @@ def _build_callback_url_with_fragment(request, access, refresh, redirect_path, r
 @require_http_methods(['GET', 'POST'])
 def social_login_view(request, provider):
     """
-    Start social login: store redirect and host in session, then redirect to provider.
-    GET from frontend; POST may be used by allauth's intermediate form.
+    Start social login: store redirect, host and workspace in session, then
+    redirect to the provider. GET from frontend; POST may be used by allauth's
+    intermediate form.
+
+    Pinning the workspace here is what makes the callback work. By the time the
+    provider redirects back, the request is a top-level navigation to *our* API
+    domain carrying none of the tenant headers — the session is the only thing
+    still pointing at the storefront the visitor came from, and therefore at the
+    OAuth client whose code we are about to exchange.
     """
+    from django.http import HttpResponseBadRequest
+
     data = request.GET if request.method == 'GET' else request.POST
+    requested_host = data.get('host', '')
     request.session[SOCIAL_REDIRECT_KEY] = data.get('redirect', '/account')
-    request.session[SOCIAL_HOST_KEY] = data.get('host', '')
+    request.session[SOCIAL_HOST_KEY] = requested_host
     request.session.modified = True
+
+    workspace = remember_social_workspace(request, extra_host=requested_host)
+    if workspace is None:
+        logger.warning(
+            'Social login start could not resolve a workspace (provider=%s, host=%r)',
+            provider, requested_host,
+        )
+        return HttpResponseBadRequest('Could not determine which site this login is for.')
+    if not _provider_configured(request, provider):
+        logger.warning(
+            'Social login start for unconfigured provider (provider=%s, workspace=%s)',
+            provider, workspace.id,
+        )
+        return HttpResponseBadRequest(f'{provider} sign-in is not configured for this site.')
 
     if provider == 'google':
         return google_oauth2_login(request)
@@ -105,7 +135,6 @@ def social_login_view(request, provider):
         from allauth.socialaccount.providers.apple.views import oauth2_login as apple_oauth2_login
         return apple_oauth2_login(request)
 
-    from django.http import HttpResponseBadRequest
     return HttpResponseBadRequest(f'Unknown provider: {provider}')
 
 
@@ -122,13 +151,13 @@ def _ensure_workspace_membership(request, user, requested_host=None):
     claim from the very first request.
 
     ``/api/v1/auth/`` is a public path, so the middleware deliberately leaves
-    ``request.workspace`` unset; the workspace is re-derived from the workspace
-    header / frontend host instead.
+    ``request.workspace`` unset. The workspace comes from the same resolution
+    the adapter used to pick the OAuth client, so the Customer row can never
+    land in a different workspace than the one the visitor actually signed in
+    to.
     """
-    from bfg.common.middleware import resolve_workspace_for_public_request
-
     try:
-        workspace = resolve_workspace_for_public_request(request, extra_host=requested_host)
+        workspace = resolve_social_workspace(request, extra_host=requested_host)
         if not workspace:
             return
         from bfg.common.models import Customer, StaffMember
@@ -205,52 +234,52 @@ social_callback_view_csrf_exempt = csrf_exempt(social_callback_view)
 
 # --- Provider discovery -----------------------------------------------------
 
-# Each provider is "enabled" iff the credential fields it actually needs at
-# runtime are populated in settings.SOCIALACCOUNT_PROVIDERS. The empty-string
-# defaults in settings.py mean unset env vars fall through naturally — no
-# extra flag needed to disable a provider.
-_PROVIDER_REQUIRED_KEYS = {
-    'google': ('client_id', 'secret'),
-    'facebook': ('client_id', 'secret'),
-    # Apple uses a signed JWT, so it needs the private key on top of the IDs.
-    'apple': ('client_id', 'secret', 'key', 'certificate_key'),
-}
+# A provider is "enabled" for a workspace iff that workspace has an active,
+# fully-populated SocialAuthConfig row for it. Which fields count as
+# "fully-populated" is the model's business (Apple needs a signing key that
+# Google does not), so this module never re-states the rule.
+#
+# Display order for the buttons. Data order is alphabetical, which would put
+# Apple first and shuffle the auth panel the day a workspace adds a provider.
+_PROVIDER_DISPLAY_ORDER = ('google', 'facebook', 'apple')
 
 
-def _provider_configured(name):
-    app = ((getattr(settings, 'SOCIALACCOUNT_PROVIDERS', {}) or {}).get(name) or {}).get('APP') or {}
-    required = _PROVIDER_REQUIRED_KEYS.get(name) or ()
-    return all((app.get(k) or '').strip() for k in required)
+def _configured_apps(request):
+    """``{provider: SocialApp}`` usable by the workspace behind ``request``."""
+    workspace = resolve_social_workspace(request)
+    return {app.provider: app for app in social_apps_for_workspace(workspace)}
 
 
-def _provider_client_id(name):
-    app = ((getattr(settings, 'SOCIALACCOUNT_PROVIDERS', {}) or {}).get(name) or {}).get('APP') or {}
-    return (app.get('client_id') or '').strip()
+def _provider_configured(request, name):
+    return name in _configured_apps(request)
 
 
 @require_http_methods(['GET'])
 def social_providers_view(request):
     """Public — list provider keys the frontend should render a button for.
 
-    Returns ``{"providers": ["google", ...], "google_client_id": "..."}``.
-    Used so the auth UI can auto-hide buttons for providers whose credentials
-    are not yet provisioned in env (e.g. show only Google until Apple/Facebook
-    are wired up).
+    Returns ``{"providers": ["google", ...], "google_client_id": "..."}`` for
+    *the calling workspace*, so the auth UI hides buttons the shop has not
+    provisioned an OAuth client for.
 
     ``google_client_id`` is the OAuth *Web application* client ID. It is public
     by design — Google Identity Services needs it in the browser to render the
-    One Tap prompt — and is only meaningful from origins listed in the client's
+    One Tap prompt — and is only meaningful from origins listed in that client's
     "Authorized JavaScript origins". Blank when Google is not configured.
+
+    The workspace comes from the request headers, so the answer differs per
+    caller: the response must never land in a shared cache keyed on URL alone,
+    or one shop would be handed another shop's client ID.
     """
-    providers = [
-        name for name in _PROVIDER_REQUIRED_KEYS
-        if _provider_configured(name)
-    ]
+    apps = _configured_apps(request)
+    providers = [name for name in _PROVIDER_DISPLAY_ORDER if name in apps]
+    google = apps.get('google')
     response = JsonResponse({
         'providers': providers,
-        'google_client_id': _provider_client_id('google') if 'google' in providers else '',
+        'google_client_id': google.client_id if google else '',
     })
-    response['Cache-Control'] = 'public, max-age=60'
+    response['Cache-Control'] = 'private, max-age=60'
+    response['Vary'] = 'X-Workspace-ID, X-Forwarded-Host, Origin'
     return response
 
 
@@ -288,7 +317,7 @@ def google_one_tap_view(request):
     (``SOCIALACCOUNT_AUTO_SIGNUP``) and links it to an existing local account
     with the same verified email (``SOCIALACCOUNT_EMAIL_AUTHENTICATION``).
     """
-    if not _provider_configured('google'):
+    if not _provider_configured(request, 'google'):
         return JsonResponse({'detail': 'Google sign-in is not configured.'}, status=503)
 
     credential = _read_google_credential(request)

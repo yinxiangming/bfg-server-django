@@ -219,30 +219,22 @@ SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
 SOCIALACCOUNT_AUTO_SIGNUP = True
 # Skip intermediate "Sign in with Google" page; GET to login URL redirects directly to provider
 SOCIALACCOUNT_LOGIN_ON_GET = True
+# Credentials are NOT configured here. Google validates the JavaScript origin
+# and redirect URI against the OAuth client, and shows the client owner's name
+# on the consent screen, so a single process-wide client can only ever be right
+# for one storefront. Each workspace owns its own client in
+# bfg.common.models.SocialAuthConfig, which this adapter reads per request.
+# Only provider-wide, tenant-independent options belong below.
+SOCIALACCOUNT_ADAPTER = 'config.social_adapter.WorkspaceSocialAccountAdapter'
 SOCIALACCOUNT_PROVIDERS = {
     'google': {
-        'APP': {
-            'client_id': os.environ.get('GOOGLE_CLIENT_ID', ''),
-            'secret': os.environ.get('GOOGLE_CLIENT_SECRET', ''),
-        },
         'SCOPE': ['profile', 'email'],
         'AUTH_PARAMS': {'access_type': 'online'},
     },
     'facebook': {
-        'APP': {
-            'client_id': os.environ.get('FACEBOOK_APP_ID', ''),
-            'secret': os.environ.get('FACEBOOK_APP_SECRET', ''),
-        },
         'SCOPE': ['email', 'public_profile'],
     },
-    'apple': {
-        'APP': {
-            'client_id': os.environ.get('APPLE_CLIENT_ID', ''),
-            'secret': os.environ.get('APPLE_SECRET', ''),
-            'key': os.environ.get('APPLE_KEY_ID', ''),
-            'certificate_key': os.environ.get('APPLE_PRIVATE_KEY', ''),
-        },
-    },
+    'apple': {},
 }
 
 # Password validation

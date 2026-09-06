@@ -170,6 +170,62 @@ class PostService(BaseService):
         
         return post
     
+    def get_rendered_post(self, slug: str, language: str = 'en') -> dict:
+        """
+        Get a published post by slug for public rendering.
+
+        Mirrors PageService.get_rendered_page's language fallback (requested
+        language, then en/zh-hans/zh, then any published post at this slug) so a
+        workspace need not have every post translated before it is reachable.
+
+        Raises:
+            PostNotFound: no published, already-live post exists at this slug
+                in any language.
+        """
+        try:
+            post = self.get_post_by_slug(slug, language)
+        except PostNotFound:
+            post = None
+            for fallback_lang in ('en', 'zh-hans', 'zh'):
+                if fallback_lang == language:
+                    continue
+                try:
+                    post = self.get_post_by_slug(slug, fallback_lang)
+                    break
+                except PostNotFound:
+                    pass
+            if post is None:
+                post = (
+                    Post.objects.filter(workspace=self.workspace, slug=slug)
+                    .select_related('category', 'author')
+                    .prefetch_related('tags')
+                    .order_by('-published_at')
+                    .first()
+                )
+                if post is None:
+                    raise PostNotFound(f"Post with slug '{slug}' not found")
+
+        # A slug match that is still draft/scheduled/archived is not publicly reachable.
+        if post.status != 'published' or not post.published_at or post.published_at > timezone.now():
+            raise PostNotFound(f"Post '{slug}' is not published")
+
+        return {
+            'id': post.id,
+            'title': post.title,
+            'slug': post.slug,
+            'content': post.content,
+            'excerpt': post.excerpt,
+            'featured_image': post.featured_image.url if post.featured_image else '',
+            'category_name': post.category.name if post.category else None,
+            'tags': [tag.name for tag in post.tags.all()],
+            'custom_fields': post.custom_fields or {},
+            'meta_title': post.meta_title or post.title,
+            'meta_description': post.meta_description,
+            'language': post.language,
+            'published_at': post.published_at.isoformat() if post.published_at else None,
+            'author_name': post.author.get_full_name() if post.author else None,
+        }
+
     def get_published_posts(
         self, 
         category: Optional[Category] = None, 

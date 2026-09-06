@@ -320,10 +320,16 @@ class PostViewSet(viewsets.ModelViewSet):
         return PostDetailSerializer
     
     def get_permissions(self):
-        """Admin-only — list/retrieve return draft posts, ``status``,
-        ``author`` and other admin-internal fields. Storefront blog
-        rendering should use a dedicated public endpoint (not this one).
+        """Set permissions based on action.
+
+        ``rendered`` is the storefront-safe public endpoint
+        (``GET /api/v1/web/posts/<slug>/rendered/``) — anonymous OK.
+        Everything else (list/retrieve/create/update/delete) is admin only —
+        the bare collection exposes draft posts, ``status``, ``author`` and
+        other admin-internal fields.
         """
+        if self.action == 'rendered':
+            return [AllowAny()]
         return [IsAuthenticated(), IsWorkspaceStaff()]
 
     def get_queryset(self):
@@ -442,6 +448,22 @@ class PostViewSet(viewsets.ModelViewSet):
         post = service.schedule_post(post, publish_at)
         serializer = self.get_serializer(post)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], permission_classes=[AllowAny])
+    def rendered(self, request, slug=None):
+        """Get a published post for public storefront display"""
+        workspace = get_workspace(request)
+        service = PostService(
+            workspace=workspace,
+            user=request.user if request.user.is_authenticated else None
+        )
+        language = request.query_params.get('lang', 'en')
+
+        try:
+            rendered_data = service.get_rendered_post(slug, language)
+            return Response(rendered_data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_404_NOT_FOUND)
 
 
 class MediaViewSet(viewsets.ModelViewSet):

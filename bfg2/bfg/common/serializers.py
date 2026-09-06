@@ -9,7 +9,7 @@ from bfg.core.serializer_fields import CoordinateFieldsMixin
 from bfg.common.models import (
     Workspace, Customer, Address, User, StaffRole, StaffMember, Settings,
     CustomerSegment, CustomerTag, UserPreferences, Media, MediaLink, EmailConfig,
-    APIKey, Invitation,
+    APIKey, Invitation, SocialAuthConfig,
 )
 from django.conf import settings
 
@@ -454,6 +454,132 @@ class EmailConfigSerializer(serializers.ModelSerializer):
                 if field_schema.get('sensitive') and new_config.get(key) == '********':
                     new_config[key] = existing.get(key) or ''
             instance.config = new_config
+        return super().update(instance, validated_data)
+
+
+# Written back verbatim when an admin saves a form they never typed a new
+# secret into. Anything else in the field is a real new value.
+SECRET_MASK = '********'
+
+
+class SocialAuthConfigSerializer(serializers.ModelSerializer):
+    """Per-workspace OAuth credentials. Masks every secret on read.
+
+    ``client_id`` is deliberately *not* masked: the storefront publishes it to
+    the browser for Google One Tap, so hiding it here would protect nothing and
+    make the admin unable to check which client a shop is on.
+    """
+
+    # Declared rather than auto-built. The model's platform-default constraint
+    # is a single-field unique on `provider`, which DRF turns into a field-level
+    # UniqueValidator reading "provider is globally unique" — that would refuse a
+    # shop its own Google client the moment a platform default existed. The real,
+    # workspace-scoped rule lives in `validate_provider`.
+    provider = serializers.ChoiceField(choices=SocialAuthConfig.PROVIDER_CHOICES)
+    certificate_key = serializers.CharField(
+        required=False, allow_blank=True, write_only=True,
+        help_text="Apple only: the .p8 signing key.",
+    )
+    is_configured = serializers.BooleanField(read_only=True)
+    provider_display = serializers.CharField(source='get_provider_display', read_only=True)
+
+    class Meta:
+        model = SocialAuthConfig
+        fields = [
+            'id', 'provider', 'provider_display', 'client_id', 'secret', 'key',
+            'certificate_key', 'is_active', 'is_configured', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+        # The workspace/provider constraint is scoped by a field the view
+        # injects rather than the caller posting it, so DRF cannot evaluate it
+        # either. Same story, same fix: see `validate_provider`.
+        validators = []
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.secret:
+            data['secret'] = SECRET_MASK
+        # Apple's private key is write-only, so the UI cannot show its value —
+        # but it still has to know whether one is on file.
+        data['has_certificate_key'] = bool((instance.settings or {}).get('certificate_key'))
+        return data
+
+    def validate_provider(self, value):
+        """One config per provider per workspace — surface it as a field error.
+
+        The database constraint would otherwise reach the client as a 500.
+        """
+        workspace = self.context.get('workspace')
+        if workspace is None:
+            return value
+        clashes = SocialAuthConfig.objects.filter(workspace=workspace, provider=value)
+        if self.instance:
+            clashes = clashes.exclude(pk=self.instance.pk)
+        if clashes.exists():
+            raise serializers.ValidationError(f'{value} is already configured for this workspace.')
+        return value
+
+    def validate(self, data):
+        """Reject a row that claims to be usable but is missing a credential.
+
+        Only enforced for a config the admin is turning on: a draft saved
+        inactive is allowed to be half-filled.
+        """
+        merged = self._merged_values(data)
+        if not merged['is_active']:
+            return data
+        required = SocialAuthConfig.REQUIRED_FIELDS.get(merged['provider']) or ()
+        missing = [field for field in required if not str(merged.get(field) or '').strip()]
+        if missing:
+            raise serializers.ValidationError(
+                {field: 'This field is required to activate this provider.' for field in missing}
+            )
+        return data
+
+    def _merged_values(self, data):
+        """Incoming values on top of the stored ones, with masks resolved."""
+        instance = self.instance
+        values = {
+            'provider': data.get('provider') or getattr(instance, 'provider', ''),
+            'client_id': data.get('client_id', getattr(instance, 'client_id', '')),
+            'key': data.get('key', getattr(instance, 'key', '')),
+            'is_active': data.get('is_active', getattr(instance, 'is_active', True)),
+        }
+        secret = data.get('secret', None)
+        if secret is None or secret == SECRET_MASK:
+            secret = getattr(instance, 'secret', '')
+        values['secret'] = secret
+
+        certificate_key = data.get('certificate_key', None)
+        if certificate_key is None or certificate_key == SECRET_MASK:
+            certificate_key = ((getattr(instance, 'settings', None) or {}).get('certificate_key') or '')
+        values['certificate_key'] = certificate_key
+        return values
+
+    def _apply(self, instance, validated_data):
+        """Move ``certificate_key`` into settings and drop unchanged secrets."""
+        certificate_key = validated_data.pop('certificate_key', None)
+        if validated_data.get('secret') == SECRET_MASK:
+            validated_data.pop('secret')
+        if certificate_key is not None and certificate_key != SECRET_MASK:
+            extra = dict(instance.settings or {})
+            if certificate_key:
+                extra['certificate_key'] = certificate_key
+            else:
+                extra.pop('certificate_key', None)
+            instance.settings = extra
+        return validated_data
+
+    def create(self, validated_data):
+        instance = SocialAuthConfig(workspace=validated_data.pop('workspace'))
+        validated_data = self._apply(instance, validated_data)
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        validated_data = self._apply(instance, validated_data)
         return super().update(instance, validated_data)
 
 

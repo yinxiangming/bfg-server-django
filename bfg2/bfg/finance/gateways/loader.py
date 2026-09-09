@@ -168,6 +168,7 @@ class GatewayLoader:
             'display_name': plugin_class.display_name,
             'supported_methods': plugin_class.supported_methods,
             'supported_clients': getattr(plugin_class, 'supported_clients', []) or [],
+            'supported_fulfillment_methods': getattr(plugin_class, 'supported_fulfillment_methods', []) or [],
             'config_schema': config_schema,
         }
 
@@ -184,6 +185,26 @@ def gateway_supports_client(gateway_type: str, client: str) -> bool:
         return False
     supported = plugin_info.get('supported_clients') or []
     return len(supported) == 0 or client in supported
+
+
+def gateway_supports_fulfillment_method(gateway_type: str, fulfillment_method: str) -> bool:
+    """
+    Return True if the gateway plugin can settle an order fulfilled this way.
+    Empty supported_fulfillment_methods means either way is fine.
+
+    Unlike ``gateway_supports_client``, a gateway with **no** plugin passes. Several
+    types in GATEWAY_TYPE_CHOICES (paypal, wechat, alipay) have no plugin directory,
+    and a gateway that never declared a restriction has not opted into one -- failing
+    them closed here would empty the checkout's gateway list the moment a storefront
+    started sending ``?fulfillment_method=``.
+    """
+    if not fulfillment_method:
+        return True
+    plugin_info = GatewayLoader.get_plugin_info(gateway_type)
+    if not plugin_info:
+        return True
+    supported = plugin_info.get('supported_fulfillment_methods') or []
+    return len(supported) == 0 or fulfillment_method in supported
 
 
 def get_gateway_plugin(gateway: PaymentGateway) -> Optional[BasePaymentGateway]:

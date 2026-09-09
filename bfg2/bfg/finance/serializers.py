@@ -30,20 +30,29 @@ class PaymentGatewaySerializer(serializers.ModelSerializer):
     config = serializers.JSONField(required=False, allow_null=True)
     test_config = serializers.JSONField(required=False, allow_null=True)
     supported_clients = serializers.SerializerMethodField()
+    supported_fulfillment_methods = serializers.SerializerMethodField()
     
     class Meta:
         model = PaymentGateway
         fields = [
             'id', 'name', 'gateway_type', 'config', 'test_config', 'is_active', 'is_test_mode',
-            'supported_clients', 'created_at', 'updated_at'
+            'supported_clients', 'supported_fulfillment_methods', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'supported_clients']
+        read_only_fields = [
+            'id', 'created_at', 'updated_at', 'supported_clients', 'supported_fulfillment_methods',
+        ]
     
     def get_supported_clients(self, obj):
         """From plugin: empty list means all clients (web, android, ios, mp) supported."""
         from bfg.finance.gateways.loader import GatewayLoader
         info = GatewayLoader.get_plugin_info(obj.gateway_type)
         return (info or {}).get('supported_clients') or []
+    
+    def get_supported_fulfillment_methods(self, obj):
+        """From plugin: empty list means it settles shipped and collected orders alike."""
+        from bfg.finance.gateways.loader import GatewayLoader
+        info = GatewayLoader.get_plugin_info(obj.gateway_type)
+        return (info or {}).get('supported_fulfillment_methods') or []
     
     def to_representation(self, instance):
         """Return both config and test_config when reading"""

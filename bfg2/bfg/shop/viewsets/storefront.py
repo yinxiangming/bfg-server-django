@@ -1393,9 +1393,19 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
     
     @action(detail=False, methods=['get'], permission_classes=[AllowAny])
     def gateways(self, request):
-        """Get available payment gateways for storefront. Use ?client=mp for mini-program."""
+        """Get available payment gateways for storefront.
+
+        Query params:
+            client: 'web' | 'android' | 'ios' | 'mp' — drops gateways needing an SDK
+                the client has not got.
+            fulfillment_method: 'shipping' | 'pickup' — drops gateways the fulfillment
+                rules out, e.g. paying at the counter for an order that is being posted.
+                Display only; `intent` enforces it.
+        """
         from bfg.shop.serializers.storefront import StorefrontPaymentGatewaySerializer
-        from bfg.finance.gateways.loader import gateway_supports_client
+        from bfg.finance.gateways.loader import (
+            gateway_supports_client, gateway_supports_fulfillment_method,
+        )
         
         gateways = list(PaymentGateway.objects.filter(
             workspace=request.workspace,
@@ -1404,6 +1414,12 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
         client = (request.query_params.get('client') or '').strip().lower()
         if client:
             gateways = [g for g in gateways if gateway_supports_client(g.gateway_type, client)]
+        fulfillment_method = (request.query_params.get('fulfillment_method') or '').strip().lower()
+        if fulfillment_method:
+            gateways = [
+                g for g in gateways
+                if gateway_supports_fulfillment_method(g.gateway_type, fulfillment_method)
+            ]
         
         serializer = StorefrontPaymentGatewaySerializer(gateways, many=True)
         return Response(serializer.data)
@@ -1460,6 +1476,22 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
                     {'detail': 'No active payment gateway found'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+        
+        # A gateway that only works one way of fulfilling an order has to be checked
+        # here, not just filtered out of the picker: the picker is a hint, this is the
+        # only thing standing between a posted order and a payment nobody can collect.
+        from bfg.finance.gateways.loader import gateway_supports_fulfillment_method
+        if not gateway_supports_fulfillment_method(gateway.gateway_type, order.fulfillment_method):
+            return Response(
+                {
+                    'detail': (
+                        f"{gateway.name} cannot be used for a "
+                        f"'{order.fulfillment_method}' order."
+                    ),
+                    'code': 'gateway_fulfillment_mismatch',
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         from bfg.common.constants import get_default_currency_for_workspace
         default_currency_code = get_default_currency_for_workspace(request.workspace)

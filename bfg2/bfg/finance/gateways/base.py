@@ -16,6 +16,10 @@ from bfg.common.models import Customer
 # Client types for supported_clients. Empty list means all clients supported.
 VALID_CLIENT_TYPES = ('web', 'android', 'ios', 'mp')
 
+# How the order reaches the customer, mirroring Order.FULFILLMENT_METHOD_CHOICES.
+# Empty supported_fulfillment_methods means the gateway settles either way.
+VALID_FULFILLMENT_METHODS = ('shipping', 'pickup')
+
 
 class BasePaymentGateway(ABC):
     """
@@ -31,6 +35,10 @@ class BasePaymentGateway(ABC):
     supported_methods: list = []  # e.g., ['card', 'bank']
     # Clients that can use this gateway: 'web', 'android', 'ios', 'mp'. Empty = all.
     supported_clients: list = []
+    # Fulfillment methods this gateway can settle: 'shipping', 'pickup'. Empty = all.
+    # Only for gateways the fulfillment genuinely constrains -- money handed over a
+    # counter is only possible if the customer comes to the counter.
+    supported_fulfillment_methods: list = []
     
     def __init__(self, gateway: PaymentGateway):
         """

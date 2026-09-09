@@ -648,16 +648,26 @@ class StorefrontPaymentGatewaySerializer(serializers.ModelSerializer):
     """Storefront payment gateway serializer - public info only"""
     display_info = serializers.SerializerMethodField()
     supported_clients = serializers.SerializerMethodField()
+    supported_fulfillment_methods = serializers.SerializerMethodField()
     
     class Meta:
         model = PaymentGateway
-        fields = ['id', 'name', 'gateway_type', 'is_active', 'display_info', 'supported_clients']
+        fields = [
+            'id', 'name', 'gateway_type', 'is_active', 'display_info',
+            'supported_clients', 'supported_fulfillment_methods',
+        ]
     
     def get_supported_clients(self, obj):
         """From plugin: empty list means all clients (web, android, ios, mp) supported."""
         from bfg.finance.gateways.loader import GatewayLoader
         info = GatewayLoader.get_plugin_info(obj.gateway_type)
         return (info or {}).get('supported_clients') or []
+    
+    def get_supported_fulfillment_methods(self, obj):
+        """From plugin: empty list means it settles shipped and collected orders alike."""
+        from bfg.finance.gateways.loader import GatewayLoader
+        info = GatewayLoader.get_plugin_info(obj.gateway_type)
+        return (info or {}).get('supported_fulfillment_methods') or []
     
     def get_display_info(self, obj):
         """Get public display info from gateway plugin (get_payment_page_display_params)."""
@@ -678,6 +688,11 @@ class StorefrontPaymentGatewaySerializer(serializers.ModelSerializer):
                 'routing_number': config.get('routing_number', ''),
                 'swift_code': config.get('swift_code', ''),
                 'instructions': config.get('instructions') or config.get('note', ''),
+            }
+        if obj.gateway_type == 'pay_in_store':
+            return {
+                'accepted_methods': config.get('accepted_methods', ''),
+                'instructions': config.get('instructions', ''),
             }
         if obj.gateway_type == 'stripe':
             return {

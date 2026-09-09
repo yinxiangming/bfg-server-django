@@ -806,11 +806,21 @@ class OrderService(BaseService):
                     defaults={'name': name, 'symbol': symbol, 'is_active': True}
                 )
             
-            # Get first active payment gateway
-            gateway = PaymentGateway.objects.filter(
-                workspace=self.workspace,
-                is_active=True
-            ).first()
+            # Get first active payment gateway the order's fulfillment allows. Without
+            # the filter a pay-at-the-counter gateway that happened to come back first
+            # would be attached to an order being posted, and the money could never be
+            # collected.
+            from bfg.finance.gateways.loader import gateway_supports_fulfillment_method
+            gateway = next(
+                (
+                    g for g in PaymentGateway.objects.filter(
+                        workspace=self.workspace,
+                        is_active=True
+                    )
+                    if gateway_supports_fulfillment_method(g.gateway_type, order.fulfillment_method)
+                ),
+                None,
+            )
             
             if not gateway:
                 # No gateway configured, skip payment creation

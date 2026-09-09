@@ -59,6 +59,7 @@ class PaymentGateway(models.Model):
         ('wechat', _('WeChat Pay')),
         ('alipay', _('Alipay')),
         ('bank_transfer', _('Bank Transfer')),
+        ('pay_in_store', _('Pay in Store')),
         ('custom', _('Custom')),
     )
     

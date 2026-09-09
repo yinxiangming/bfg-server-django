@@ -618,7 +618,7 @@ code(3, unique), name, symbol, decimal_places(default=2), is_active
 ```
 workspace       FK→Workspace(related='payment_gateways')
 name            CharField(255)
-gateway_type    CharField choices: stripe|paypal|wechat|alipay|bank_transfer|custom
+gateway_type    CharField choices: stripe|paypal|wechat|alipay|bank_transfer|pay_in_store|custom
 config          JSONField(default=dict)   ← live API keys
 test_config     JSONField(default=dict)
 is_active / is_test_mode  BooleanField

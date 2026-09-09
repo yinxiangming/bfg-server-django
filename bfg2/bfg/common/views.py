@@ -1272,22 +1272,30 @@ class UserViewSet(viewsets.ModelViewSet):
     workspace's users. Customers should use ``/api/v1/me/`` for their
     own profile and never need to enumerate other users.
     """
-    from bfg.common.serializers import UserSerializer
-    serializer_class = UserSerializer
+    from bfg.common.serializers import WorkspaceUserSerializer
+    serializer_class = WorkspaceUserSerializer
     permission_classes = [IsAuthenticated, IsWorkspaceStaff]
 
     def get_queryset(self):
-        """Return users scoped to the current workspace."""
-        from django.db.models import Q
-        from bfg.common.models import User
+        """Return users scoped to the current workspace, each with its role here."""
+        from django.db.models import Prefetch, Q
+        from bfg.common.models import StaffMember, User
 
         workspace = getattr(self.request, 'workspace', None)
         if not workspace:
             return User.objects.none()
+        # One query for every row's membership, rather than one per row in the
+        # serializer. Only *this* workspace's active membership: a user staffing two
+        # shops must not show the other one's role here.
+        memberships = StaffMember.all_objects.select_related('role').filter(
+            workspace=workspace, is_active=True
+        )
         return User.objects.filter(
             Q(default_workspace=workspace) |
             Q(staff_memberships__workspace=workspace, staff_memberships__is_active=True)
-        ).distinct()
+        ).distinct().prefetch_related(
+            Prefetch('staff_memberships', queryset=memberships, to_attr='workspace_memberships')
+        )
 
 
 class MeViewSet(viewsets.GenericViewSet):

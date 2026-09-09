@@ -8,6 +8,7 @@ from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from bfg.core.permissions import IsWorkspaceStaff
 from bfg.shop.models import ProductCategory, ProductTag
 from bfg.shop.services.product_service import ProductService
 
@@ -24,15 +25,17 @@ class QuickProductEntryView(APIView):
         language      str   optional  — language code, default 'en'
 
     Returns 201 { id, name, slug } on success.
-    Requires authenticated staff user.
+
+    Staff of *this workspace*, decided the same way as every other admin endpoint: an
+    active StaffMember row. It used to check Django's `user.is_staff` — a global
+    can-log-into-django-admin flag that has nothing to do with running a shop, so a
+    tenant's own operators got 403 here while every other admin screen worked, and the
+    only way to open it was to hand out a site-wide flag.
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsWorkspaceStaff]
 
     def post(self, request):
-        if not request.user.is_staff:
-            return Response({'detail': '仅 Staff 可访问'}, status=403)
-
         name = (request.data.get('name') or '').strip()
         if not name:
             return Response({'detail': 'name 为必填项'}, status=400)

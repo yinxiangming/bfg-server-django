@@ -31,6 +31,49 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
+class WorkspaceUserSerializer(UserSerializer):
+    """
+    The admin's user list: who they are, plus their role *in this workspace*.
+
+    The list used to render its role column from Django's `is_staff` / `is_superuser`,
+    which `UserSerializer` does not serialise — so every row read "user" no matter who
+    it was. Those flags were the wrong question anyway: nothing in the admin is decided
+    by them. Membership is an active StaffMember row for the workspace, which is what
+    `IsWorkspaceStaff` checks and what the front end's AdminAccessGuard reads.
+
+    `staff_role` is None for a user who merely belongs to the workspace (a customer, or
+    someone whose membership was switched off) — that is the honest answer, and it is
+    what the column should say.
+    """
+    staff_role = serializers.SerializerMethodField()
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ['staff_role']
+
+    def get_staff_role(self, obj):
+        # UserViewSet prefetches this workspace's active memberships into
+        # `workspace_memberships`, so a list of N users costs one extra query, not N.
+        memberships = getattr(obj, 'workspace_memberships', None)
+        if memberships is None:
+            request = self.context.get('request')
+            workspace = getattr(request, 'workspace', None) if request else None
+            if not workspace:
+                return None
+            memberships = list(
+                StaffMember.all_objects.select_related('role').filter(
+                    workspace=workspace, user=obj, is_active=True
+                )
+            )
+        membership = memberships[0] if memberships else None
+        if not membership:
+            return None
+        return {
+            'id': membership.role.id,
+            'code': membership.role.code,
+            'name': membership.role.name,
+        }
+
+
 class WorkspaceSerializer(serializers.ModelSerializer):
     """Workspace serializer"""
     

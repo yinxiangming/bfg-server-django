@@ -162,3 +162,84 @@ def test_registered_extra_channel_skipped_when_disabled(workspace):
         MessageService.unregister_channel("disabled")
 
     assert calls == []  # channel off for the template -> never invoked
+
+
+# ---------------------------------------------------------------------------
+# Template lookup: platform fallback and language order
+# ---------------------------------------------------------------------------
+def _workspace_language(workspace, language):
+    from bfg.common.models import Settings
+
+    Settings.objects.update_or_create(workspace=workspace, defaults={"default_language": language})
+
+
+@pytest.mark.django_db
+def test_missing_template_raises_template_not_found(workspace):
+    from bfg.core.exceptions import ValidationError
+    from bfg.inbox.exceptions import TemplateNotFound
+
+    customer = _customer(workspace, "dan")
+
+    with pytest.raises(TemplateNotFound) as raised:
+        MessageService(workspace=workspace, user=None).send_from_template([customer], "nope", {})
+
+    assert isinstance(raised.value, ValidationError)  # what callers caught before
+
+
+@pytest.mark.django_db
+def test_platform_template_used_when_workspace_has_none(workspace):
+    customer = _customer(workspace, "erin")
+    _template(None, "evt_platform", app_message_enabled=True)
+
+    msg = MessageService(workspace=workspace, user=None).send_from_template(
+        [customer], "evt_platform", {"name": "Erin"})
+
+    assert msg.subject == "Hi Erin"
+    assert msg.workspace == workspace
+
+
+@pytest.mark.django_db
+def test_workspace_template_wins_over_platform(workspace):
+    _template(None, "evt_both", app_message_title="Platform")
+    own = _template(workspace, "evt_both", app_message_title="Shop")
+
+    assert MessageService(workspace=workspace, user=None).get_template("evt_both") == own
+
+
+@pytest.mark.django_db
+def test_switched_off_workspace_template_does_not_fall_back_to_platform(workspace):
+    """Switching a shop's template off turns the notification off; it must not
+    quietly start sending the platform copy instead."""
+    _template(None, "evt_off")
+    _template(workspace, "evt_off", is_active=False)
+
+    assert MessageService(workspace=workspace, user=None).get_template("evt_off") is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("requested, workspace_language, expected", [
+    ("zh-hans", "en", "zh-hans"),  # the recipient's language first
+    ("fr", "zh-hans", "zh-hans"),  # no copy in it: the workspace default
+    ("fr", "de", "en"),            # neither: English
+    (None, "zh-hans", "zh-hans"),  # no recipient language: the workspace default
+    ("zh-Hans", "en", "zh-hans"),  # codes compare case-insensitively
+])
+def test_template_language_order(workspace, requested, workspace_language, expected):
+    _workspace_language(workspace, workspace_language)
+    _template(workspace, "evt_lang", language="en")
+    _template(workspace, "evt_lang", language="zh-hans")
+
+    template = MessageService(workspace=workspace, user=None).get_template("evt_lang", requested)
+
+    assert template.language == expected
+
+
+@pytest.mark.django_db
+def test_platform_templates_follow_the_same_language_order(workspace):
+    _workspace_language(workspace, "zh-hans")
+    _template(None, "evt_platform_lang", language="en")
+    _template(None, "evt_platform_lang", language="zh-hans")
+
+    template = MessageService(workspace=workspace, user=None).get_template("evt_platform_lang")
+
+    assert template.language == "zh-hans"

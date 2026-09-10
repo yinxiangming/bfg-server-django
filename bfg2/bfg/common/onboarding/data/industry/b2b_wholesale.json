@@ -1,0 +1,39 @@
+{
+  "categories": [
+    {
+      "slug": "bulk",
+      "name": "Bulk & cartons",
+      "name_zh": "整箱批发",
+      "order": 10
+    },
+    {
+      "slug": "clearance",
+      "name": "Clearance",
+      "name_zh": "清仓尾货",
+      "order": 20
+    },
+    {
+      "slug": "private-label",
+      "name": "Private label",
+      "name_zh": "贴牌定制",
+      "order": 30
+    },
+    {
+      "slug": "samples",
+      "name": "Samples",
+      "name_zh": "样品",
+      "order": 40
+    },
+    {
+      "slug": "consumables",
+      "name": "Consumables",
+      "name_zh": "配件耗材",
+      "order": 50
+    }
+  ],
+  "shop_settings": {
+    "sku_display": "full",
+    "stock_display": "exact",
+    "out_of_stock_policy": "backorder"
+  }
+}

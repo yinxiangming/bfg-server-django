@@ -2560,9 +2560,16 @@ class StaffRoleViewSet(viewsets.ModelViewSet):
 def countries_list(request):
     """
     Get list of countries (ISO 3166-1 alpha-2 codes)
-    Returns list of {code, name} objects
+    Returns list of {code, name, name_zh, currency, timezone, ...} objects
+
+    Served from the onboarding catalog rather than the four-entry seed list this
+    used to return: the setup wizard already needs a real country table with the
+    currency and timezone each one implies, and two lists would disagree the
+    moment either was extended.
     """
-    return Response(COUNTRY_LIST)
+    from bfg.common.onboarding.catalog import country_options
+
+    return Response(country_options())
 
 
 # ── Staff Member Management ───────────────────────────────────────

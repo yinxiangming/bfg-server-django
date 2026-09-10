@@ -1,5 +1,13 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from .onboarding.api import (
+    OnboardingApplyView,
+    OnboardingDismissView,
+    OnboardingOptionsView,
+    OnboardingPreviewView,
+    OnboardingSkipView,
+    OnboardingStatusView,
+)
 from .views import (
     WorkspaceViewSet, CustomerViewSet, AddressViewSet, SettingsViewSet,
     EmailConfigViewSet,
@@ -59,5 +67,12 @@ urlpatterns = [
     # Router URLs (includes me/addresses/, me/orders/)
     path('', include(router.urls)),
     path('options/', OptionsView.as_view(), name='options'),
+    # Setup wizard
+    path('onboarding/status/', OnboardingStatusView.as_view(), name='onboarding-status'),
+    path('onboarding/options/', OnboardingOptionsView.as_view(), name='onboarding-options'),
+    path('onboarding/preview/', OnboardingPreviewView.as_view(), name='onboarding-preview'),
+    path('onboarding/apply/', OnboardingApplyView.as_view(), name='onboarding-apply'),
+    path('onboarding/skip/', OnboardingSkipView.as_view(), name='onboarding-skip'),
+    path('onboarding/dismiss/', OnboardingDismissView.as_view(), name='onboarding-dismiss'),
     path('countries/', countries_list, name='countries-list'),
 ]

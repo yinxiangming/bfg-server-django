@@ -59,6 +59,7 @@ class SettingsService(BaseService):
         allowed_fields = [
             'site_name', 'site_description', 'logo', 'favicon',
             'default_language', 'supported_languages', 'default_currency',
+            'country',
             'default_timezone', 'contact_email', 'support_email',
             'contact_phone', 'facebook_url', 'twitter_url', 'instagram_url',
             'features', 'custom_settings'

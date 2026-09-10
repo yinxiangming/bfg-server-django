@@ -384,6 +384,11 @@ class SettingsSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'workspace_id', 'site_name', 'site_description', 'logo', 'favicon',
             'default_language', 'supported_languages', 'default_currency',
+            # `country` drives the tax defaults, the address format and the geo
+            # plugin's market. It was on the model but in neither this list nor
+            # SettingsService.allowed_fields, so the API could not read it back
+            # or accept it — leaving the admin with no way to set it at all.
+            'country',
             'default_timezone', 'contact_email', 'support_email',
             'contact_phone', 'facebook_url', 'twitter_url', 'instagram_url',
             'features', 'custom_settings', 'updated_at'

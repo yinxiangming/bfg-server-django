@@ -1,0 +1,44 @@
+{
+  "categories": [
+    {
+      "slug": "vitamins",
+      "name": "Vitamins",
+      "name_zh": "维生素",
+      "order": 10
+    },
+    {
+      "slug": "supplements",
+      "name": "Supplements",
+      "name_zh": "膳食营养",
+      "order": 20
+    },
+    {
+      "slug": "sports-nutrition",
+      "name": "Sports nutrition",
+      "name_zh": "运动营养",
+      "order": 30
+    },
+    {
+      "slug": "herbal",
+      "name": "Herbal & natural",
+      "name_zh": "草本天然",
+      "order": 40
+    },
+    {
+      "slug": "baby-nutrition",
+      "name": "Infant nutrition",
+      "name_zh": "婴幼营养",
+      "order": 50
+    },
+    {
+      "slug": "devices",
+      "name": "Home health devices",
+      "name_zh": "家用器械",
+      "order": 60
+    }
+  ],
+  "shop_settings": {
+    "sku_display": "plain",
+    "stock_display": "status"
+  }
+}

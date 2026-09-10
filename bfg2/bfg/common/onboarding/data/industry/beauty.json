@@ -1,0 +1,50 @@
+{
+  "categories": [
+    {
+      "slug": "skincare",
+      "name": "Skincare",
+      "name_zh": "护肤",
+      "order": 10
+    },
+    {
+      "slug": "makeup",
+      "name": "Makeup",
+      "name_zh": "彩妆",
+      "order": 20
+    },
+    {
+      "slug": "haircare",
+      "name": "Hair care",
+      "name_zh": "洗护发",
+      "order": 30
+    },
+    {
+      "slug": "fragrance",
+      "name": "Fragrance",
+      "name_zh": "香水",
+      "order": 40
+    },
+    {
+      "slug": "body-care",
+      "name": "Body care",
+      "name_zh": "身体护理",
+      "order": 50
+    },
+    {
+      "slug": "tools",
+      "name": "Tools & brushes",
+      "name_zh": "美妆工具",
+      "order": 60
+    },
+    {
+      "slug": "gift-sets",
+      "name": "Gift sets",
+      "name_zh": "套装礼盒",
+      "order": 70
+    }
+  ],
+  "shop_settings": {
+    "sku_display": "hidden",
+    "stock_display": "low_only"
+  }
+}

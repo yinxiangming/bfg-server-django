@@ -1,0 +1,49 @@
+{
+  "categories": [
+    {
+      "slug": "furniture",
+      "name": "Furniture",
+      "name_zh": "家具",
+      "order": 10
+    },
+    {
+      "slug": "bedding",
+      "name": "Bedding",
+      "name_zh": "床品家纺",
+      "order": 20
+    },
+    {
+      "slug": "kitchen",
+      "name": "Kitchen",
+      "name_zh": "厨房用品",
+      "order": 30
+    },
+    {
+      "slug": "storage",
+      "name": "Storage",
+      "name_zh": "收纳整理",
+      "order": 40
+    },
+    {
+      "slug": "lighting",
+      "name": "Lighting",
+      "name_zh": "灯具照明",
+      "order": 50
+    },
+    {
+      "slug": "decor",
+      "name": "Decor",
+      "name_zh": "家居装饰",
+      "order": 60
+    },
+    {
+      "slug": "cleaning",
+      "name": "Cleaning",
+      "name_zh": "清洁用品",
+      "order": 70
+    }
+  ],
+  "shop_settings": {
+    "out_of_stock_policy": "backorder"
+  }
+}

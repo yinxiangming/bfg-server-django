@@ -7,7 +7,7 @@ Order management service
 from typing import Any, Optional, Dict
 from decimal import Decimal
 from datetime import datetime
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils import timezone
 from bfg.core.services import BaseService
@@ -31,6 +31,13 @@ class OrderService(BaseService):
     
     Handles order creation, status updates, and order lifecycle
     """
+
+    # Random digits after the date in ORD-YYYYMMDD-XXXXXXXX. order_number is
+    # unique across all workspaces, so this is one day's supply for the whole
+    # platform, not for each shop.
+    ORDER_NUMBER_DIGITS = 8
+    # INSERTs _insert_order attempts before a collision is raised as an error.
+    ORDER_NUMBER_ATTEMPTS = 5
     
     def calculate_order_totals(
         self,
@@ -505,15 +512,11 @@ class OrderService(BaseService):
             except FreightService.DoesNotExist:
                 pass  # Keep as None if not found
         
-        # Generate order number
-        order_number = self._generate_order_number()
-        
-        # Create order
-        order = Order.objects.create(
+        # Create order (_insert_order assigns the order number)
+        order = self._insert_order(
             workspace=self.workspace,
             customer=cart.customer,
             store=store,
-            order_number=order_number,
             status='pending',
             payment_status='pending',
             fulfillment_method=fulfillment_method,
@@ -663,15 +666,11 @@ class OrderService(BaseService):
         status = kwargs.get('status', 'pending')
         payment_status = kwargs.get('payment_status', 'pending')
         
-        # Generate order number
-        order_number = self._generate_order_number()
-        
-        # Create order
-        order = Order.objects.create(
+        # Create order (_insert_order assigns the order number)
+        order = self._insert_order(
             workspace=self.workspace,
             customer=customer,
             store=store,
-            order_number=order_number,
             status=status,
             payment_status=payment_status,
             fulfillment_method=fulfillment_method,
@@ -716,26 +715,66 @@ class OrderService(BaseService):
     
     def _generate_order_number(self) -> str:
         """
-        Generate unique order number
-        
+        Generate an order number no workspace has used yet
+
+        ``order_number`` is unique across all workspaces, so the check reads
+        ``Order.all_objects``. The tenant-scoped ``Order.objects`` sees only the
+        bound workspace's orders (none at all when nothing is bound), so a
+        number another workspace already holds would pass it and fail at INSERT.
+
+        Nothing checked here stops a concurrent checkout from taking the number
+        before it is inserted; ``_insert_order`` retries that case.
+
         Returns:
             str: Order number
         """
         import random
         import string
-        
-        # Format: ORD-YYYYMMDD-XXXXX
+
+        # Format: ORD-YYYYMMDD-XXXXXXXX
         date_str = timezone.now().strftime('%Y%m%d')
-        random_str = ''.join(random.choices(string.digits, k=5))
-        
+        random_str = ''.join(random.choices(string.digits, k=self.ORDER_NUMBER_DIGITS))
+
         order_number = f"ORD-{date_str}-{random_str}"
-        
-        # Ensure uniqueness
-        while Order.objects.filter(order_number=order_number).exists():
-            random_str = ''.join(random.choices(string.digits, k=5))
+
+        # Ensure uniqueness across every workspace, as the column is unique
+        while Order.all_objects.filter(order_number=order_number).exists():
+            random_str = ''.join(random.choices(string.digits, k=self.ORDER_NUMBER_DIGITS))
             order_number = f"ORD-{date_str}-{random_str}"
-        
+
         return order_number
+
+    def _insert_order(self, **fields: Any) -> Order:
+        """
+        Create an Order under a freshly generated order number
+
+        ``_generate_order_number`` checks before the INSERT, so a concurrent
+        checkout can still take the same number first, and this INSERT then
+        fails on the unique constraint. Each attempt runs in its own savepoint:
+        the failure rolls back only that INSERT, and the caller's transaction
+        stays usable for another attempt under a new number.
+
+        Only a collision is retried. If the number is not in fact taken, the
+        IntegrityError came from some other constraint and is raised at once.
+        Seeing the other checkout's row relies on READ COMMITTED, Django's
+        default isolation level on MySQL and PostgreSQL.
+
+        Args:
+            **fields: Order fields other than order_number
+
+        Returns:
+            Order: Created order instance
+        """
+        for attempt in range(1, self.ORDER_NUMBER_ATTEMPTS + 1):
+            order_number = self._generate_order_number()
+            try:
+                with transaction.atomic():
+                    return Order.objects.create(order_number=order_number, **fields)
+            except IntegrityError:
+                collided = Order.all_objects.filter(order_number=order_number).exists()
+                if not collided or attempt == self.ORDER_NUMBER_ATTEMPTS:
+                    raise
+        raise AssertionError('unreachable')
     
     def _create_invoice_for_order(self, order: Order) -> Optional['Invoice']:
         """

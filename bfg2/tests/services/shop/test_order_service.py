@@ -1,8 +1,12 @@
+from datetime import datetime, timezone as dt_timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from django.db import IntegrityError
 
+from bfg.common.middleware import set_current_workspace
+from bfg.shop.models import Order
 from bfg.shop.services.order_service import OrderService
 
 
@@ -29,13 +33,155 @@ def test_generate_order_number_retries_until_unique(monkeypatch):
 
     exists = _Exists()
     monkeypatch.setattr(
-        "bfg.shop.services.order_service.Order.objects",
+        "bfg.shop.services.order_service.Order.all_objects",
         SimpleNamespace(filter=lambda **_kwargs: exists),
     )
 
     order_no = service._generate_order_number()
     assert order_no.startswith("ORD-")
     assert order_no.endswith("22222")
+
+
+# ---------------------------------------------------------------------------
+# Order numbers across workspaces
+# ---------------------------------------------------------------------------
+#
+# order_number is unique across the whole table, while Order.objects only sees
+# the workspace bound to the thread. These run against the database: a mocked
+# manager would hide exactly the difference under test.
+
+TAKEN = "ORD-20260911-11111111"
+FRESH = "ORD-20260911-22222222"
+
+
+def _shop(slug):
+    """A workspace with what a collection order needs: customer, store, pickup point."""
+    from bfg.common.models import Customer, User, Workspace
+    from bfg.delivery.models import PickupPoint
+    from bfg.shop.models import Store
+
+    workspace = Workspace.objects.create(name=slug, slug=slug, is_active=True)
+    user = User.objects.create(username=slug, email=f"{slug}@example.com", is_active=True)
+    customer = Customer.objects.create(workspace=workspace, user=user, is_active=True)
+    store = Store.objects.create(workspace=workspace, name="Main", code="main", is_active=True)
+    # Collection, so the orders need no address.
+    PickupPoint.all_objects.create(
+        workspace=workspace, name="Counter", code="counter",
+        address_line1="1 Queen Street", city="Auckland", is_default=True,
+    )
+    return SimpleNamespace(workspace=workspace, customer=customer, store=store)
+
+
+def _order(shop, order_number):
+    return Order.all_objects.create(
+        workspace=shop.workspace, customer=shop.customer, store=shop.store,
+        order_number=order_number, fulfillment_method="pickup",
+        subtotal=Decimal("10.00"), total=Decimal("10.00"),
+    )
+
+
+def _hand_out(monkeypatch, *numbers):
+    """Make _generate_order_number return these numbers in turn; returns what it drew."""
+    supply = iter(numbers)
+    drawn = []
+
+    def generate(_self):
+        drawn.append(next(supply))
+        return drawn[-1]
+
+    monkeypatch.setattr(OrderService, "_generate_order_number", generate)
+    return drawn
+
+
+@pytest.mark.django_db
+def test_generated_number_skips_one_another_workspace_holds(monkeypatch):
+    taken = _order(_shop("shop-a"), TAKEN)
+    shop_b = _shop("shop-b")
+    service = OrderService(workspace=shop_b.workspace, user=None)
+
+    # Bound to B, as during a checkout in shop B. The tenant-scoped manager
+    # cannot see A's order at all, which is how its number got through.
+    set_current_workspace(shop_b.workspace)
+    assert not Order.objects.filter(pk=taken.pk).exists()
+
+    monkeypatch.setattr(
+        "bfg.shop.services.order_service.timezone",
+        SimpleNamespace(now=lambda: datetime(2026, 9, 11, 12, 0, tzinfo=dt_timezone.utc)),
+    )
+    draws = iter(["11111111", "22222222"])
+    monkeypatch.setattr("random.choices", lambda *_args, **_kwargs: list(next(draws)))
+
+    assert service._generate_order_number() == FRESH
+
+
+@pytest.mark.django_db
+def test_create_order_retries_a_number_taken_after_the_check(monkeypatch):
+    # Another checkout committed the number after this one's check passed, so
+    # only the INSERT finds out. Handing out a taken number stands in for that.
+    _order(_shop("shop-a"), TAKEN)
+    shop_b = _shop("shop-b")
+    drawn = _hand_out(monkeypatch, TAKEN, FRESH)
+
+    order = OrderService(workspace=shop_b.workspace, user=None).create_order(
+        shop_b.customer, shop_b.store, fulfillment_method="pickup", subtotal=Decimal("10.00"),
+    )
+
+    assert drawn == [TAKEN, FRESH]
+    assert order.order_number == FRESH
+    assert Order.all_objects.get(order_number=FRESH).workspace_id == shop_b.workspace.id
+
+
+@pytest.mark.django_db
+def test_create_order_from_cart_retries_a_number_taken_after_the_check(monkeypatch):
+    from bfg.shop.models import Cart, CartItem, Product
+
+    _order(_shop("shop-a"), TAKEN)
+    shop_b = _shop("shop-b")
+    product = Product.objects.create(
+        workspace=shop_b.workspace, name="Bag of Rice", slug="bag-of-rice",
+        price=Decimal("20.00"), is_active=True, track_inventory=False,
+    )
+    cart = Cart.objects.create(workspace=shop_b.workspace, customer=shop_b.customer)
+    CartItem.objects.create(cart=cart, product=product, quantity=1, price=product.price)
+    drawn = _hand_out(monkeypatch, TAKEN, FRESH)
+
+    order = OrderService(workspace=shop_b.workspace, user=None).create_order_from_cart(
+        cart, shop_b.store, fulfillment_method="pickup",
+    )
+
+    assert drawn == [TAKEN, FRESH]
+    assert order.order_number == FRESH
+    # The rest of checkout still ran, in the transaction the failed INSERT was in.
+    assert order.items.count() == 1
+    assert not cart.items.exists()
+
+
+@pytest.mark.django_db
+def test_create_order_does_not_retry_an_unrelated_integrity_error(monkeypatch):
+    shop = _shop("shop-a")
+    drawn = _hand_out(monkeypatch, FRESH, "ORD-20260911-33333333")
+
+    with pytest.raises(IntegrityError, match="total"):
+        OrderService(workspace=shop.workspace, user=None).create_order(
+            shop.customer, shop.store, fulfillment_method="pickup",
+            subtotal=Decimal("10.00"), total=None,  # NOT NULL; nothing to do with the number
+        )
+
+    assert drawn == [FRESH]
+
+
+@pytest.mark.django_db
+def test_create_order_gives_up_after_the_last_attempt(monkeypatch):
+    _order(_shop("shop-a"), TAKEN)
+    shop_b = _shop("shop-b")
+    drawn = _hand_out(monkeypatch, *[TAKEN] * OrderService.ORDER_NUMBER_ATTEMPTS)
+
+    with pytest.raises(IntegrityError):
+        OrderService(workspace=shop_b.workspace, user=None).create_order(
+            shop_b.customer, shop_b.store, fulfillment_method="pickup", subtotal=Decimal("10.00"),
+        )
+
+    assert len(drawn) == OrderService.ORDER_NUMBER_ATTEMPTS
 
 
 # ---------------------------------------------------------------------------

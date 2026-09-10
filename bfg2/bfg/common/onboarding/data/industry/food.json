@@ -1,0 +1,51 @@
+{
+  "categories": [
+    {
+      "slug": "fresh-produce",
+      "name": "Fruit & vegetables",
+      "name_zh": "蔬果生鲜",
+      "order": 10
+    },
+    {
+      "slug": "meat-seafood",
+      "name": "Meat & seafood",
+      "name_zh": "肉禽水产",
+      "order": 20
+    },
+    {
+      "slug": "dairy-eggs",
+      "name": "Dairy & eggs",
+      "name_zh": "乳品蛋类",
+      "order": 30
+    },
+    {
+      "slug": "pantry",
+      "name": "Pantry staples",
+      "name_zh": "米面粮油",
+      "order": 40
+    },
+    {
+      "slug": "snacks",
+      "name": "Snacks",
+      "name_zh": "休闲零食",
+      "order": 50
+    },
+    {
+      "slug": "beverages",
+      "name": "Drinks",
+      "name_zh": "酒水饮料",
+      "order": 60
+    },
+    {
+      "slug": "frozen",
+      "name": "Frozen",
+      "name_zh": "冷冻食品",
+      "order": 70
+    }
+  ],
+  "shop_settings": {
+    "sku_display": "hidden",
+    "stock_display": "status",
+    "out_of_stock_policy": "hide"
+  }
+}

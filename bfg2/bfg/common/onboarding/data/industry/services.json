@@ -1,0 +1,48 @@
+{
+  "categories": [
+    {
+      "slug": "consultations",
+      "name": "Consultations",
+      "name_zh": "咨询服务",
+      "order": 10
+    },
+    {
+      "slug": "classes",
+      "name": "Classes & training",
+      "name_zh": "课程培训",
+      "order": 20
+    },
+    {
+      "slug": "repairs",
+      "name": "Repairs",
+      "name_zh": "维修服务",
+      "order": 30
+    },
+    {
+      "slug": "treatments",
+      "name": "Treatments",
+      "name_zh": "美容护理",
+      "order": 40
+    },
+    {
+      "slug": "events",
+      "name": "Events",
+      "name_zh": "活动预约",
+      "order": 50
+    }
+  ],
+  "shop_settings": {
+    "sku_display": "hidden",
+    "stock_display": "hidden",
+    "out_of_stock_policy": "show"
+  },
+  "checklist_skip": [
+    "delivery.warehouse",
+    "delivery.carrier",
+    "delivery.zone",
+    "delivery.freight"
+  ],
+  "pages_drop": [
+    "delivery"
+  ]
+}

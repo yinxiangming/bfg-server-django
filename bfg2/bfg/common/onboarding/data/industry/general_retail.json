@@ -1,0 +1,52 @@
+{
+  "categories": [
+    {
+      "slug": "home-living",
+      "name": "Home & living",
+      "name_zh": "家居生活",
+      "order": 10
+    },
+    {
+      "slug": "fashion",
+      "name": "Fashion",
+      "name_zh": "服饰鞋包",
+      "order": 20
+    },
+    {
+      "slug": "electronics",
+      "name": "Electronics",
+      "name_zh": "数码家电",
+      "order": 30
+    },
+    {
+      "slug": "beauty",
+      "name": "Beauty",
+      "name_zh": "美妆个护",
+      "order": 40
+    },
+    {
+      "slug": "food-drink",
+      "name": "Food & drink",
+      "name_zh": "食品饮料",
+      "order": 50
+    },
+    {
+      "slug": "sports",
+      "name": "Sports & outdoor",
+      "name_zh": "运动户外",
+      "order": 60
+    },
+    {
+      "slug": "toys-baby",
+      "name": "Toys & baby",
+      "name_zh": "玩具母婴",
+      "order": 70
+    },
+    {
+      "slug": "stationery",
+      "name": "Stationery & office",
+      "name_zh": "文具办公",
+      "order": 80
+    }
+  ]
+}

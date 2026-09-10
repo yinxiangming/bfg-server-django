@@ -1,0 +1,50 @@
+{
+  "categories": [
+    {
+      "slug": "womens",
+      "name": "Women's clothing",
+      "name_zh": "女装",
+      "order": 10
+    },
+    {
+      "slug": "mens",
+      "name": "Men's clothing",
+      "name_zh": "男装",
+      "order": 20
+    },
+    {
+      "slug": "shoes",
+      "name": "Shoes",
+      "name_zh": "鞋履",
+      "order": 30
+    },
+    {
+      "slug": "bags",
+      "name": "Bags",
+      "name_zh": "箱包",
+      "order": 40
+    },
+    {
+      "slug": "accessories",
+      "name": "Accessories",
+      "name_zh": "配饰",
+      "order": 50
+    },
+    {
+      "slug": "kids",
+      "name": "Kids",
+      "name_zh": "童装",
+      "order": 60
+    },
+    {
+      "slug": "sale",
+      "name": "Sale",
+      "name_zh": "特惠专区",
+      "order": 70
+    }
+  ],
+  "shop_settings": {
+    "sku_display": "hidden",
+    "stock_display": "low_only"
+  }
+}

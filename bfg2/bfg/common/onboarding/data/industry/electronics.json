@@ -1,0 +1,51 @@
+{
+  "categories": [
+    {
+      "slug": "phones",
+      "name": "Phones",
+      "name_zh": "手机通讯",
+      "order": 10
+    },
+    {
+      "slug": "computers",
+      "name": "Computers",
+      "name_zh": "电脑办公",
+      "order": 20
+    },
+    {
+      "slug": "audio",
+      "name": "Audio",
+      "name_zh": "影音耳机",
+      "order": 30
+    },
+    {
+      "slug": "cameras",
+      "name": "Cameras",
+      "name_zh": "相机摄影",
+      "order": 40
+    },
+    {
+      "slug": "smart-home",
+      "name": "Smart home",
+      "name_zh": "智能家居",
+      "order": 50
+    },
+    {
+      "slug": "wearables",
+      "name": "Wearables",
+      "name_zh": "智能穿戴",
+      "order": 60
+    },
+    {
+      "slug": "accessories",
+      "name": "Accessories",
+      "name_zh": "数码配件",
+      "order": 70
+    }
+  ],
+  "shop_settings": {
+    "sku_display": "full",
+    "stock_display": "exact",
+    "out_of_stock_policy": "notify"
+  }
+}

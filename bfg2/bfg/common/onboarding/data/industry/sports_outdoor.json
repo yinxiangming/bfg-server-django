@@ -1,0 +1,46 @@
+{
+  "categories": [
+    {
+      "slug": "running",
+      "name": "Running",
+      "name_zh": "跑步",
+      "order": 10
+    },
+    {
+      "slug": "fitness",
+      "name": "Fitness",
+      "name_zh": "健身",
+      "order": 20
+    },
+    {
+      "slug": "camping",
+      "name": "Camping & hiking",
+      "name_zh": "露营徒步",
+      "order": 30
+    },
+    {
+      "slug": "cycling",
+      "name": "Cycling",
+      "name_zh": "骑行",
+      "order": 40
+    },
+    {
+      "slug": "water-sports",
+      "name": "Water sports",
+      "name_zh": "水上运动",
+      "order": 50
+    },
+    {
+      "slug": "team-sports",
+      "name": "Team sports",
+      "name_zh": "球类运动",
+      "order": 60
+    },
+    {
+      "slug": "apparel",
+      "name": "Sportswear",
+      "name_zh": "运动服饰",
+      "order": 70
+    }
+  ]
+}

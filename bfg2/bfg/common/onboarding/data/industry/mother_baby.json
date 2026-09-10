@@ -1,0 +1,50 @@
+{
+  "categories": [
+    {
+      "slug": "formula",
+      "name": "Formula",
+      "name_zh": "奶粉",
+      "order": 10
+    },
+    {
+      "slug": "diapers",
+      "name": "Nappies",
+      "name_zh": "纸尿裤",
+      "order": 20
+    },
+    {
+      "slug": "feeding",
+      "name": "Feeding",
+      "name_zh": "喂养用品",
+      "order": 30
+    },
+    {
+      "slug": "baby-care",
+      "name": "Bath & skincare",
+      "name_zh": "洗护用品",
+      "order": 40
+    },
+    {
+      "slug": "strollers",
+      "name": "Prams & car seats",
+      "name_zh": "出行推车",
+      "order": 50
+    },
+    {
+      "slug": "toys",
+      "name": "Toys & learning",
+      "name_zh": "玩具早教",
+      "order": 60
+    },
+    {
+      "slug": "maternity",
+      "name": "Maternity",
+      "name_zh": "孕产用品",
+      "order": 70
+    }
+  ],
+  "shop_settings": {
+    "sku_display": "full",
+    "stock_display": "status"
+  }
+}

@@ -350,6 +350,19 @@ REST_FRAMEWORK = {
 WECHAT_MINIPROGRAM_APPID = os.environ.get('WECHAT_MINIPROGRAM_APPID', '').strip()
 WECHAT_MINIPROGRAM_APPSECRET = os.environ.get('WECHAT_MINIPROGRAM_APPSECRET', '').strip()
 
+# 一起拼这个 mini program (apps.groupbuy). One mini program serves every shop, so its
+# endpoints take the shop from the URL and check membership in their own views;
+# WorkspaceMiddleware must neither bind them to the JWT's workspace claim nor 403
+# a user who shops somewhere they are not a member.
+BFG_EXTRA_PUBLIC_PATHS = ('/api/v1/groupbuy/',)
+GROUPBUY_MINIPROGRAM_APPID = os.environ.get('GROUPBUY_MINIPROGRAM_APPID', '').strip()
+GROUPBUY_MINIPROGRAM_APPSECRET = os.environ.get('GROUPBUY_MINIPROGRAM_APPSECRET', '').strip()
+# The platform workspace WeChat identities hang off (SocialIdentity.workspace is
+# required), so a user can log in before owning any shop. Unset = login refuses.
+_groupbuy_home_workspace_id = os.environ.get('GROUPBUY_HOME_WORKSPACE_ID', '').strip()
+GROUPBUY_HOME_WORKSPACE_ID = int(_groupbuy_home_workspace_id) if _groupbuy_home_workspace_id.isdigit() else None
+GROUPBUY_MAX_SHOPS_PER_USER = int(os.environ.get('GROUPBUY_MAX_SHOPS_PER_USER', '3') or '3')
+
 # Google Maps, server side (apps.geo). Address suggestions and reverse geocoding
 # run here rather than in the client because the mini-program cannot load Google's
 # JavaScript SDK, and a key shipped in a mini-program bundle is a key anyone can

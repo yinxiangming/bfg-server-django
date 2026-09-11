@@ -65,6 +65,12 @@ PUBLIC_PATHS = (
     '/static/',
 )
 
+# Deployments add their own prefixes through ``settings.BFG_EXTRA_PUBLIC_PATHS``
+# (a tuple of path prefixes, default empty) instead of editing the tuple above —
+# e.g. an app serving many tenants from one client, which takes the tenant from
+# its URL and checks membership in its own views. Read per request, so
+# ``override_settings`` works; see :func:`public_path_prefixes`.
+
 # Auth headers that carry enough information for the *view layer* to
 # resolve the workspace (e.g. an API key bound to a specific workspace).
 # When one of these is present we let the request pass the middleware
@@ -81,6 +87,19 @@ MISSING_WORKSPACE_RESPONSE = {
     ),
     'code': 'workspace_required',
 }
+
+
+def public_path_prefixes():
+    """:data:`PUBLIC_PATHS` plus the deployment's ``BFG_EXTRA_PUBLIC_PATHS``.
+
+    A bare string is taken as one prefix rather than iterated character by
+    character (that would make every path starting with ``/`` public), and
+    empty entries are dropped because ``''`` is a prefix of everything.
+    """
+    extra = getattr(settings, 'BFG_EXTRA_PUBLIC_PATHS', ()) or ()
+    if isinstance(extra, str):
+        extra = (extra,)
+    return PUBLIC_PATHS + tuple(prefix for prefix in extra if prefix)
 
 
 def get_current_workspace():
@@ -387,7 +406,7 @@ class WorkspaceMiddleware:
 
     @staticmethod
     def _is_public(path):
-        return any(path.startswith(prefix) for prefix in PUBLIC_PATHS)
+        return any(path.startswith(prefix) for prefix in public_path_prefixes())
 
     @staticmethod
     def _delegates_to_view_auth(request):

@@ -158,3 +158,41 @@ class TestThreadLocalCleanup:
     def test_workspace_cleared_after_public_path(self):
         Client().get("/api/v1/auth/__probe__/")
         assert get_current_workspace() is None
+
+
+# ─── BFG_EXTRA_PUBLIC_PATHS ──────────────────────────────────────────
+
+
+class TestExtraPublicPaths:
+    """Deployments add public prefixes through settings, not by editing PUBLIC_PATHS."""
+
+    PROBE = "/api/v1/__extra_public__/probe/"
+
+    def test_setting_is_absent_by_default(self, settings):
+        assert not hasattr(settings, "BFG_EXTRA_PUBLIC_PATHS")
+        assert Client().get(self.PROBE).status_code == 400
+
+    def test_configured_prefix_bypasses_workspace_check(self, settings):
+        settings.BFG_EXTRA_PUBLIC_PATHS = ("/api/v1/__extra_public__/",)
+        assert Client().get(self.PROBE).status_code != 400
+        # Only that prefix — everything else keeps the strict check.
+        assert Client().get("/api/v1/__strict_probe__/").status_code == 400
+
+    def test_built_in_public_paths_still_apply(self, settings):
+        settings.BFG_EXTRA_PUBLIC_PATHS = ("/api/v1/__extra_public__/",)
+        assert Client().get("/api/v1/auth/__probe__/").status_code != 400
+
+    def test_bare_string_is_one_prefix_not_a_character_list(self, settings):
+        # Iterating "/api/..." would yield "/" and make every path public.
+        settings.BFG_EXTRA_PUBLIC_PATHS = "/api/v1/__extra_public__/"
+        assert Client().get(self.PROBE).status_code != 400
+        assert Client().get("/api/v1/__strict_probe__/").status_code == 400
+
+    def test_empty_prefix_does_not_open_everything(self, settings):
+        settings.BFG_EXTRA_PUBLIC_PATHS = ("",)
+        assert Client().get("/api/v1/__strict_probe__/").status_code == 400
+
+    def test_workspace_cleared_after_extra_public_path(self, settings, ws):
+        settings.BFG_EXTRA_PUBLIC_PATHS = ("/api/v1/__extra_public__/",)
+        Client().get(self.PROBE, HTTP_X_WORKSPACE_ID=str(ws.id))
+        assert get_current_workspace() is None

@@ -510,13 +510,18 @@ ONBOARDING_PROVISION_ON_REGISTER = os.environ.get('ONBOARDING_PROVISION_ON_REGIS
 FRONTEND_EMAIL_CONFIRM_PATH = os.environ.get('FRONTEND_EMAIL_CONFIRM_PATH', '/auth/verify-email').strip() or '/auth/verify-email'
 # Seconds the onboarding token returned by verify-email is accepted by finalize-onboarding.
 ONBOARDING_TOKEN_MAX_AGE = int(os.environ.get('ONBOARDING_TOKEN_MAX_AGE', '3600'))
+# Account emails link to FRONTEND_EMAIL_CONFIRM_PATH on the frontend and are named after
+# SITE_NAME, rather than linking to allauth's own views and naming the Site row.
+ACCOUNT_ADAPTER = 'config.account_adapter.AccountAdapter'
 
 # Frontend URL and site name (from env)
 FRONTEND_URL = os.environ.get('FRONTEND_URL', '')
 # Fallback for POST /platform/auth/sso/start/ when WorkspacePlatformProfile.custom_domain is empty.
 # Prefer setting custom_domain (or cluster.frontend_base_url) per workspace in production.
 WORKSPACE_FRONTEND_URL = os.environ.get('WORKSPACE_FRONTEND_URL', '').strip()
-SITE_NAME = os.environ.get('SITE_NAME', 'BFG')
+# Unset, the site takes the name its mail is already sent under: DEFAULT_FROM_EMAIL's display name.
+from email.utils import parseaddr  # noqa: E402
+SITE_NAME = os.environ.get('SITE_NAME') or parseaddr(DEFAULT_FROM_EMAIL)[0] or 'BFG'
 
 # Staff invitations: default TTL in hours (used when admin doesn't override per-invite).
 INVITATION_EXPIRY_HOURS = int(os.environ.get('INVITATION_EXPIRY_HOURS', '48'))

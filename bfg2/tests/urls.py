@@ -16,11 +16,9 @@ from config.views import (
     provision_workspace,
 )
 
-from django.views.generic import TemplateView
-
 urlpatterns = [
-    # allauth required route
-    path('auth/account-confirm-email/<str:key>/', TemplateView.as_view(), name='account_confirm_email'),
+    # No account_confirm_email route, as in config/urls.py: confirmation links go to the
+    # frontend (config.account_adapter), and a placeholder here would hide one that does not.
     # BFG2 API v1 endpoints (matching main server structure)
     path('api/v1/', include([
         path('internal/auth/provision-user/', provision_user, name='provision_user'),

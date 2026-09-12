@@ -4,8 +4,8 @@ Test URL configuration
 from django.urls import path, include
 from django.contrib import admin
 
-from rest_framework_simplejwt.views import TokenObtainPairView
-from config.serializers import CustomTokenObtainPairSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from config.serializers import CustomTokenObtainPairSerializer, CustomTokenRefreshSerializer
 from config.views import (
     register,
     finalize_onboarding,
@@ -32,6 +32,8 @@ urlpatterns = [
             path('reset-password-confirm/', reset_password_confirm, name='reset-password-confirm'),
             path('verify-email/', verify_email, name='verify-email'),
             path('token/', TokenObtainPairView.as_view(serializer_class=CustomTokenObtainPairSerializer), name='token_obtain_pair'),
+            # config/settings.py picks this serializer through SIMPLE_JWT, which these settings leave unset.
+            path('token/refresh/', TokenRefreshView.as_view(serializer_class=CustomTokenRefreshSerializer), name='token_refresh'),
         ])),
         # Common module (workspaces, customers, addresses)
         path('', include('bfg.common.urls')),

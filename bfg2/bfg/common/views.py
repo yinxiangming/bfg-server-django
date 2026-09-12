@@ -37,7 +37,7 @@ from bfg.common.serializers import (
     UserPreferencesSerializer,
     StaffRoleSerializer,
 )
-from bfg.common.services import WorkspaceService, CustomerService, AddressService
+from bfg.common.services import WorkspaceService, CustomerService, AddressService, UserService
 from bfg.common.utils import get_required_workspace
 from bfg.common.constants import get_default_currency_for_workspace, DEFAULT_CURRENCY_CODE
 
@@ -1363,8 +1363,12 @@ class MeViewSet(viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
         
         user = request.user
-        user.set_password(serializer.validated_data['new_password'])
-        user.save()
+        with transaction.atomic():
+            user.set_password(serializer.validated_data['new_password'])
+            user.save()
+            # Every session ends, the caller's own included: it signs in again with the
+            # new password once its access token runs out.
+            UserService.revoke_refresh_tokens(user)
         
         return Response({'detail': 'Password changed successfully'})
     

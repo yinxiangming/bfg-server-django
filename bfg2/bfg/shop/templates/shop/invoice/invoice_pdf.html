@@ -472,6 +472,12 @@
             <div>{{ invoice.notes }}</div>
         </div>
         {% endif %}
+
+        {% if invoice_footer %}
+        <div class="payment-info">
+            <div>{{ invoice_footer|linebreaksbr }}</div>
+        </div>
+        {% endif %}
         
         <!-- Payment Advice Section - Simplified -->
         <div class="payment-advice-section">

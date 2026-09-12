@@ -17,12 +17,12 @@ from bfg.core.permissions import (
 )
 from bfg.finance.models import (
     Currency, PaymentGateway, PaymentMethod, Brand, FinancialCode,
-    Invoice, Payment, Refund, TaxRate, Transaction, Wallet, WithdrawalRequest,
+    Invoice, InvoiceSettings, Payment, Refund, TaxRate, Transaction, Wallet, WithdrawalRequest,
 )
 from bfg.finance.serializers import (
     CurrencySerializer, PaymentGatewaySerializer, PaymentMethodSerializer,
     BrandSerializer, FinancialCodeSerializer,
-    InvoiceListSerializer, InvoiceDetailSerializer, InvoiceCreateSerializer,
+    InvoiceListSerializer, InvoiceDetailSerializer, InvoiceCreateSerializer, InvoiceSettingsSerializer,
     PaymentSerializer, RefundSerializer, TaxRateSerializer,
     TransactionSerializer, WalletSerializer, WithdrawalRequestSerializer,
     WithdrawalRequestCreateSerializer,
@@ -52,11 +52,77 @@ def _get_min_withdrawal_amount_for_workspace(workspace):
         return None
 
 
+class InvoiceSettingsViewSet(viewsets.ModelViewSet):
+    """The workspace's invoice settings, at most one row. Reads: any staff. Writes: admin only."""
+    serializer_class = InvoiceSettingsSerializer
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
+
+    def get_queryset(self):
+        return InvoiceSettings.objects.filter(workspace=self.request.workspace)
+
+    def perform_create(self, serializer):
+        if InvoiceSettings.objects.filter(workspace=self.request.workspace).exists():
+            raise serializers.ValidationError(
+                {'detail': 'This workspace already has invoice settings; edit them instead.'}
+            )
+        serializer.save(workspace=self.request.workspace)
+
+
 class CurrencyViewSet(viewsets.ModelViewSet):
-    """Currencies are shared by every workspace: anyone signed in reads them, only a superuser changes them."""
+    """Currencies are shared by every workspace: anyone signed in reads them, only a superuser changes them.
+
+    Each workspace chooses which of them it offers: workspace admins call `enable` / `disable`,
+    and `?enabled=true` lists only the offered ones.
+    """
     serializer_class = CurrencySerializer
     permission_classes = [IsAuthenticated, ReadOnlyOrSuperuser]
     queryset = Currency.objects.filter(is_active=True)
+
+    def get_permissions(self):
+        if self.action in ('enable', 'disable'):
+            return [IsAuthenticated(), IsWorkspaceAdmin()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.action == 'list' and self.request.query_params.get('enabled') in ('1', 'true'):
+            codes = self._enabled_codes()
+            if codes is not None:
+                queryset = queryset.filter(code__in=codes)
+        return queryset
+
+    def _enabled_codes(self):
+        if not hasattr(self, '_enabled_codes_cache'):
+            from bfg.finance.currencies import enabled_currency_codes
+
+            self._enabled_codes_cache = enabled_currency_codes(getattr(self.request, 'workspace', None))
+        return self._enabled_codes_cache
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        workspace = getattr(self.request, 'workspace', None)
+        context['enabled_codes'] = self._enabled_codes()
+        context['default_code'] = get_default_currency_for_workspace(workspace) if workspace else None
+        return context
+
+    @action(detail=True, methods=['post'])
+    def enable(self, request, pk=None):
+        return self._set_enabled(True)
+
+    @action(detail=True, methods=['post'])
+    def disable(self, request, pk=None):
+        return self._set_enabled(False)
+
+    def _set_enabled(self, enabled):
+        from bfg.finance.currencies import set_currency_enabled
+
+        currency = self.get_object()
+        try:
+            set_currency_enabled(self.request.workspace, currency, enabled)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        self.__dict__.pop('_enabled_codes_cache', None)
+        return Response(self.get_serializer(currency).data)
 
     def destroy(self, request, *args, **kwargs):
         from django.db.models import ProtectedError

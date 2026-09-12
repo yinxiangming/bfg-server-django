@@ -49,7 +49,7 @@ class InvoiceService(BaseService):
         
         # Calculate dates
         issue_date = kwargs.get('issue_date', timezone.now().date())
-        due_date = kwargs.get('due_date', issue_date + timedelta(days=30))
+        due_date = kwargs.get('due_date', issue_date + timedelta(days=self._default_due_days()))
         
         # Use order's subtotal, tax, and total directly
         # Order already has correct calculation: total = subtotal + shipping_cost + tax - discount
@@ -98,47 +98,50 @@ class InvoiceService(BaseService):
         
         return invoice
     
+    def _invoice_settings(self):
+        """The workspace's active invoice settings, or None for the built-in defaults."""
+        from bfg.finance.models import InvoiceSettings
+
+        return InvoiceSettings.objects.filter(workspace=self.workspace, is_active=True).first()
+
+    def _default_due_days(self) -> int:
+        settings_obj = self._invoice_settings()
+        return settings_obj.default_due_days if settings_obj else 30
+
     def _generate_invoice_number(self) -> str:
         """
         Generate unique invoice number for workspace
-        
-        Format: INV-XXXX (e.g., INV-0001, INV-0002, INV-0003...)
-        Auto-incrementing 4-digit number.
+
+        Format: <prefix><number>, the number zero-padded to 4 digits. The prefix comes
+        from the workspace's invoice settings and defaults to "INV-" (INV-0001, INV-0002...).
         Users can manually change the number later if needed.
-        
+
         Returns:
             str: Invoice number (e.g., "INV-0001")
         """
-        # Get the latest invoice for this workspace
-        last_invoice = Invoice.objects.filter(
-            workspace=self.workspace
+        settings_obj = self._invoice_settings()
+        prefix = settings_obj.invoice_prefix if settings_obj else 'INV-'
+
+        # Continue from the latest invoice numbered with this prefix. all_objects: this
+        # also runs outside a request, where the tenant-scoped manager returns nothing.
+        last_invoice = Invoice.all_objects.filter(
+            workspace=self.workspace, invoice_number__startswith=prefix,
         ).order_by('-id').first()
-        
+
         next_number = 1
-        if last_invoice and last_invoice.invoice_number:
-            # Try to extract number from last invoice_number (e.g., "INV-0001" -> 1)
-            try:
-                # Handle both "INV-0001" and "0001" formats
-                number_part = last_invoice.invoice_number.replace('INV-', '').strip()
-                if number_part.isdigit():
-                    next_number = int(number_part) + 1
-            except (ValueError, AttributeError):
-                # If parsing fails, start from 1
-                next_number = 1
-        
-        # Format as INV-XXXX (minimum 4 digits), e.g., INV-0001, INV-0002, ..., INV-9999, INV-10000
-        invoice_number = f"INV-{str(next_number).zfill(4)}"
-        
+        if last_invoice:
+            number_part = last_invoice.invoice_number[len(prefix):].strip()
+            if number_part.isdigit():
+                next_number = int(number_part) + 1
+
+        invoice_number = f"{prefix}{str(next_number).zfill(4)}"
         # Ensure uniqueness (in case user manually changed a number)
-        while Invoice.objects.filter(
-            workspace=self.workspace,
-            invoice_number=invoice_number
-        ).exists():
+        while Invoice.all_objects.filter(workspace=self.workspace, invoice_number=invoice_number).exists():
             next_number += 1
-            invoice_number = f"INV-{str(next_number).zfill(4)}"
-        
+            invoice_number = f"{prefix}{str(next_number).zfill(4)}"
+
         return invoice_number
-    
+
     def _calculate_tax(
         self,
         amount: Decimal,

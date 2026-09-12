@@ -223,6 +223,10 @@ class Settings(models.Model):
     
     # Custom settings
     custom_settings = models.JSONField(_("Custom Settings"), default=dict, blank=True)
+
+    # Currency codes the shop offers. Empty means every active currency, which is how
+    # every workspace behaved before shops could choose. The default is always included.
+    enabled_currencies = models.JSONField(_("Enabled Currencies"), default=list, blank=True)
     
     # Timestamps
     updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
@@ -233,6 +237,15 @@ class Settings(models.Model):
     
     def __str__(self):
         return f"Settings for {self.workspace.name}"
+
+    def save(self, *args, **kwargs):
+        # A shop cannot trade in a currency it has switched off.
+        if self.enabled_currencies and self.default_currency and self.default_currency not in self.enabled_currencies:
+            self.enabled_currencies = [*self.enabled_currencies, self.default_currency]
+            update_fields = kwargs.get('update_fields')
+            if update_fields is not None and 'enabled_currencies' not in update_fields:
+                kwargs['update_fields'] = [*update_fields, 'enabled_currencies']
+        super().save(*args, **kwargs)
 
 
 class AuditLog(models.Model):

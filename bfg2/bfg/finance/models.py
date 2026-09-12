@@ -283,6 +283,30 @@ class Brand(models.Model):
         super().save(*args, **kwargs)
 
 
+class InvoiceSettings(models.Model):
+    """How a workspace numbers, dates and signs off the invoices it issues. One row per workspace."""
+
+    workspace = models.OneToOneField(
+        'common.Workspace', on_delete=models.CASCADE, related_name='invoice_settings',
+    )
+    invoice_prefix = models.CharField(_("Invoice Prefix"), max_length=20, default='INV-')
+    default_due_days = models.PositiveIntegerField(_("Default Due Days"), default=30)
+    default_footer = models.TextField(
+        _("Default Footer"), blank=True,
+        help_text=_("Printed at the bottom of every invoice, e.g. payment terms"),
+    )
+    is_active = models.BooleanField(_("Active"), default=True)
+    created_at = models.DateTimeField(_("Created At"), default=timezone.now)
+    updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("Invoice Settings")
+        verbose_name_plural = _("Invoice Settings")
+
+    def __str__(self):
+        return f"Invoice settings for workspace {self.workspace_id}"
+
+
 class FinancialCode(models.Model):
     """Financial code for categorizing invoice items."""
     workspace = models.ForeignKey('common.Workspace', on_delete=models.CASCADE, related_name='financial_codes')

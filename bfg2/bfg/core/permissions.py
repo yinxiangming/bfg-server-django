@@ -62,6 +62,22 @@ class StaffReadAdminWrite(permissions.BasePermission):
         return IsWorkspaceAdmin().has_permission(request, view)
 
 
+class ReadOnlyOrSuperuser(permissions.BasePermission):
+    """
+    Reads pass through; writes require a superuser.
+
+    For platform-wide rows that every workspace shares, such as currencies:
+    a workspace admin editing or deleting one would change it for every
+    other shop too.
+    """
+    message = "Only platform administrators can change this."
+
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return bool(request.user and request.user.is_authenticated and request.user.is_superuser)
+
+
 class IsWorkspaceStaff(permissions.BasePermission):
     """
     Any staff member of the workspace can access

@@ -4,9 +4,11 @@ Custom views for API
 """
 
 import os
+import hmac
 import logging
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -17,17 +19,44 @@ from django.utils.encoding import force_bytes, force_str
 from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
 from django.conf import settings
 from django.http import HttpResponse
+from .authentication import BearerTokenAuthentication
+from .onboarding_token import make_onboarding_token, user_for_onboarding_token
 from .serializers import (
     RegisterSerializer,
     FinalizeOnboardingSerializer,
     ForgotPasswordSerializer,
     ResetPasswordConfirmSerializer,
     VerifyEmailSerializer,
+    CustomTokenObtainPairSerializer,
 )
 from .version_info import get_server_version_payload
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+# finalize-onboarding gives this one answer to every caller who fails to prove
+# who they are, so it says nothing about which email addresses have accounts.
+ONBOARDING_PROOF_REQUIRED = (
+    'Unable to finalize onboarding. Open the latest confirmation email, '
+    'or sign in, and try again.'
+)
+
+
+def _platform_api_key_rejection(request, view_name):
+    """Return a 403 response unless the request presents PLATFORM_API_KEY, else None.
+
+    An unset key refuses every call instead of skipping the check: these
+    endpoints mint JWTs and staff memberships for whatever email they are given.
+    """
+    expected = getattr(settings, 'PLATFORM_API_KEY', '') or ''
+    presented = request.headers.get('Authorization') or ''
+    if expected and hmac.compare_digest(presented.encode(), f'Bearer {expected}'.encode()):
+        return None
+    if expected:
+        logger.warning('%s: invalid or missing Platform API Key', view_name)
+    else:
+        logger.error('%s: PLATFORM_API_KEY is not configured, refusing the call', view_name)
+    return Response({'detail': 'Invalid Platform API Key'}, status=status.HTTP_403_FORBIDDEN)
 
 
 @api_view(['GET'])
@@ -52,15 +81,9 @@ def provision_user(request):
     Headers: { "Authorization": "Bearer <PLATFORM_API_KEY>" }
     Body: { "platform_user_id", "email", "name", "role" }
     """
-    auth_header = request.headers.get("Authorization")
-    platform_key = getattr(settings, "PLATFORM_API_KEY", None)
-
-    # In local development, if PLATFORM_API_KEY is not configured, we allow the request
-    # but still verify the header matches what the platform sent if it was provided
-    if platform_key and (not auth_header or auth_header != f"Bearer {platform_key}"):
-        import logging
-        logging.getLogger(__name__).warning("Invalid or missing Platform API Key")
-        return Response({"detail": "Invalid Platform API Key"}, status=status.HTTP_403_FORBIDDEN)
+    rejection = _platform_api_key_rejection(request, 'provision_user')
+    if rejection is not None:
+        return rejection
 
     data = request.data
     platform_user_id = data.get("platform_user_id")
@@ -130,13 +153,9 @@ def provision_workspace(request):
     Headers: { "Authorization": "Bearer <PLATFORM_API_KEY>" }
     Body: { "platform_user_id", "email", "name", "workspace_name", "workspace_slug" }
     """
-    auth_header = request.headers.get("Authorization")
-    platform_key = getattr(settings, "PLATFORM_API_KEY", None)
-
-    if platform_key and (not auth_header or auth_header != f"Bearer {platform_key}"):
-        import logging
-        logging.getLogger(__name__).warning("provision_workspace: Invalid or missing Platform API Key")
-        return Response({"detail": "Invalid Platform API Key"}, status=status.HTTP_403_FORBIDDEN)
+    rejection = _platform_api_key_rejection(request, 'provision_workspace')
+    if rejection is not None:
+        return rejection
 
     data = request.data
     platform_user_id = data.get("platform_user_id")
@@ -277,14 +296,22 @@ def register(request):
 
 
 @api_view(['POST'])
+@authentication_classes([BearerTokenAuthentication])  # a JWT is the only sign-in that counts here
 @permission_classes([AllowAny])
 def finalize_onboarding(request):
     """
     Finalize deferred onboarding after email verification.
     POST /api/v1/auth/finalize-onboarding/
 
+    An email address is not proof, so the caller must show who they are: the
+    ``onboarding_token`` verify-email returned, or a Bearer token for that
+    user. Every caller who cannot gets the same 403, whether or not the
+    address has an account; ``email`` is optional and must match. An account
+    that already has a workspace gets tokens only when signed in.
+
     Body:
     {
+        "onboarding_token": "<from verify-email, unless signed in>",
         "email": "user@example.com",
         "store_name": "Acme Store",
         "admin_name": "Jane Doe"
@@ -292,15 +319,34 @@ def finalize_onboarding(request):
     """
     serializer = FinalizeOnboardingSerializer(data=request.data)
     if serializer.is_valid():
+        signed_in = request.user.is_authenticated
+        if signed_in:
+            user = request.user
+        else:
+            user = user_for_onboarding_token(serializer.validated_data.get('onboarding_token'))
+        if not serializer.may_finalize(user, signed_in):
+            return Response({'detail': ONBOARDING_PROOF_REQUIRED}, status=status.HTTP_403_FORBIDDEN)
+
+        from bfg.common.models import StaffMember
+        # all_objects: no workspace is bound on this public path, so the scoped manager is always empty.
+        if not signed_in and StaffMember.all_objects.filter(user=user).exists():
+            return Response({
+                'detail': 'This account already has a workspace. Sign in to continue.',
+                'code': 'already_onboarded',
+            }, status=status.HTTP_409_CONFLICT)
+
         try:
-            user, workspace, created = serializer.save()
+            user, workspace, created = serializer.save(user)
+        except ValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception:
             logger.exception("Failed to finalize onboarding")
             return Response({
                 'detail': 'Unable to finalize onboarding at this time.'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        refresh = RefreshToken.for_user(user)
+        # get_token embeds the workspace_id claim WorkspaceMiddleware reads, as register does.
+        refresh = CustomTokenObtainPairSerializer.get_token(user)
         response_data = {
             'user': {
                 'id': user.id,
@@ -422,14 +468,16 @@ def verify_email(request):
         
         try:
             from bfg.common.services import UserService
-            UserService.verify_email(key)
+            email_address = UserService.verify_email(key)
         except ValueError as e:
             return Response({
                 'detail': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
             
         return Response({
-            'detail': 'Email verified successfully.'
+            'detail': 'Email verified successfully.',
+            # finalize-onboarding takes this in place of an email address it cannot trust.
+            'onboarding_token': make_onboarding_token(email_address),
         }, status=status.HTTP_200_OK)
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

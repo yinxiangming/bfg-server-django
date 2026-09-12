@@ -204,11 +204,14 @@ env_upsert "$SERVER_ENV" "EMAIL_USE_TLS" "False"
 env_upsert "$SERVER_ENV" "DEFAULT_FROM_EMAIL" "noreply@example.com"
 env_upsert "$SERVER_ENV" "BFG_INSTANCE_TYPE" "workspace"
 
+# Every mode gets a key: without one the internal provisioning endpoints refuse
+# all calls. A platform server that provisions into this instance needs the same value.
+env_upsert "$SERVER_ENV" "PLATFORM_API_KEY" "$PLATFORM_API_KEY_VAL"
+
 if [[ "$MODE_LABEL" == "embedded" ]]; then
   env_upsert "$SERVER_ENV" "LOCAL_APPS" ""
   env_upsert "$SERVER_ENV" "PLATFORM_EMBEDDED" "True"
   env_upsert "$SERVER_ENV" "PLATFORM_WORKSPACE_SLUG" "admin"
-  env_upsert "$SERVER_ENV" "PLATFORM_API_KEY" "$PLATFORM_API_KEY_VAL"
 else
   env_upsert "$SERVER_ENV" "LOCAL_APPS" ""
   env_upsert "$SERVER_ENV" "PLATFORM_EMBEDDED" "False"

@@ -140,7 +140,8 @@ SaaS platform APIs (**clusters, workspaces, billing, token exchange, SSO**) are 
 | `MEDIA_PUBLIC_BASE_URL` | — | Public base URL for media files |
 | `BFG_INSTANCE_TYPE` | workspace | Instance type (workspace/platform) |
 | `WORKSPACE_API_URL` | http://localhost:8000 | Cross-instance workspace API |
-| `PLATFORM_API_KEY` | local-dev-key | Platform-to-workspace auth key |
+| `PLATFORM_API_KEY` | — | Shared secret for `/api/v1/internal/auth/*`; unset refuses every call |
+| `ONBOARDING_TOKEN_MAX_AGE` | 3600 | Seconds verify-email's onboarding token stays valid |
 
 Social-login credentials are **not** env vars. They live in
 `bfg.common.models.SocialAuthConfig` and are read per request by

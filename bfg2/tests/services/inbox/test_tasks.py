@@ -37,9 +37,8 @@ def _template(workspace, language="en", **overrides):
 
 
 def _run(workspace, customer):
-    # apply() gives the task a real request, so self.retry behaves as on a worker,
-    # except that each retry runs in-process straight away. throw=False hands back
-    # the final outcome as a result rather than raising it.
+    # apply() runs the task in-process with a real request; throw=False hands a
+    # failure back as a result rather than raising it.
     return send_notification.apply(kwargs=dict(
         workspace_id=workspace.id, customer_id=customer.id,
         template_code="order_created", context_data={},
@@ -61,18 +60,28 @@ def test_missing_template_is_logged_once_and_not_retried(workspace, customer, ca
 
 @pytest.mark.django_db
 def test_transient_failure_is_still_retried(workspace, customer, monkeypatch):
-    attempts = []
+    class RetryRequested(Exception):
+        pass
+
+    retries = []
 
     def provider_down(self, *args, **kwargs):
-        attempts.append(1)
         raise ConnectionError("provider unavailable")
 
+    def record_retry(*args, **kwargs):
+        retries.append(kwargs)
+        raise RetryRequested()
+
     monkeypatch.setattr(MessageService, "send_from_template", provider_down)
+    # Assert the retry request, not Celery's eager replay of it: the replay runs a
+    # fresh apply() under task_eager_propagates, which the project's settings decide.
+    monkeypatch.setattr(send_notification._get_current_object(), "retry", record_retry)
 
     result = _run(workspace, customer)
 
     assert result.failed()
-    assert len(attempts) == 1 + send_notification.max_retries
+    assert len(retries) == 1
+    assert isinstance(retries[0]["exc"], ConnectionError)
 
 
 @pytest.mark.django_db

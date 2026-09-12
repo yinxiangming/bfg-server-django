@@ -5,6 +5,7 @@ email address on its own proves nothing.
 """
 
 import base64
+from datetime import timedelta
 
 import pytest
 from allauth.account.models import EmailAddress, EmailConfirmationHMAC
@@ -13,9 +14,10 @@ from django.contrib.sites.models import Site
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
 
-from bfg.common.models import StaffMember, StaffRole, Workspace
+from bfg.common.models import APIKey, StaffMember, StaffRole, Workspace
 from config.onboarding_token import make_onboarding_token
 from config.serializers import CustomTokenObtainPairSerializer
+from config.views import finalize_onboarding
 
 User = get_user_model()
 
@@ -201,6 +203,21 @@ def test_a_session_or_password_is_not_a_sign_in_here(verified_newcomer):
     assert not Workspace.objects.filter(slug='fresh-store').exists()
 
 
+def test_an_api_key_is_not_a_sign_in_here(verified_newcomer, production_authentication):
+    production_authentication(finalize_onboarding.cls)
+    integration = Workspace.objects.create(name='Integration', slug='integration', is_active=True)
+    key, secret = APIKey.create_key(integration, 'integration', created_by=verified_newcomer)
+
+    res = APIClient().post(
+        FINALIZE_URL, {'store_name': 'Fresh Store'}, format='json',
+        HTTP_X_API_KEY=key.prefix, HTTP_X_API_SECRET=secret,
+    )
+
+    assert res.status_code == 403
+    assert 'access' not in res.data
+    assert not Workspace.objects.filter(slug='fresh-store').exists()
+
+
 @pytest.mark.parametrize('broken', [
     'address_unverified', 'address_missing', 'user_inactive', 'email_changed',
     'token_expired', 'token_tampered', 'body_email_differs',
@@ -231,3 +248,52 @@ def test_token_is_refused_when_the_proof_does_not_hold(verified_newcomer, shop_o
     assert res.status_code == 403
     assert 'access' not in res.data
     assert not Workspace.objects.filter(slug='fresh-store').exists()
+
+
+def _stale_authorization(kind, user):
+    if kind == 'expired':
+        token = AccessToken.for_user(user)
+        token.set_exp(lifetime=-timedelta(minutes=1))
+        return f'Bearer {token}'
+    return {'garbage': 'Bearer expired.or.garbage', 'malformed': 'Bearer'}[kind]
+
+
+@pytest.mark.parametrize('stale', ['garbage', 'expired', 'malformed'])
+def test_a_stale_bearer_is_no_sign_in_and_does_not_void_the_token(verified_newcomer, stale):
+    """A client can still hold an old access token when it sends the onboarding token."""
+    header = {'HTTP_AUTHORIZATION': _stale_authorization(stale, verified_newcomer)}
+    body = {'store_name': 'Fresh Store'}
+    anonymous = _finalize(body)
+
+    without_proof = APIClient().post(FINALIZE_URL, body, format='json', **header)
+    with_token = APIClient().post(
+        FINALIZE_URL, {**body, 'onboarding_token': _onboarding_token_for(verified_newcomer)}, format='json', **header,
+    )
+
+    assert without_proof.status_code == 403
+    assert without_proof.data == anonymous.data
+    assert with_token.status_code == 200, with_token.data
+    assert with_token.data['created'] is True
+
+
+@pytest.mark.parametrize('proof', ['onboarding_token', 'bearer'])
+@pytest.mark.parametrize('lapsed', ['membership_inactive', 'workspace_inactive'])
+def test_a_lapsed_membership_is_not_a_workspace_of_ones_own(verified_newcomer, lapsed, proof):
+    former = Workspace.objects.create(
+        name='Former Employer', slug='former-employer', is_active=lapsed != 'workspace_inactive',
+    )
+    role = StaffRole.objects.create(workspace=former, name='Admin', code='admin', is_system=True)
+    StaffMember.objects.create(
+        workspace=former, user=verified_newcomer, role=role, is_active=lapsed != 'membership_inactive',
+    )
+    body = {'store_name': 'My Own Shop'}
+
+    if proof == 'onboarding_token':
+        res = _finalize({**body, 'onboarding_token': _onboarding_token_for(verified_newcomer)})
+    else:
+        res = _finalize(body, bearer=_access_token_for(verified_newcomer))
+
+    assert res.status_code == 200, res.data
+    assert res.data['created'] is True
+    assert res.data['workspace']['slug'] == 'my-own-shop'
+    assert AccessToken(res.data['access'])['workspace_id'] == res.data['workspace']['id']

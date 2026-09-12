@@ -19,7 +19,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
 from django.conf import settings
 from django.http import HttpResponse
-from .authentication import BearerTokenAuthentication
+from .authentication import OptionalBearerTokenAuthentication
 from .onboarding_token import make_onboarding_token, user_for_onboarding_token
 from .serializers import (
     RegisterSerializer,
@@ -302,7 +302,7 @@ def register(request):
 
 
 @api_view(['POST'])
-@authentication_classes([BearerTokenAuthentication])  # a JWT is the only sign-in that counts here
+@authentication_classes([OptionalBearerTokenAuthentication])  # a JWT is the only sign-in that counts here
 @permission_classes([AllowAny])
 def finalize_onboarding(request):
     """
@@ -311,9 +311,12 @@ def finalize_onboarding(request):
 
     An email address is not proof, so the caller must show who they are: the
     ``onboarding_token`` verify-email returned, or a Bearer token for that
-    user. Every caller who cannot gets the same 403, whether or not the
-    address has an account; ``email`` is optional and must match. An account
-    that already has a workspace gets tokens only when signed in.
+    user. A Bearer token that fails to authenticate counts as no sign-in, so a
+    stale one a client still holds does not void the onboarding token sent
+    with it. Every caller who cannot prove who they are gets the same 403,
+    whether or not the address has an account; ``email`` is optional and must
+    match. An account that already has a workspace gets tokens only when
+    signed in.
 
     Body:
     {
@@ -335,7 +338,10 @@ def finalize_onboarding(request):
 
         from bfg.common.models import StaffMember
         # all_objects: no workspace is bound on this public path, so the scoped manager is always empty.
-        if not signed_in and StaffMember.all_objects.filter(user=user).exists():
+        # A removed membership, or one in a deactivated workspace, is not a workspace of the user's own.
+        if not signed_in and StaffMember.all_objects.filter(
+            user=user, is_active=True, workspace__is_active=True,
+        ).exists():
             return Response({
                 'detail': 'This account already has a workspace. Sign in to continue.',
                 'code': 'already_onboarded',

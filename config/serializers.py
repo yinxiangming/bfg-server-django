@@ -131,7 +131,10 @@ class FinalizeOnboardingSerializer(serializers.Serializer):
 
         from bfg.common.models import StaffMember
         # all_objects: no workspace is bound on this public path, so the scoped manager is always empty.
-        existing_staff = StaffMember.all_objects.filter(user=user).select_related('workspace').first()
+        # A removed membership, or one in a deactivated workspace, is not a workspace of the user's own.
+        existing_staff = StaffMember.all_objects.filter(
+            user=user, is_active=True, workspace__is_active=True,
+        ).select_related('workspace').first()
         if existing_staff:
             workspace = existing_staff.workspace
             return user, workspace, False

@@ -22,6 +22,8 @@ each one fails quietly rather than loudly:
                                   zh-hans catalogue returns nothing
   * no primary ``WorkspaceDomain`` → the hostname resolves to no tenant
   * no published ``home`` page  → the storefront renders a bare welcome message
+  * no notification templates   → order, payment and booking notifications are
+                                  skipped, so customers are told nothing
 
 Usage:
 
@@ -110,6 +112,7 @@ class Command(BaseCommand):
                 self.ensure_settings(workspace, options)
                 self.ensure_currency(workspace, options['currency'])
                 self.ensure_store(workspace, options['store_name'], options['store_code'])
+                self.ensure_notification_templates(workspace, options)
                 self.ensure_admin(workspace, options['admin_user'])
                 self.ensure_domain(workspace, options['domain'])
                 self.ensure_site(workspace, options)
@@ -235,6 +238,29 @@ class Command(BaseCommand):
             return
         store = Store.all_objects.create(workspace=workspace, name=name, code=code, is_active=True)
         self.change(f'created store {store.code} (id={store.id})')
+
+    def ensure_notification_templates(self, workspace, options):
+        """One template per notification code, in the workspace language, in-app only.
+
+        Codes the workspace already has, in any language and even switched off, are
+        left alone; see ``bfg.inbox.notification_templates``.
+        """
+        if not workspace.pk:
+            self.change('would create notification templates')
+            return
+        from bfg.inbox.notification_templates import ensure_notification_templates
+
+        result = ensure_notification_templates(
+            workspace, language=options['language'], currency=options['currency'], dry_run=self.dry_run,
+        )
+        if not result['created']:
+            self.ok('notification templates exist')
+            return
+        verb = 'would create' if self.dry_run else 'created'
+        self.change(
+            f'{verb} {len(result["created"])} notification template(s) '
+            f'(language={result["language"]}): {", ".join(result["created"])}'
+        )
 
     def ensure_admin(self, workspace, username):
         if not username:
@@ -382,6 +408,7 @@ class Command(BaseCommand):
     def audit(self, workspace, exit_on_missing=True):
         """Report every requirement, with the symptom each one causes when absent."""
         from bfg.finance.models import Currency
+        from bfg.inbox.notification_templates import missing_notification_templates
         from bfg.shop.models import Store
         from bfg.web.models import Menu, Page, Site
 
@@ -390,6 +417,7 @@ class Command(BaseCommand):
         site = Site.all_objects.filter(workspace=workspace, is_active=True).order_by('-is_default', '-id').first()
         site_language = getattr(site, 'default_language', '')
         settings_language = getattr(settings_obj, 'default_language', '')
+        missing_templates = missing_notification_templates(workspace)
 
         checks = [
             ('workspace active', workspace.is_active, 'every request 404s'),
@@ -400,6 +428,8 @@ class Command(BaseCommand):
              f'invoices and payments fall back to another currency, not {currency or "the configured one"}'),
             ('active store', Store.all_objects.filter(workspace=workspace, is_active=True).exists(),
              'default_store 404s — checkout cannot complete'),
+            ('notification templates', not missing_templates,
+             f'no notification is sent for {", ".join(missing_templates)}'),
             ('primary verified domain',
              workspace.domains.filter(kind=WorkspaceDomain.KIND_CUSTOM,
                                       verification_status=WorkspaceDomain.VERIFICATION_VERIFIED,

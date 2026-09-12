@@ -8,6 +8,8 @@ from django.core.management.base import CommandError
 from bfg.common.models import Settings, StaffMember, Workspace, WorkspaceDomain
 from bfg.common.services.workspace_service import WorkspaceService
 from bfg.finance.models import Currency
+from bfg.inbox.models import MessageTemplate
+from bfg.inbox.notification_templates import NOTIFICATION_CODES
 from bfg.shop.models import Store
 from bfg.web.models import Page, Site
 
@@ -65,6 +67,11 @@ def test_provision_creates_every_row_a_storefront_needs(db):
     assert home.status == 'published'
     assert [block['type'] for block in home.blocks] == ['hero_carousel_v1', 'section_v1']
 
+    # Without templates every order, payment and booking notification is skipped.
+    templates = MessageTemplate.objects.filter(workspace=workspace)
+    assert sorted(templates.values_list('code', flat=True)) == sorted(NOTIFICATION_CODES)
+    assert set(templates.values_list('language', flat=True)) == {'zh-hans'}
+
 
 def test_provision_is_idempotent(db):
     User.objects.create_user(username='idem-admin', password='x', is_superuser=True)
@@ -81,6 +88,26 @@ def test_provision_is_idempotent(db):
     assert Site.all_objects.filter(workspace=workspace).count() == 1
     assert Page.objects.filter(workspace=workspace, slug='home').count() == 1
     assert StaffMember.all_objects.filter(workspace=workspace).count() == 1
+    assert MessageTemplate.objects.filter(workspace=workspace).count() == len(NOTIFICATION_CODES)
+
+
+def test_provision_adds_missing_templates_and_keeps_the_workspace_own(db):
+    user = User.objects.create_user(username='tmpl-admin', password='x')
+    workspace = WorkspaceService(workspace=None, user=user).create_workspace(
+        name='Tmpl', slug='tmpl-shop', owner_user=user,
+    )
+    Settings.objects.filter(workspace=workspace).update(default_language='zh-hans', default_currency='NZD')
+    MessageTemplate.objects.create(
+        workspace=workspace, code='order_created', event='order.created', name='Own',
+        language='zh-hans', app_message_enabled=True, app_message_body='店铺自己的文案',
+    )
+
+    report = provision(slug='tmpl-shop')
+
+    templates = MessageTemplate.objects.filter(workspace=workspace)
+    assert templates.count() == len(NOTIFICATION_CODES)
+    assert templates.get(code='order_created').app_message_body == '店铺自己的文案'
+    assert f'created {len(NOTIFICATION_CODES) - 1} notification template(s) (language=zh-hans)' in report
 
 
 def test_dry_run_writes_nothing(db):
@@ -102,8 +129,10 @@ def test_check_reports_the_gaps_a_bare_workspace_has(db):
         call_command('provision_workspace', '--slug', 'bare-shop', '--check', stdout=out)
 
     report = out.getvalue()
-    # Creating a workspace leaves it with no store, no domain, no site and no home page.
+    # Creating a workspace leaves it with no store, no domain, no site, no home page
+    # and no notification templates.
     assert 'MISSING active store' in report
+    assert 'MISSING notification templates' in report
     assert 'MISSING primary verified domain' in report
     assert 'MISSING site row' in report
     assert 'MISSING published home page' in report

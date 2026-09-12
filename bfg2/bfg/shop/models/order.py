@@ -91,7 +91,9 @@ class Order(TenantScopedModel):
     )
     
     # Order Info
-    order_number = models.CharField(_("Order Number"), max_length=50, unique=True)
+    # Unique within a workspace (see Meta.constraints), not across the table:
+    # each shop numbers its own orders, so two shops may hold the same number.
+    order_number = models.CharField(_("Order Number"), max_length=50)
     
     # Status
     status = models.CharField(_("Status"), max_length=20, choices=STATUS_CHOICES, default='pending')
@@ -130,6 +132,12 @@ class Order(TenantScopedModel):
             models.Index(fields=['order_number']),
             models.Index(fields=['status']),
             models.Index(fields=['sales_channel']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['workspace', 'order_number'],
+                name='shop_order_workspace_order_number_uniq',
+            ),
         ]
         # Phase-0 PR-06: keep reverse FK / migration access unscoped.
         base_manager_name = 'all_objects'

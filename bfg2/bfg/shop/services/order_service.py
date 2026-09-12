@@ -716,7 +716,7 @@ class OrderService(BaseService):
     
     def _generate_order_number(self) -> str:
         """
-        Generate unique order number
+        Generate an order number not yet used in this workspace
         
         Returns:
             str: Order number
@@ -730,8 +730,9 @@ class OrderService(BaseService):
         
         order_number = f"ORD-{date_str}-{random_str}"
         
-        # Ensure uniqueness
-        while Order.objects.filter(order_number=order_number).exists():
+        # Unique within the workspace, as the model constraint is. Filter on
+        # self.workspace rather than rely on the thread-bound scope of Order.objects.
+        while Order.all_objects.filter(workspace=self.workspace, order_number=order_number).exists():
             random_str = ''.join(random.choices(string.digits, k=5))
             order_number = f"ORD-{date_str}-{random_str}"
         

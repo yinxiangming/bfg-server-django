@@ -1,8 +1,12 @@
+from datetime import datetime, timezone as dt_timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from django.db import IntegrityError, transaction
 
+from bfg.common.middleware import set_current_workspace
+from bfg.shop.models import Order
 from bfg.shop.services.order_service import OrderService
 
 
@@ -29,13 +33,99 @@ def test_generate_order_number_retries_until_unique(monkeypatch):
 
     exists = _Exists()
     monkeypatch.setattr(
-        "bfg.shop.services.order_service.Order.objects",
+        "bfg.shop.services.order_service.Order.all_objects",
         SimpleNamespace(filter=lambda **_kwargs: exists),
     )
 
     order_no = service._generate_order_number()
     assert order_no.startswith("ORD-")
     assert order_no.endswith("22222")
+
+
+# ---------------------------------------------------------------------------
+# Order numbers are unique per workspace
+# ---------------------------------------------------------------------------
+
+TODAY = datetime(2026, 9, 11, 12, 0, tzinfo=dt_timezone.utc)
+
+
+def _shop(slug):
+    """A workspace with what a collection order needs: customer, store, pickup point."""
+    from bfg.common.models import Customer, User, Workspace
+    from bfg.delivery.models import PickupPoint
+    from bfg.shop.models import Store
+
+    workspace = Workspace.objects.create(name=slug, slug=slug, is_active=True)
+    user = User.objects.create(username=slug, email=f"{slug}@example.com", is_active=True)
+    customer = Customer.objects.create(workspace=workspace, user=user, is_active=True)
+    store = Store.objects.create(workspace=workspace, name="Main", code="main", is_active=True)
+    # Collection, so the orders need no address.
+    PickupPoint.all_objects.create(
+        workspace=workspace, name="Counter", code="counter",
+        address_line1="1 Queen Street", city="Auckland", is_default=True,
+    )
+    return SimpleNamespace(workspace=workspace, customer=customer, store=store)
+
+
+def _order(shop, order_number):
+    return Order.all_objects.create(
+        workspace=shop.workspace, customer=shop.customer, store=shop.store,
+        order_number=order_number, fulfillment_method="pickup",
+        subtotal=Decimal("10.00"), total=Decimal("10.00"),
+    )
+
+
+def _draw(monkeypatch, *digits):
+    """Freeze the order date; random.choices hands out these digit strings first."""
+    import random
+
+    real_choices = random.choices
+    scripted = iter(digits)
+
+    def choices(*args, **kwargs):
+        drawn = next(scripted, None)
+        return list(drawn) if drawn is not None else real_choices(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "bfg.shop.services.order_service.timezone", SimpleNamespace(now=lambda: TODAY)
+    )
+    monkeypatch.setattr("random.choices", choices)
+
+
+@pytest.mark.django_db
+def test_order_number_is_unique_per_workspace():
+    shop_a, shop_b = _shop("shop-a"), _shop("shop-b")
+    _order(shop_a, "ORD-20260911-11111")
+    _order(shop_b, "ORD-20260911-11111")
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _order(shop_a, "ORD-20260911-11111")
+
+
+@pytest.mark.django_db
+def test_checkout_can_use_a_number_another_workspace_holds(monkeypatch):
+    shop_a, shop_b = _shop("shop-a"), _shop("shop-b")
+    _order(shop_a, "ORD-20260911-11111")
+    _draw(monkeypatch, "11111")
+
+    order = OrderService(workspace=shop_b.workspace, user=None).create_order(
+        shop_b.customer, shop_b.store, fulfillment_method="pickup", subtotal=Decimal("10.00"),
+    )
+
+    assert order.order_number == "ORD-20260911-11111"
+    assert order.workspace_id == shop_b.workspace.id
+
+
+@pytest.mark.django_db
+def test_generated_number_skips_one_taken_in_its_own_workspace(monkeypatch):
+    shop = _shop("shop-a")
+    _order(shop, "ORD-20260911-11111")
+    service = OrderService(workspace=shop.workspace, user=None)
+    # The check names its workspace, so it must not depend on what the thread has bound.
+    set_current_workspace(None)
+    _draw(monkeypatch, "11111", "22222")
+
+    assert service._generate_order_number() == "ORD-20260911-22222"
 
 
 # ---------------------------------------------------------------------------

@@ -258,14 +258,6 @@ def register(request):
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to auto-accept invitation during register")
 
-        # Generate JWT token for the new user.
-        # Use CustomTokenObtainPairSerializer.get_token so the access token
-        # carries the workspace_id claim required by WorkspaceMiddleware —
-        # without it, /me/ and other workspace-scoped endpoints can't resolve
-        # the user's workspace and the frontend gets bounced back to login.
-        from .serializers import CustomTokenObtainPairSerializer
-        refresh = CustomTokenObtainPairSerializer.get_token(user)
-
         response_data = {
             'user': {
                 'id': user.id,
@@ -274,9 +266,23 @@ def register(request):
                 'first_name': user.first_name,
                 'last_name': user.last_name,
             },
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
+            'email_verification_required': not user.is_active,
         }
+
+        # Generate JWT token for the new user, unless the account waits on its
+        # confirmation mail. Anyone can register any address, and tokens issued
+        # now would come alive when the address's owner confirms it, in the
+        # hands of whoever registered. Once confirmed, verify-email's onboarding
+        # token or a password sign-in gets the owner their tokens.
+        # Use CustomTokenObtainPairSerializer.get_token so the access token
+        # carries the workspace_id claim required by WorkspaceMiddleware —
+        # without it, /me/ and other workspace-scoped endpoints can't resolve
+        # the user's workspace and the frontend gets bounced back to login.
+        if user.is_active:
+            from .serializers import CustomTokenObtainPairSerializer
+            refresh = CustomTokenObtainPairSerializer.get_token(user)
+            response_data['access'] = str(refresh.access_token)
+            response_data['refresh'] = str(refresh)
 
         if workspace:
             response_data['workspace'] = {

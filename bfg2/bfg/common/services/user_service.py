@@ -364,6 +364,13 @@ class UserService:
             if not user.is_active:
                 user.is_active = True
                 user.save(update_fields=['is_active'])
+                # Whoever registered need not own the address, so refresh tokens
+                # issued while the account was inactive must not come alive with it.
+                from django.apps import apps
+                if apps.is_installed('rest_framework_simplejwt.token_blacklist'):
+                    from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+                    for token in OutstandingToken.objects.filter(user=user, blacklistedtoken__isnull=True):
+                        BlacklistedToken.objects.get_or_create(token=token)
                 
             return email_address
             

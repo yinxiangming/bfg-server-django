@@ -223,11 +223,15 @@ class InvoicePDFGenerator(PDFGenerator):
         Returns:
             bytes: PDF content
         """
+        from bfg.finance.models import InvoiceSettings
+
+        invoice_settings = InvoiceSettings.objects.filter(workspace=invoice.workspace, is_active=True).first()
         context = {
             'invoice': invoice,
             'items': invoice.items.all(),
             'workspace': invoice.workspace,
             'customer': invoice.customer,
+            'invoice_footer': invoice_settings.default_footer if invoice_settings else '',
         }
         
         # Try to use HTML template first (requires WeasyPrint)

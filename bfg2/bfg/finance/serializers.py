@@ -7,9 +7,10 @@ Serializers for finance module models
 from decimal import Decimal
 
 from rest_framework import serializers
+from bfg.common.models import Address
 from bfg.finance.models import (
     Currency, PaymentGateway, PaymentMethod, Brand, FinancialCode,
-    Invoice, InvoiceItem, Payment, Refund, TaxRate, Transaction,
+    Invoice, InvoiceItem, InvoiceSettings, Payment, Refund, TaxRate, Transaction,
     Wallet, WithdrawalRequest,
 )
 
@@ -19,8 +20,20 @@ class CurrencySerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Currency
-        fields = ['id', 'code', 'name', 'symbol', 'decimal_places', 'is_active']
+        fields = ['id', 'code', 'name', 'symbol', 'decimal_places', 'is_active', 'is_enabled', 'is_default']
         read_only_fields = ['id']
+
+    # Whether the request's workspace offers this currency, and whether it is its default.
+    # The currency view puts `enabled_codes` (None means all) and `default_code` in the context.
+    is_enabled = serializers.SerializerMethodField()
+    is_default = serializers.SerializerMethodField()
+
+    def get_is_enabled(self, obj):
+        codes = self.context.get('enabled_codes')
+        return True if codes is None else obj.code in codes
+
+    def get_is_default(self, obj):
+        return obj.code == self.context.get('default_code')
 
 
 class PaymentGatewaySerializer(serializers.ModelSerializer):
@@ -116,11 +129,16 @@ class PaymentGatewaySerializer(serializers.ModelSerializer):
 class BrandSerializer(serializers.ModelSerializer):
     """Brand serializer"""
     address = serializers.SerializerMethodField()
+    # Writable counterpart of `address`: one of the workspace's own addresses, or null.
+    address_id = serializers.PrimaryKeyRelatedField(
+        source='address', queryset=Address.all_objects.all(), write_only=True,
+        required=False, allow_null=True,
+    )
     
     class Meta:
         model = Brand
         fields = [
-            'id', 'name', 'logo', 'address', 'is_default',
+            'id', 'name', 'logo', 'address', 'address_id', 'is_default',
             'tax_id', 'registration_number', 'invoice_note',
             'created_at', 'updated_at'
         ]
@@ -132,6 +150,32 @@ class BrandSerializer(serializers.ModelSerializer):
             from bfg.common.serializers import AddressSerializer
             return AddressSerializer(obj.address).data
         return None
+
+    def validate_address_id(self, address):
+        workspace = getattr(self.context.get('request'), 'workspace', None)
+        if address is not None and address.workspace_id != getattr(workspace, 'id', None):
+            raise serializers.ValidationError("Choose one of this workspace's addresses.")
+        return address
+
+
+class InvoiceSettingsSerializer(serializers.ModelSerializer):
+    """A workspace's invoice settings"""
+
+    class Meta:
+        model = InvoiceSettings
+        fields = [
+            'id', 'invoice_prefix', 'default_due_days', 'default_footer',
+            'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_invoice_prefix(self, value):
+        return value.strip()
+
+    def validate_default_due_days(self, value):
+        if value < 1 or value > 365:
+            raise serializers.ValidationError('Use between 1 and 365 days.')
+        return value
 
 
 class FinancialCodeSerializer(serializers.ModelSerializer):

@@ -460,7 +460,10 @@ class AddressViewSet(viewsets.ModelViewSet):
                     )
                 else:
                     queryset = queryset.none()
-            # If no customer filter, staff can see all addresses
+            elif self.request.query_params.get('scope') == 'workspace':
+                # The workspace's own addresses (stores, warehouses, brands), none of its customers'
+                queryset = queryset.filter(content_type__isnull=True)
+            # Otherwise staff see every address in the workspace
         else:
             # If not staff, filter to user's own addresses (via Customer)
             from bfg.common.models import Customer

@@ -11,7 +11,10 @@ from rest_framework.permissions import IsAuthenticated
 from django.http import HttpResponse
 from django.utils import timezone
 
-from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite, CanManagePayments, CanManageInvoices
+from bfg.core.permissions import (
+    IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite, CanManagePayments, CanManageInvoices,
+    ReadOnlyOrSuperuser,
+)
 from bfg.finance.models import (
     Currency, PaymentGateway, PaymentMethod, Brand, FinancialCode,
     Invoice, Payment, Refund, TaxRate, Transaction, Wallet, WithdrawalRequest,
@@ -50,10 +53,24 @@ def _get_min_withdrawal_amount_for_workspace(workspace):
 
 
 class CurrencyViewSet(viewsets.ModelViewSet):
-    """Currency ViewSet (Read-only)"""
+    """Currencies are shared by every workspace: anyone signed in reads them, only a superuser changes them."""
     serializer_class = CurrencySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ReadOnlyOrSuperuser]
     queryset = Currency.objects.filter(is_active=True)
+
+    def destroy(self, request, *args, **kwargs):
+        from django.db.models import ProtectedError
+
+        currency = self.get_object()
+        try:
+            currency.delete()
+        except ProtectedError:
+            return Response(
+                {'detail': f'{currency.code} is still used by invoices, payments, gift cards or wallets, '
+                           f'so it cannot be deleted. Deactivate it instead.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=['get'], url_path='default-code')
     def default_code(self, request):
@@ -848,6 +865,9 @@ class TaxRateViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         return TaxRate.objects.filter(workspace=self.request.workspace)
+
+    def perform_create(self, serializer):
+        serializer.save(workspace=self.request.workspace)
 
 
 class TransactionViewSet(viewsets.ReadOnlyModelViewSet):

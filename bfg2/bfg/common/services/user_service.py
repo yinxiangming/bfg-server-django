@@ -308,6 +308,7 @@ class UserService:
         from django.contrib.auth.tokens import default_token_generator
         from django.utils.http import urlsafe_base64_decode
         from django.utils.encoding import force_str
+        from django.db import transaction
         
         User = get_user_model()
         try:
@@ -319,9 +320,32 @@ class UserService:
         if not default_token_generator.check_token(user, token):
             raise ValueError("Invalid or expired password reset link.")
             
-        user.set_password(new_password)
-        user.save()
+        with transaction.atomic():
+            user.set_password(new_password)
+            user.save()
+            # A reset is how an account is taken back, so no session from before it survives.
+            cls.revoke_refresh_tokens(user)
         return True
+
+    @classmethod
+    def revoke_refresh_tokens(cls, user) -> None:
+        """
+        Blacklist every refresh token issued to ``user`` that is not blacklisted yet.
+
+        Access tokens cannot be blacklisted and run out their lifetime. Does
+        nothing unless rest_framework_simplejwt's token_blacklist app is installed.
+        """
+        from django.apps import apps
+        if not apps.is_installed('rest_framework_simplejwt.token_blacklist'):
+            return
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
+        outstanding = OutstandingToken.objects.filter(user=user, blacklistedtoken__isnull=True)
+        # A token blacklisted meanwhile, by a refresh that rotated it say, is dead already.
+        BlacklistedToken.objects.bulk_create(
+            [BlacklistedToken(token_id=token_id) for token_id in outstanding.values_list('id', flat=True)],
+            ignore_conflicts=True,
+        )
 
     @classmethod
     def verify_email(cls, key: str):
@@ -366,11 +390,7 @@ class UserService:
                 user.save(update_fields=['is_active'])
                 # Whoever registered need not own the address, so refresh tokens
                 # issued while the account was inactive must not come alive with it.
-                from django.apps import apps
-                if apps.is_installed('rest_framework_simplejwt.token_blacklist'):
-                    from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
-                    for token in OutstandingToken.objects.filter(user=user, blacklistedtoken__isnull=True):
-                        BlacklistedToken.objects.get_or_create(token=token)
+                cls.revoke_refresh_tokens(user)
                 
             return email_address
             

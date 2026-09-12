@@ -5,6 +5,7 @@ Custom serializers for API
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.settings import api_settings as jwt_api_settings
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils.text import slugify
 from rest_framework import serializers
@@ -75,19 +76,15 @@ class RegisterSerializer(serializers.Serializer):
 
 
 class FinalizeOnboardingSerializer(serializers.Serializer):
-    """Finalize deferred onboarding after email verification."""
-    email = serializers.EmailField(required=True)
+    """Finalize deferred onboarding after email verification.
+
+    Validates the store details only. The view settles who is calling, from an
+    onboarding token or a signed-in user, and checks them with :meth:`may_finalize`.
+    """
+    onboarding_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    email = serializers.EmailField(required=False)
     store_name = serializers.CharField(required=True, allow_blank=False)
     admin_name = serializers.CharField(required=False, allow_blank=True)
-
-    def validate_email(self, value):
-        try:
-            user = User.objects.get(email=value)
-        except User.DoesNotExist:
-            raise serializers.ValidationError('No user found for this email.')
-
-        self.context['user_obj'] = user
-        return value
 
     def validate_store_name(self, value):
         cleaned = value.strip()
@@ -95,31 +92,26 @@ class FinalizeOnboardingSerializer(serializers.Serializer):
             raise serializers.ValidationError('Store name must be at least 2 characters long.')
         return cleaned
 
-    def validate(self, attrs):
-        user = self.context.get('user_obj')
-        if not user:
-            return attrs
+    def may_finalize(self, user, signed_in=False):
+        """Whether ``user`` may finish onboarding; fails closed.
 
-        if not user.is_active:
-            raise serializers.ValidationError({
-                'email': ['Email must be verified before onboarding can be completed.']
-            })
+        The account must be active and match the ``email`` in the body when one
+        is sent, and its address must be confirmed through allauth. The one
+        exception is a caller signed in as the account on a deployment that has
+        switched EMAIL_VERIFICATION_REQUIRED off.
+        """
+        from allauth.account.models import EmailAddress
 
-        try:
-            from allauth.account.models import EmailAddress
-            email_record = EmailAddress.objects.filter(user=user, email=user.email).first()
-            if email_record and not email_record.verified:
-                raise serializers.ValidationError({
-                    'email': ['Email must be verified before onboarding can be completed.']
-                })
-        except Exception:
-            # If allauth state is unavailable here, fall back to user.is_active gate above.
-            pass
+        if user is None or not user.is_active or not user.email:
+            return False
+        claimed = (self.validated_data.get('email') or '').lower()
+        if claimed and claimed != user.email.lower():
+            return False
+        if signed_in and not getattr(settings, 'EMAIL_VERIFICATION_REQUIRED', True):
+            return True
+        return EmailAddress.objects.filter(user=user, email__iexact=user.email, verified=True).exists()
 
-        return attrs
-
-    def save(self):
-        user = self.context['user_obj']
+    def save(self, user):
         store_name = self.validated_data['store_name']
         admin_name = (self.validated_data.get('admin_name') or '').strip()
 
@@ -138,7 +130,11 @@ class FinalizeOnboardingSerializer(serializers.Serializer):
                 user.save(update_fields=update_fields)
 
         from bfg.common.models import StaffMember
-        existing_staff = StaffMember.objects.filter(user=user).select_related('workspace').first()
+        # all_objects: no workspace is bound on this public path, so the scoped manager is always empty.
+        # A removed membership, or one in a deactivated workspace, is not a workspace of the user's own.
+        existing_staff = StaffMember.all_objects.filter(
+            user=user, is_active=True, workspace__is_active=True,
+        ).select_related('workspace').first()
         if existing_staff:
             workspace = existing_staff.workspace
             return user, workspace, False

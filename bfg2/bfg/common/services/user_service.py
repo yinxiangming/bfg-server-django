@@ -324,10 +324,11 @@ class UserService:
         return True
 
     @classmethod
-    def verify_email(cls, key: str) -> bool:
+    def verify_email(cls, key: str):
         """
         Verify a user's email address by key using django-allauth mechanisms.
-        Raises ValueError if key is invalid.
+        Returns the confirmed allauth ``EmailAddress``. Raises ValueError if the
+        key is invalid or expired, or the address could not be marked verified.
         """
         if not key:
             raise ValueError("Invalid verification key.")
@@ -341,10 +342,10 @@ class UserService:
             
             # 2. If not HMAC, try to find a DB-backed key (stateful)
             if not confirmation:
-                try:
-                    confirmation = EmailConfirmation.objects.get(key=key.lower())
-                except EmailConfirmation.DoesNotExist:
-                    raise ValueError("Invalid or expired verification key.")
+                # from_key skips expired keys and addresses that are already verified
+                confirmation = EmailConfirmation.from_key(key)
+            if not confirmation:
+                raise ValueError("Invalid or expired verification key.")
                     
             # Confirm it (marks EmailAddress as verified)
             from django.contrib.messages.storage.fallback import FallbackStorage
@@ -353,15 +354,25 @@ class UserService:
             dummy_request.META['SERVER_PORT'] = '80'
             setattr(dummy_request, 'session', 'session')
             setattr(dummy_request, '_messages', FallbackStorage(dummy_request))
-            confirmation.confirm(request=dummy_request)
+            email_address = confirmation.confirm(request=dummy_request)
+            if email_address is None:
+                # allauth declined to mark the address verified
+                raise ValueError("Invalid or expired verification key.")
             
             # Ensure the user account is made active
-            user = confirmation.email_address.user
+            user = email_address.user
             if not user.is_active:
                 user.is_active = True
                 user.save(update_fields=['is_active'])
+                # Whoever registered need not own the address, so refresh tokens
+                # issued while the account was inactive must not come alive with it.
+                from django.apps import apps
+                if apps.is_installed('rest_framework_simplejwt.token_blacklist'):
+                    from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+                    for token in OutstandingToken.objects.filter(user=user, blacklistedtoken__isnull=True):
+                        BlacklistedToken.objects.get_or_create(token=token)
                 
-            return True
+            return email_address
             
         except Exception as e:
             if isinstance(e, ValueError):

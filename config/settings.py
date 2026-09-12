@@ -508,6 +508,8 @@ ANYMAIL = {
 EMAIL_VERIFICATION_REQUIRED = os.environ.get('EMAIL_VERIFICATION_REQUIRED', 'true').lower() in ('1', 'true', 'yes')
 ONBOARDING_PROVISION_ON_REGISTER = os.environ.get('ONBOARDING_PROVISION_ON_REGISTER', 'true').lower() in ('1', 'true', 'yes')
 FRONTEND_EMAIL_CONFIRM_PATH = os.environ.get('FRONTEND_EMAIL_CONFIRM_PATH', '/auth/verify-email').strip() or '/auth/verify-email'
+# Seconds the onboarding token returned by verify-email is accepted by finalize-onboarding.
+ONBOARDING_TOKEN_MAX_AGE = int(os.environ.get('ONBOARDING_TOKEN_MAX_AGE', '3600'))
 
 # Frontend URL and site name (from env)
 FRONTEND_URL = os.environ.get('FRONTEND_URL', '')

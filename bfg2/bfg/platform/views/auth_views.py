@@ -16,6 +16,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.apps import apps
 
 from bfg.common.models import resolve_workspace_public_frontend_base_url
@@ -33,11 +34,13 @@ class AuthViewSet(viewsets.ViewSet):
     """
 
     def get_permissions(self):
+        # Both mint credentials, so their @action also takes JWT authentication only:
+        # an API key, a session or basic credentials must not be traded for a user JWT.
         if self.action in ('token_exchange', 'sso_start'):
             return [IsAuthenticated()]
         return [AllowAny()]
 
-    @action(detail=False, methods=['post'], url_path='token-exchange')
+    @action(detail=False, methods=['post'], url_path='token-exchange', authentication_classes=[JWTAuthentication])
     def token_exchange(self, request):
         """
         POST /api/v1/platform/auth/token-exchange/
@@ -201,7 +204,7 @@ class AuthViewSet(viewsets.ViewSet):
 
     # ── SSO Code Bridge ────────────────────────────────────────────────────
 
-    @action(detail=False, methods=['post'], url_path='sso/start')
+    @action(detail=False, methods=['post'], url_path='sso/start', authentication_classes=[JWTAuthentication])
     def sso_start(self, request):
         """
         POST /api/v1/platform/auth/sso/start/

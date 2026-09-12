@@ -1694,16 +1694,15 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
         metadata = event_data.get('metadata', {})
         workspace_id = metadata.get('workspace_id')
         
-        # Get workspace - try from metadata first, then from request
-        workspace = None
-        if workspace_id:
+        # The workspace picks the gateway, and with it the secret the signature is checked
+        # against. The body is still unverified here, so its metadata only counts when the
+        # request itself names no workspace.
+        workspace = getattr(request, 'workspace', None)
+        if not workspace and workspace_id:
             try:
                 workspace = Workspace.objects.get(id=workspace_id)
             except Workspace.DoesNotExist:
                 logger.warning(f"Webhook: Workspace {workspace_id} not found in metadata")
-        
-        if not workspace:
-            workspace = getattr(request, 'workspace', None)
         
         # Get gateway by gateway_type
         try:
@@ -1749,12 +1748,14 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
             signature_header_name = getattr(plugin, 'signature_header_name', 'X-Gateway-Signature')
             signature = request.headers.get(signature_header_name) or request.headers.get('Stripe-Signature')
             
-            if signature:
-                if not plugin.verify_webhook(request.body, signature):
-                    return Response(
-                        {'detail': 'Invalid signature'},
-                        status=status.HTTP_401_UNAUTHORIZED
-                    )
+            # The body names the payment to complete, so none of it counts until the gateway
+            # has verified the signature. A missing signature is a failed one.
+            if not signature or not plugin.verify_webhook(request.body, signature):
+                logger.warning(f"Webhook: rejected {gateway!r} callback without a valid signature")
+                return Response(
+                    {'detail': 'Invalid signature'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
             
             # Extract event type
             event_type = payload.get('type') or payload.get('event_type') or 'payment.webhook'

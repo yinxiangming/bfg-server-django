@@ -436,43 +436,7 @@ class PaymentService(BaseService):
         
         plugin = get_gateway_plugin(gateway)
         if not plugin:
-            # Fallback handling for gateways without plugin
-            if event_type == 'payment.succeeded':
-                transaction_id = payload.get('transaction_id')
-                payment = Payment.objects.filter(
-                    gateway_transaction_id=transaction_id
-                ).first()
-                
-                if payment and payment.status == 'processing':
-                    old_status = payment.status
-                    payment.status = 'completed'
-                    payment.completed_at = timezone.now()
-                    payment.save()
-                    
-                    # Update related order and mark as paid
-                    if payment.order:
-                        from bfg.shop.services.order_service import OrderService
-                        order_service = OrderService(
-                            workspace=self.workspace,
-                            user=None  # Webhook has no user
-                        )
-                        order_service.mark_as_paid(payment.order)
-                    
-                    # Create audit log for payment completion via webhook
-                    audit = AuditService(workspace=self.workspace, user=None)  # Webhook has no user
-                    description = f"Payment {payment.payment_number} completed via webhook - {payment.amount} {payment.currency.code}"
-                    if payment.order:
-                        description += f" for Order #{payment.order.order_number}"
-                    if payment.invoice:
-                        description += f" for Invoice #{payment.invoice.invoice_number}"
-                    
-                    audit.log_update(
-                        payment,
-                        changes={'status': {'old': old_status, 'new': 'completed'}},
-                        description=description,
-                    )
-                    
-                    self.emit_event('payment.completed', {'payment': payment})
+            # Without a plugin nothing can verify the webhook, so its body proves nothing.
             return
         
         # Use plugin to handle webhook
@@ -480,16 +444,18 @@ class PaymentService(BaseService):
         
         # Process common events based on plugin response
         if result.get('success'):
-            # Extract payment intent ID from result or payload
-            payment_intent_id = result.get('payment_intent_id') or payload.get('data', {}).get('object', {}).get('id')
+            # Only an id the plugin read out of the verified event counts; the raw body could
+            # name any payment.
+            payment_intent_id = result.get('payment_intent_id')
             
             import logging
             logger = logging.getLogger(__name__)
             logger.info(f"Webhook: Looking for payment with gateway_transaction_id={payment_intent_id}")
             
             if payment_intent_id:
-                # First try with workspace filter, then without (for webhook without workspace context)
+                # A signature vouches for this gateway alone, so only its payments are in reach.
                 payment = Payment.objects.filter(
+                    gateway=gateway,
                     gateway_transaction_id=payment_intent_id,
                 ).first()
                 
@@ -536,7 +502,7 @@ class PaymentService(BaseService):
                             
                             self.emit_event('payment.completed', {'payment': payment})
                     
-                    elif 'failed' in event_type.lower():
+                    elif 'failed' in event_type.lower() and payment.status in ['pending', 'processing']:
                         payment.status = 'failed'
                         payment.gateway_response = payload
                         payment.save()

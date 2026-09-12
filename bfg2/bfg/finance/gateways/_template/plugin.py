@@ -260,8 +260,8 @@ class TemplateGateway(BasePaymentGateway):
         # Example:
         # return gateway_api.verify_webhook_signature(payload, signature)
         
-        # Default: no verification
-        return True
+        # Until this is implemented, reject every webhook
+        return False
     
     def handle_webhook(
         self,

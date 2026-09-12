@@ -37,7 +37,10 @@ def activate_scheduled_prices():
 
 
 # Order notification tasks
-# These tasks handle order-related notifications via the inbox service
+# These tasks handle order-related notifications via the inbox service.
+# A worker binds no workspace to its thread, so the tenant-scoped Order.objects
+# finds nothing there: orders are looked up through all_objects, and the
+# workspace_id filter keeps each lookup inside its tenant.
 
 @shared_task(bind=True, max_retries=3)
 def send_order_created_notification(self, workspace_id: int, order_id: int):
@@ -46,7 +49,7 @@ def send_order_created_notification(self, workspace_id: int, order_id: int):
         from bfg.shop.models import Order
         from bfg.inbox.tasks import send_notification
         
-        order = Order.objects.select_related('customer', 'workspace').get(
+        order = Order.all_objects.select_related('customer', 'workspace').get(
             id=order_id,
             workspace_id=workspace_id
         )
@@ -93,7 +96,7 @@ def send_order_shipped_notification(
         from bfg.delivery.models import Consignment
         from bfg.inbox.tasks import send_notification
         
-        order = Order.objects.select_related('customer', 'workspace').get(
+        order = Order.all_objects.select_related('customer', 'workspace').get(
             id=order_id,
             workspace_id=workspace_id
         )
@@ -139,7 +142,7 @@ def send_order_delivered_notification(self, workspace_id: int, order_id: int):
         from bfg.shop.models import Order
         from bfg.inbox.tasks import send_notification
         
-        order = Order.objects.select_related('customer', 'workspace').get(
+        order = Order.all_objects.select_related('customer', 'workspace').get(
             id=order_id,
             workspace_id=workspace_id
         )
@@ -178,7 +181,7 @@ def send_order_cancelled_notification(
         from bfg.shop.models import Order
         from bfg.inbox.tasks import send_notification
         
-        order = Order.objects.select_related('customer', 'workspace').get(
+        order = Order.all_objects.select_related('customer', 'workspace').get(
             id=order_id,
             workspace_id=workspace_id
         )
@@ -217,7 +220,7 @@ def send_order_refunded_notification(
         from bfg.shop.models import Order
         from bfg.inbox.tasks import send_notification
         
-        order = Order.objects.select_related('customer', 'workspace').get(
+        order = Order.all_objects.select_related('customer', 'workspace').get(
             id=order_id,
             workspace_id=workspace_id
         )
@@ -251,7 +254,7 @@ def send_order_processing_notification(self, workspace_id: int, order_id: int):
         from bfg.shop.models import Order
         from bfg.inbox.tasks import send_notification
         
-        order = Order.objects.select_related('customer', 'workspace').get(
+        order = Order.all_objects.select_related('customer', 'workspace').get(
             id=order_id,
             workspace_id=workspace_id
         )

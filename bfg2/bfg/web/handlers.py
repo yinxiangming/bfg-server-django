@@ -5,7 +5,7 @@ Listen to booking events and trigger async notification tasks.
 """
 
 import logging
-from bfg.core.events import global_dispatcher
+from bfg.core.events import after_commit, global_dispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def on_booking_created(event_data):
         if not booking:
             return
         from bfg.web.tasks import notify_admin_new_booking
-        notify_admin_new_booking.delay(booking.id)
+        after_commit(notify_admin_new_booking.delay, booking.id)
         logger.info("Triggered admin notification for new booking %s", booking.id)
     except Exception as e:
         logger.error("Error handling booking.created event: %s", e, exc_info=True)
@@ -44,10 +44,10 @@ def on_booking_status_changed(event_data):
             notify_admin_confirmed_cancelled,
         )
         if new_status == 'confirmed':
-            notify_applicant_confirmed.delay(booking.id)
+            after_commit(notify_applicant_confirmed.delay, booking.id)
             logger.info("Triggered applicant confirmed notification for booking %s", booking.id)
         elif old_status == 'confirmed' and new_status == 'cancelled':
-            notify_admin_confirmed_cancelled.delay(booking.id)
+            after_commit(notify_admin_confirmed_cancelled.delay, booking.id)
             logger.info("Triggered admin cancelled notification for booking %s", booking.id)
     except Exception as e:
         logger.error("Error handling booking.status_changed event: %s", e, exc_info=True)

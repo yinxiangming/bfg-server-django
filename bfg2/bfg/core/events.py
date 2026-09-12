@@ -4,8 +4,13 @@ BFG Event Dispatcher
 Event dispatch system for inter-module communication
 """
 
+import logging
 from typing import Callable, Dict, List
+
+from django.db import transaction
 from django.dispatch import Signal
+
+logger = logging.getLogger(__name__)
 
 
 # Define system event signals
@@ -20,6 +25,27 @@ order_delivered = Signal()
 payment_confirmed = Signal()
 payment_failed = Signal()
 consignment_status_changed = Signal()
+
+
+def after_commit(func: Callable, *args, **kwargs) -> None:
+    """Call ``func(*args, **kwargs)`` once the current transaction has committed.
+
+    Listeners run inside the transaction their event was emitted in, and a task
+    queued from there can reach a worker before that transaction commits: the row
+    it loads is not there yet, or it still reads the state from before the
+    change. When the transaction rolls back the call never happens; outside a
+    transaction it happens straight away.
+
+    Whatever ``func`` raises is logged rather than raised. The data is committed
+    by then, and a failed call must not stop the others waiting on the same commit.
+    """
+    def call():
+        try:
+            func(*args, **kwargs)
+        except Exception:
+            logger.exception('Error calling %r after commit', func)
+
+    transaction.on_commit(call)
 
 
 class EventDispatcher:
@@ -60,6 +86,10 @@ class EventDispatcher:
     def dispatch(self, event_name: str, data: dict):
         """
         Dispatch event
+
+        Listeners run synchronously, inside whatever transaction the emitter
+        holds. A listener that queues a task, or reports the event anywhere
+        outside the database, does so through ``after_commit``.
         
         Args:
             event_name: Event name

@@ -5,7 +5,7 @@ Listens to order events and triggers async notifications.
 """
 
 import logging
-from bfg.core.events import global_dispatcher
+from bfg.core.events import after_commit, global_dispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,9 @@ def on_order_created(event_data):
         # Import here to avoid circular imports
         from bfg.shop.tasks import send_order_created_notification
         
-        # Trigger async task
-        send_order_created_notification.delay(
+        # Trigger async task once the order is committed
+        after_commit(
+            send_order_created_notification.delay,
             workspace_id=workspace.id,
             order_id=order.id
         )
@@ -64,8 +65,9 @@ def on_order_shipped(event_data):
         # Import here to avoid circular imports
         from bfg.shop.tasks import send_order_shipped_notification
         
-        # Trigger async task
-        send_order_shipped_notification.delay(
+        # Trigger async task once the status change is committed
+        after_commit(
+            send_order_shipped_notification.delay,
             workspace_id=workspace.id,
             order_id=order.id,
             consignment_id=consignment_id
@@ -96,8 +98,9 @@ def on_order_delivered(event_data):
         # Import here to avoid circular imports
         from bfg.shop.tasks import send_order_delivered_notification
         
-        # Trigger async task
-        send_order_delivered_notification.delay(
+        # Trigger async task once the status change is committed
+        after_commit(
+            send_order_delivered_notification.delay,
             workspace_id=workspace.id,
             order_id=order.id
         )
@@ -127,8 +130,9 @@ def on_order_processing(event_data):
         # Import here to avoid circular imports
         from bfg.shop.tasks import send_order_processing_notification
         
-        # Trigger async task
-        send_order_processing_notification.delay(
+        # Trigger async task once the status change is committed
+        after_commit(
+            send_order_processing_notification.delay,
             workspace_id=workspace.id,
             order_id=order.id
         )
@@ -160,8 +164,9 @@ def on_order_cancelled(event_data):
         # Import here to avoid circular imports
         from bfg.shop.tasks import send_order_cancelled_notification
         
-        # Trigger async task
-        send_order_cancelled_notification.delay(
+        # Trigger async task once the status change is committed
+        after_commit(
+            send_order_cancelled_notification.delay,
             workspace_id=workspace.id,
             order_id=order.id,
             reason=reason
@@ -194,8 +199,9 @@ def on_order_refunded(event_data):
         # Import here to avoid circular imports
         from bfg.shop.tasks import send_order_refunded_notification
         
-        # Trigger async task
-        send_order_refunded_notification.delay(
+        # Trigger async task once the status change is committed
+        after_commit(
+            send_order_refunded_notification.delay,
             workspace_id=workspace.id,
             order_id=order.id,
             refund_amount=refund_amount
@@ -362,7 +368,8 @@ def on_order_paid_analytics(event_data):
             'sales_channel': order.sales_channel.code if order.sales_channel else 'unknown',
         }
 
-        track(workspace.id, client_id, 'purchase', params, user_id=order.customer_id)
+        # Only once the payment commits: a payment that is rolled back is not revenue.
+        after_commit(track, workspace.id, client_id, 'purchase', params, user_id=order.customer_id)
     except Exception as e:
         # Analytics must never break order processing.
         logger.error(f"Error reporting order.paid to GA4: {e}", exc_info=True)

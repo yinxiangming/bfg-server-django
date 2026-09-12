@@ -5,7 +5,7 @@ Listens to payment events and triggers async notifications.
 """
 
 import logging
-from bfg.core.events import global_dispatcher
+from bfg.core.events import after_commit, global_dispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,9 @@ def on_payment_completed(event_data):
         # Import here to avoid circular imports
         from bfg.finance.tasks import send_payment_received_notification
         
-        # Trigger async task
-        send_payment_received_notification.delay(
+        # Trigger async task once the payment is committed
+        after_commit(
+            send_payment_received_notification.delay,
             workspace_id=workspace.id,
             payment_id=payment.id
         )
@@ -66,8 +67,9 @@ def on_payment_failed(event_data):
         # Import here to avoid circular imports
         from bfg.finance.tasks import send_payment_failed_notification
         
-        # Trigger async task
-        send_payment_failed_notification.delay(
+        # Trigger async task once the payment is committed
+        after_commit(
+            send_payment_failed_notification.delay,
             workspace_id=workspace.id,
             payment_id=payment.id,
             failure_reason=failure_reason

@@ -21,6 +21,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.test import TestCase
 
 from bfg.common.models import Settings, Workspace
 from bfg.core import analytics
@@ -144,9 +145,26 @@ def paid_order(workspace):
 
 
 def fire_order_paid(workspace, order):
+    """Run the handler, and the commit of the payment it waits for."""
     from bfg.shop.handlers import on_order_paid_analytics
 
-    on_order_paid_analytics({'workspace': workspace, 'data': {'order': order}})
+    with TestCase.captureOnCommitCallbacks(execute=True):
+        on_order_paid_analytics({'workspace': workspace, 'data': {'order': order}})
+
+
+def test_the_purchase_is_reported_only_once_the_payment_commits(workspace, paid_order):
+    """A payment that is rolled back is not revenue."""
+    from bfg.shop.handlers import on_order_paid_analytics
+
+    configure_ga4(workspace, 'G-TESTONLY01')
+    with patch('bfg.core.tasks.deliver_ga4_events.delay') as delay, \
+         patch.object(analytics.django_settings, 'GA4_MP_API_SECRETS',
+                      {'G-TESTONLY01': 'shh'}, create=True):
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            on_order_paid_analytics({'workspace': workspace, 'data': {'order': paid_order}})
+            delay.assert_not_called()
+
+        delay.assert_called_once()
 
 
 def test_paid_order_reports_a_purchase_with_value_and_currency(workspace, paid_order):

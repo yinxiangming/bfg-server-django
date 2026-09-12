@@ -93,6 +93,9 @@ class OnboardingService(BaseService):
         changes: List[Dict[str, str]] = []
 
         with transaction.atomic():
+            # The locale as it was before _apply_settings replaces it: notification
+            # templates seeded in it are rewritten in the new one.
+            before = self._settings()
             changes += self._apply_settings(plan)
             changes += self._apply_currency(plan)
             changes += self._apply_tax(plan)
@@ -102,6 +105,9 @@ class OnboardingService(BaseService):
             changes += self._apply_extension_settings(plan)
             changes += self._apply_site(plan)
             changes += self._apply_site_content(plan)
+            changes += self._apply_notification_templates(
+                plan, before.default_language, before.default_currency,
+            )
             self._record_state(plan)
 
         self._invalidate_caches()
@@ -217,6 +223,9 @@ class OnboardingService(BaseService):
             action = CREATE if self._menu_empty(menu) else KEEP
             changes.append(self._change(action, 'menu', f"{menu['slug']}:{menu['language']}", menu['name']))
 
+        changes += self._apply_notification_templates(
+            plan, settings_obj.default_language, settings_obj.default_currency, dry_run=True,
+        )
         return changes
 
     @staticmethod
@@ -471,6 +480,41 @@ class OnboardingService(BaseService):
             config, created_by_user=author, mode='merge',
         )
         return changes
+
+    def _apply_notification_templates(
+        self, plan: Dict[str, Any], previous_language: str, previous_currency: str, dry_run: bool = False,
+    ) -> List[Dict[str, str]]:
+        """A notification template for every code, in the language and currency picked.
+
+        Without one, the order, payment and booking notifications for that code are
+        skipped. Templates seeded in the previous locale, as platform provisioning
+        seeds them, are rewritten for the pick unless someone has changed them; see
+        ``bfg.inbox.notification_templates``. ``_diff`` runs this with ``dry_run``.
+        """
+        from bfg.inbox.notification_templates import (
+            ensure_notification_templates,
+            notification_template_name,
+            relocalise_notification_templates,
+        )
+
+        language = plan['settings']['default_language']
+        currency = plan['settings']['default_currency']
+        rewritten = relocalise_notification_templates(
+            self.workspace, previous_language, previous_currency,
+            language=language, currency=currency, dry_run=dry_run,
+        )
+        result = ensure_notification_templates(
+            self.workspace, language=language, currency=currency, dry_run=dry_run,
+        )
+
+        def change(action, code):
+            return self._change(action, 'notification_template', code, notification_template_name(code, language))
+
+        return (
+            [change(UPDATE, code) for code in rewritten]
+            + [change(CREATE, code) for code in result['created']]
+            + [change(KEEP, code) for code in result['existing'] if code not in rewritten]
+        )
 
     # ── helpers ──────────────────────────────────────────────────────────
 

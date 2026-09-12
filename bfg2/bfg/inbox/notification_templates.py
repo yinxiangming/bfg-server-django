@@ -19,9 +19,14 @@ new shop's customers are told nothing until someone writes them by hand.
 * **Never overwrites.** A code the workspace already has, in any language and
   even switched off, is the shop's decision and is left alone.
 * **The currency symbol is written into the copy** when seeding, because orders
-  carry no currency of their own; changing the workspace currency later does
-  not update these templates. Payment templates print the payment's own
+  carry no currency of their own. Payment templates print the payment's own
   currency code instead.
+
+Seeding therefore bakes in the locale the workspace has at the time. Platform
+provisioning seeds a new workspace in the settings defaults, before its setup
+wizard picks the real language and currency, so the wizard calls
+``relocalise_notification_templates`` to rewrite whatever seeding wrote that
+nobody has changed since. Changing the settings any other way rewrites nothing.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -253,6 +258,51 @@ def _available_variables(code: str, variables: List[str]) -> Dict[str, str]:
     return guide
 
 
+def _locale(workspace, language: Optional[str], currency: Optional[str]) -> Tuple[str, str]:
+    """``language`` and ``currency``, each falling back to the workspace settings."""
+    settings_obj = Settings.objects.filter(workspace=workspace).first()
+    language = (language or '').strip() or getattr(settings_obj, 'default_language', '')
+    currency = (currency or '').strip() or getattr(settings_obj, 'default_currency', '')
+    return language, currency
+
+
+def _seeded(code: str, language: str, currency: str) -> Tuple[str, Dict[str, Any]]:
+    """``(row language, every other field)`` of the template seeding writes for ``code``.
+
+    The fields seeding leaves blank are included, so a row compared against this
+    also counts as changed when someone has added an SMS or push text.
+    """
+    row_language, copy_language = _languages(language)
+    symbol = get_currency_profile(currency)['symbol']
+    event, variables = _SPECS[code]
+    name, title, body, subject, email_body = (
+        text.replace(CURRENCY, symbol) for text in _COPY[copy_language][code]
+    )
+    return row_language, {
+        'name': name,
+        'event': event,
+        'app_message_enabled': True,
+        'app_message_title': title,
+        'app_message_body': body,
+        'email_enabled': False,
+        'email_subject': subject,
+        'email_body': email_body,
+        'email_html_body': '',
+        'sms_enabled': False,
+        'sms_body': '',
+        'push_enabled': False,
+        'push_title': '',
+        'push_body': '',
+        'available_variables': _available_variables(code, variables),
+        'is_active': True,
+    }
+
+
+def notification_template_name(code: str, language: str) -> str:
+    """The name seeding gives the template for ``code`` in ``language``."""
+    return _COPY[_languages(language)[1]][code][0]
+
+
 def ensure_notification_templates(
     workspace,
     language: Optional[str] = None,
@@ -266,11 +316,8 @@ def ensure_notification_templates(
     ``existing`` codes. With ``dry_run`` nothing is written and ``created`` lists
     what would be.
     """
-    settings_obj = Settings.objects.filter(workspace=workspace).first()
-    language = (language or '').strip() or getattr(settings_obj, 'default_language', '')
-    currency = (currency or '').strip() or getattr(settings_obj, 'default_currency', '')
-    row_language, copy_language = _languages(language)
-    symbol = get_currency_profile(currency)['symbol']
+    language, currency = _locale(workspace, language, currency)
+    row_language, _ = _languages(language)
 
     existing = set(
         MessageTemplate.objects.filter(workspace=workspace, code__in=NOTIFICATION_CODES)
@@ -279,34 +326,59 @@ def ensure_notification_templates(
     created = [code for code in NOTIFICATION_CODES if code not in existing]
     if not dry_run:
         for code in created:
-            event, variables = _SPECS[code]
-            name, title, body, subject, email_body = (
-                text.replace(CURRENCY, symbol) for text in _COPY[copy_language][code]
-            )
+            _, fields = _seeded(code, language, currency)
             MessageTemplate.objects.get_or_create(
-                workspace=workspace,
-                code=code,
-                language=row_language,
-                defaults={
-                    'name': name,
-                    'event': event,
-                    'app_message_enabled': True,
-                    'app_message_title': title,
-                    'app_message_body': body,
-                    'email_enabled': False,
-                    'email_subject': subject,
-                    'email_body': email_body,
-                    'sms_enabled': False,
-                    'push_enabled': False,
-                    'available_variables': _available_variables(code, variables),
-                    'is_active': True,
-                },
+                workspace=workspace, code=code, language=row_language, defaults=fields,
             )
     return {
         'language': row_language,
         'created': created,
         'existing': [code for code in NOTIFICATION_CODES if code in existing],
     }
+
+
+def relocalise_notification_templates(
+    workspace,
+    previous_language: str,
+    previous_currency: str,
+    language: Optional[str] = None,
+    currency: Optional[str] = None,
+    dry_run: bool = False,
+) -> List[str]:
+    """Rewrite in the workspace's new language and currency the templates seeded in its old ones.
+
+    A template is rewritten only while it is still exactly what seeding wrote for
+    ``previous_language`` and ``previous_currency``. Once anyone has changed it,
+    even only to switch a channel on, it is left alone. So is a template whose
+    code already has a row in the new language.
+
+    ``language`` and ``currency`` default to the workspace settings. Returns the
+    codes rewritten, or with ``dry_run`` the codes that would be. A code whose
+    copy comes out the same, such as one without a price when only the currency
+    changes, is not rewritten.
+    """
+    language, currency = _locale(workspace, language, currency)
+    previous_row_language, _ = _languages(previous_language)
+    templates = MessageTemplate.objects.filter(workspace=workspace, code__in=NOTIFICATION_CODES)
+    taken = set(templates.values_list('code', 'language'))
+
+    rewritten = set()
+    for template in templates.filter(language=previous_row_language):
+        _, before = _seeded(template.code, previous_language, previous_currency)
+        if any(getattr(template, field) != value for field, value in before.items()):
+            continue
+        row_language, after = _seeded(template.code, language, currency)
+        if (row_language, after) == (template.language, before):
+            continue
+        if row_language != template.language and (template.code, row_language) in taken:
+            continue
+        rewritten.add(template.code)
+        if not dry_run:
+            template.language = row_language
+            for field, value in after.items():
+                setattr(template, field, value)
+            template.save()
+    return [code for code in NOTIFICATION_CODES if code in rewritten]
 
 
 def missing_notification_templates(workspace) -> List[str]:

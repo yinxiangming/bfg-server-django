@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        # Keep in step with runtime.txt.
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install system libraries
+        # mysqlclient builds from source, and weasyprint loads pango/cairo when bfg.core imports it.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config default-libmysqlclient-dev \
+            libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Compile
+        run: python -m compileall -q -f -x '(/\.venv/|/venv/|/__pycache__/)' .
+
+      - name: Django system checks
+        env:
+          ENV: test
+        run: python manage.py check
+
+      - name: Missing migrations
+        # bfg2's test settings keep migrations enabled, so a model change without its
+        # migration fails here. config.test disables migrations and would not notice.
+        working-directory: bfg2
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Test suite
+        # tests/settings.py uses in-memory SQLite, so no database service is needed.
+        working-directory: bfg2
+        run: python -m pytest tests/ -q

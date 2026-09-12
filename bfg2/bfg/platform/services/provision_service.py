@@ -29,13 +29,18 @@ def provision_workspace(self, workspace_id: int, cluster_id: str = None, initiat
     Embedded mode:
       1. Create WorkspacePlatformProfile (no cluster, no API keys, no remote UUID)
       2. Record WorkspaceOperation
-      3. Mark workspace active
+      3. Seed the default notification templates
+      4. Mark workspace active
 
     Standalone mode:
       1. Create WorkspacePlatformProfile (with cluster, API keys, remote UUID)
       2. Create PlatformMembership for the initiating user
       3. Record WorkspaceOperation
-      4. Mark workspace active
+      4. Seed the default notification templates
+      5. Mark workspace active
+
+    Runs in a worker with no workspace bound to the thread, so any lookup through
+    a tenant-scoped manager has to use ``all_objects``.
     """
     WorkspacePlatformProfile = apps.get_model("platform", "WorkspacePlatformProfile")
     WorkspaceOperation = apps.get_model("platform", "WorkspaceOperation")
@@ -88,6 +93,14 @@ def provision_workspace(self, workspace_id: int, cluster_id: str = None, initiat
                     defaults={"role": "owner"},
                 )
 
+        # Order, payment and booking notifications are each sent from a template
+        # of the workspace's own, and creating a workspace writes none. Nothing in
+        # this flow sets a language or currency, so the settings are as final here
+        # as they get; the setup wizard rewrites untouched templates for its pick.
+        from bfg.inbox.notification_templates import ensure_notification_templates
+
+        templates = ensure_notification_templates(workspace)
+
         # Mark workspace as active
         workspace.is_active = True
         workspace.save(update_fields=["is_active"])
@@ -97,7 +110,12 @@ def provision_workspace(self, workspace_id: int, cluster_id: str = None, initiat
         operation.completed_at = timezone.now()
         operation.save(update_fields=["status", "completed_at"])
 
-        return {"workspace_id": workspace_id, "status": "provisioned", "embedded": embedded}
+        return {
+            "workspace_id": workspace_id,
+            "status": "provisioned",
+            "embedded": embedded,
+            "notification_templates": templates["created"],
+        }
 
     except Exception as exc:
         # Mark operation failed if it was created

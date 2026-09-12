@@ -7,6 +7,7 @@ from bfg.inbox.notification_templates import (
     NOTIFICATION_CODES,
     ensure_notification_templates,
     missing_notification_templates,
+    relocalise_notification_templates,
 )
 from bfg.inbox.services.message_service import MessageService
 
@@ -143,3 +144,76 @@ def test_platform_rows_and_switched_off_rows_are_not_missing():
     assert 'order_created' not in missing  # inherited from the platform level
     assert 'order_shipped' not in missing  # the shop switched it off
     assert len(missing) == len(NOTIFICATION_CODES) - 2
+
+
+# What seeding writes besides the code, and so what a rewrite has to reproduce.
+SEEDED_FIELDS = ('language', 'name', 'event', 'app_message_title', 'app_message_body',
+                 'email_subject', 'email_body', 'available_variables')
+
+
+def _rows(workspace):
+    return list(
+        MessageTemplate.objects.filter(workspace=workspace).order_by('code').values_list('code', *SEEDED_FIELDS)
+    )
+
+
+@pytest.mark.django_db
+def test_relocalised_templates_match_ones_seeded_in_the_new_locale():
+    workspace = _workspace('tmpl-move')
+    ensure_notification_templates(workspace)
+    Settings.objects.filter(workspace=workspace).update(default_language='zh-hans', default_currency='NZD')
+    fresh = _workspace('tmpl-fresh', language='zh-hans', currency='NZD')
+    ensure_notification_templates(fresh)
+
+    rewritten = relocalise_notification_templates(workspace, 'en', 'USD')
+
+    assert rewritten == list(NOTIFICATION_CODES)
+    assert _rows(workspace) == _rows(fresh)
+
+
+@pytest.mark.django_db
+def test_relocalising_leaves_templates_someone_changed():
+    workspace = _workspace('tmpl-changed')
+    ensure_notification_templates(workspace)
+    templates = MessageTemplate.objects.filter(workspace=workspace)
+    templates.filter(code='order_created').update(app_message_body='Our words')
+    templates.filter(code='order_shipped').update(email_enabled=True)
+    templates.filter(code='order_delivered').update(sms_body='Delivered')
+    changed = ['order_created', 'order_shipped', 'order_delivered']
+
+    rewritten = relocalise_notification_templates(workspace, 'en', 'USD', language='zh-hans', currency='NZD')
+
+    assert rewritten == [code for code in NOTIFICATION_CODES if code not in changed]
+    assert set(templates.filter(code__in=changed).values_list('language', flat=True)) == {'en'}
+
+
+@pytest.mark.django_db
+def test_relocalising_leaves_a_code_that_already_has_the_new_language():
+    workspace = _workspace('tmpl-both')
+    ensure_notification_templates(workspace)
+    MessageTemplate.objects.create(
+        workspace=workspace, code='order_created', event='order.created', name='Own', language='zh-hans',
+        app_message_enabled=True, app_message_body='店铺自己的文案',
+    )
+
+    rewritten = relocalise_notification_templates(workspace, 'en', 'USD', language='zh-hans', currency='NZD')
+
+    assert 'order_created' not in rewritten
+    languages = MessageTemplate.objects.filter(workspace=workspace, code='order_created').values_list(
+        'language', flat=True,
+    )
+    assert sorted(languages) == ['en', 'zh-hans']
+
+
+@pytest.mark.django_db
+def test_relocalising_rewrites_only_copy_that_changes_and_a_dry_run_writes_nothing():
+    workspace = _workspace('tmpl-currency')
+    ensure_notification_templates(workspace)
+    before = _rows(workspace)
+
+    assert relocalise_notification_templates(workspace, 'en', 'USD') == []
+    # Of the English copy, only the order total and the refund carry the symbol.
+    assert relocalise_notification_templates(workspace, 'en', 'USD', currency='NZD', dry_run=True) == [
+        'order_created', 'order_refunded',
+    ]
+    assert _rows(workspace) == before

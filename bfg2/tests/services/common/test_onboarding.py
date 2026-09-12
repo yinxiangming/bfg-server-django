@@ -339,6 +339,70 @@ def test_site_language_matches_the_workspace_language(service, workspace):
     assert site.default_language == Settings.objects.get(workspace=workspace).default_language
 
 
+# ── notification templates ───────────────────────────────────────────────
+
+def _notification_templates(workspace):
+    from bfg.inbox.models import MessageTemplate
+
+    return MessageTemplate.objects.filter(workspace=workspace)
+
+
+def _template_changes(changes, action):
+    return {c['key'] for c in changes if c['kind'] == 'notification_template' and c['action'] == action}
+
+
+def test_apply_writes_notification_templates_in_the_language_it_picks(service, workspace):
+    """A notification whose code has no template is skipped: the customer hears nothing."""
+    from bfg.inbox.notification_templates import NOTIFICATION_CODES
+
+    preview = service.preview(country='CN', industry='general_retail')
+    result = service.apply(country='CN', industry='general_retail')
+
+    templates = _notification_templates(workspace)
+    assert sorted(templates.values_list('code', flat=True)) == sorted(NOTIFICATION_CODES)
+    assert set(templates.values_list('language', flat=True)) == {'zh-hans'}
+    assert '合计 ¥' in templates.get(code='order_created').app_message_body
+    assert _template_changes(preview['changes'], 'create') == set(NOTIFICATION_CODES)
+    assert _template_changes(result['changes'], 'create') == set(NOTIFICATION_CODES)
+
+
+def test_templates_seeded_before_the_pick_are_rewritten_for_it(service, workspace):
+    """Platform provisioning seeds them in the settings defaults, before anyone picks a country.
+
+    Left as they were, a Chinese shop would write to its customers in English, in dollars.
+    """
+    from bfg.inbox.notification_templates import NOTIFICATION_CODES, ensure_notification_templates
+
+    ensure_notification_templates(workspace)
+
+    preview = service.preview(country='CN', industry='general_retail')
+    result = service.apply(country='CN', industry='general_retail')
+
+    templates = _notification_templates(workspace)
+    assert templates.count() == len(NOTIFICATION_CODES)
+    assert set(templates.values_list('language', flat=True)) == {'zh-hans'}
+    assert '合计 ¥' in templates.get(code='order_created').app_message_body
+    assert _template_changes(preview['changes'], 'update') == set(NOTIFICATION_CODES)
+    assert _template_changes(result['changes'], 'update') == set(NOTIFICATION_CODES)
+
+
+def test_apply_leaves_a_template_the_shop_changed(service, workspace):
+    from bfg.inbox.notification_templates import NOTIFICATION_CODES, ensure_notification_templates
+
+    ensure_notification_templates(workspace)
+    _notification_templates(workspace).filter(code='order_shipped').update(
+        app_message_body='On its way: {{ order_number }}',
+    )
+
+    service.apply(country='CN', industry='general_retail')
+
+    templates = _notification_templates(workspace)
+    own = templates.get(code='order_shipped')
+    assert (own.language, own.app_message_body) == ('en', 'On its way: {{ order_number }}')
+    # And no Chinese copy is added beside the shop's own.
+    assert templates.count() == len(NOTIFICATION_CODES)
+
+
 # ── contributions from installed apps ────────────────────────────────────
 
 @pytest.fixture

@@ -238,15 +238,29 @@ def register(request):
                     ),
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-        user = serializer.save()
-
-        store_name = getattr(user, '_temporary_store_name', None)
+        from django.db import transaction
+        from bfg.common.exceptions import VerificationEmailNotSent
         from bfg.common.services import UserService
-        # Don't auto-provision a fresh workspace if the user is joining one via invite.
-        if pending_invitation:
-            workspace, workspace_error = None, None
-        else:
-            workspace, workspace_error = UserService.process_registration(user, store_name)
+
+        try:
+            # One transaction, so a sign-up whose confirmation mail fails keeps nothing: the
+            # account could never be activated, and its address could not sign up again.
+            with transaction.atomic():
+                user = serializer.save()
+
+                store_name = getattr(user, '_temporary_store_name', None)
+                # Don't auto-provision a fresh workspace if the user is joining one via invite.
+                if pending_invitation:
+                    workspace, workspace_error = None, None
+                else:
+                    workspace, workspace_error = UserService.process_registration(
+                        user, store_name, request=request._request,
+                    )
+        except VerificationEmailNotSent:
+            logger.exception("Sign-up rolled back: the confirmation email could not be sent")
+            return Response({
+                'detail': 'We could not send your confirmation email. Please try again in a few minutes.',
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         accepted_invitation = None
         if pending_invitation:

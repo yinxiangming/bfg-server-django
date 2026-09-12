@@ -100,10 +100,15 @@ class UserService:
         return user, created
 
     @classmethod
-    def process_registration(cls, user, store_name: str = None) -> Tuple[object, str]:
+    def process_registration(cls, user, store_name: str = None, request=None) -> Tuple[object, str]:
         """
         Post-registration logic to auto-provision workspace if needed
         and trigger email verification.
+
+        ``request`` is the sign-up request: the confirmation link points back at
+        the frontend it came from. If the confirmation mail cannot be sent this
+        raises ``VerificationEmailNotSent``, because the account stays inactive
+        until its address is confirmed and could never be used.
 
         Branching:
           - BFG_INSTANCE_TYPE=platform: dual-write (Platform DB + Workspace Server API)
@@ -121,29 +126,7 @@ class UserService:
         if email_verification_required:
             user.is_active = False
             user.save(update_fields=['is_active'])
-            try:
-                from django.http import HttpRequest
-                dummy_request = HttpRequest()
-                dummy_request.META['SERVER_NAME'] = 'localhost'
-                dummy_request.META['SERVER_PORT'] = '80'
-                try:
-                    from allauth.account.utils import send_email_confirmation
-                    send_email_confirmation(request=dummy_request, user=user, signup=True)
-                except ImportError:
-                    # allauth >= 0.60
-                    from allauth.account.models import EmailAddress
-                    try:
-                        # EmailAddress needs to exist to send confirmation
-                        email_address, _ = EmailAddress.objects.get_or_create(
-                            user=user,
-                            email=user.email,
-                            defaults={'primary': True, 'verified': False}
-                        )
-                        email_address.send_confirmation(dummy_request, signup=True)
-                    except Exception as email_err:
-                        logger.error(f"Failed to send confirmation via EmailAddress: {email_err}")
-            except Exception as e:
-                logger.error(f"Failed to send verification email for {user.email}: {e}")
+            cls.send_verification_email(user, request)
 
         if store_name and provision_on_register:
             instance_type = getattr(settings, 'BFG_INSTANCE_TYPE', 'workspace')
@@ -154,6 +137,29 @@ class UserService:
                 workspace, workspace_error = cls._provision_workspace_local(user, store_name)
 
         return workspace, workspace_error
+
+    @classmethod
+    def send_verification_email(cls, user, request=None) -> None:
+        """
+        Mail ``user`` the link that confirms their address.
+
+        Raises ``VerificationEmailNotSent``, with the underlying error as its
+        cause, when the mail cannot be built or sent.
+        """
+        from allauth.account.models import EmailAddress
+        from bfg.common.exceptions import VerificationEmailNotSent
+
+        email_address, _ = EmailAddress.objects.get_or_create(
+            user=user,
+            email=user.email,
+            defaults={'primary': True, 'verified': False}
+        )
+        try:
+            email_address.send_confirmation(request, signup=True)
+        except Exception as exc:
+            raise VerificationEmailNotSent(
+                f"Could not send the confirmation email to {user.email}: {exc}"
+            ) from exc
 
     @classmethod
     def _provision_workspace_remote(cls, user, store_name: str) -> Tuple[object, str]:

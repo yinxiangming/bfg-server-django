@@ -163,6 +163,9 @@ USE_TZ = True
 # User model
 AUTH_USER_MODEL = 'common.User'
 
+# As in config/settings.py: account emails link to the frontend, not to allauth's own views.
+ACCOUNT_ADAPTER = 'config.account_adapter.AccountAdapter'
+
 # Celery: Run tasks synchronously in tests (EAGER mode)
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True

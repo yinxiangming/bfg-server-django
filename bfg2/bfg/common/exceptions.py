@@ -17,3 +17,9 @@ class CustomerNotFound(BFGException):
     """Customer not found"""
     default_message = "Customer not found"
     default_code = "customer_not_found"
+
+
+class VerificationEmailNotSent(BFGException):
+    """The mail that confirms an address could not be sent"""
+    default_message = "The confirmation email could not be sent"
+    default_code = "verification_email_not_sent"

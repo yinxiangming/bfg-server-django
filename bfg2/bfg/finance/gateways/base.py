@@ -261,8 +261,9 @@ class BasePaymentGateway(ABC):
         Returns:
             bool: True if signature is valid
         """
-        # Default: no verification
-        return True
+        # Default: reject. A gateway that takes webhooks must verify them itself, since an
+        # unverified body says whatever its sender wants.
+        return False
     
     @abstractmethod
     def handle_webhook(

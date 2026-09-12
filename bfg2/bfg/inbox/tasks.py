@@ -9,6 +9,8 @@ from celery import shared_task
 from django.utils import timezone
 import logging
 
+from bfg.inbox.exceptions import TemplateNotFound
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,6 +27,10 @@ def send_notification(
     Send notification via multiple channels (Email, SMS, Push) asynchronously.
     Generic notification sending task that can be used by any module.
     Respects customer preferences and template settings.
+
+    Only failures that can clear on their own (database, broker, a provider
+    outage) are retried. A missing template is configuration: it is logged once
+    and the task stops, because no retry can create it.
     
     Args:
         workspace_id: Workspace ID
@@ -35,7 +41,7 @@ def send_notification(
     """
     try:
         from bfg.common.models import Workspace, Customer
-        from bfg.inbox.services.message_service import MessageService
+        from bfg.inbox.services.message_service import MessageService, recipient_language
         
         # Get workspace and customer
         workspace = Workspace.objects.get(id=workspace_id)
@@ -92,20 +98,17 @@ def send_notification(
             recipients=[customer],
             template_code=template_code,
             context_data=context_data,
-            language=getattr(customer, 'language', None) or 'en',
+            # The recipient's own language; the service falls back to the
+            # workspace default, then English.
+            language=recipient_language(customer),
         )
         
-        # SMS and Push are handled by MessageService.send_from_template
-        # which respects template settings and customer preferences
-        # The message.send_sms and message.send_push flags indicate
-        # whether those channels were enabled
-        
-        logger.info(
-            f"Successfully sent {template_code} notification to customer {customer_id} "
-            f"(email={message.send_email}, sms={message.send_sms}, push={message.send_push}) "
-            f"for workspace {workspace_id}"
+    except TemplateNotFound as exc:
+        logger.warning(
+            f"Not sending {template_code} notification to customer {customer_id} "
+            f"in workspace {workspace_id}: {exc}"
         )
-        
+        return
     except Exception as exc:
         logger.error(
             f"Failed to send {template_code} notification to customer {customer_id}: {exc}",
@@ -113,6 +116,18 @@ def send_notification(
         )
         # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+    # Outside the try: the notification has gone out, and a retry from here would
+    # send it again. Email/SMS/push-only templates create no in-app message, so
+    # there are no channel flags to report.
+    channels = (
+        f"email={message.send_email}, sms={message.send_sms}, push={message.send_push}"
+        if message is not None else "no in-app message"
+    )
+    logger.info(
+        f"Successfully sent {template_code} notification to customer {customer_id} "
+        f"({channels}) for workspace {workspace_id}"
+    )
 
 
 # Generic notification sending task

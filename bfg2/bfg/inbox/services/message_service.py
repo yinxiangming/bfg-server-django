@@ -10,8 +10,9 @@ from django.db import transaction
 from django.utils import timezone
 from django.template import Template, Context
 from bfg.core.services import BaseService
+from bfg.inbox.exceptions import TemplateNotFound
 from bfg.inbox.models import Message, MessageRecipient, MessageTemplate, SMSMessage
-from bfg.common.models import Customer
+from bfg.common.models import Customer, Settings
 from typing import Optional
 
 
@@ -25,6 +26,12 @@ def _recipient_preferences(recipient: Customer) -> Any:
     if hasattr(recipient, 'user') and hasattr(recipient.user, 'preferences'):
         return recipient.user.preferences
     return None
+
+
+def recipient_language(recipient: Customer) -> Optional[str]:
+    """The language a recipient reads, from their user account; None when unset."""
+    user = getattr(recipient, 'user', None)
+    return (getattr(user, 'language', None) or '').strip() or None
 
 
 class ChannelSender:
@@ -234,13 +241,62 @@ class MessageService(BaseService):
                 logger = logging.getLogger(__name__)
                 logger.exception("Failed to send direct inbox email to customer %s", recipient.id)
     
+    def get_template(
+        self,
+        template_code: str,
+        language: Optional[str] = None,
+    ) -> Optional[MessageTemplate]:
+        """
+        The active template to send for ``template_code``, or None.
+
+        Languages are tried in order: ``language`` (normally the recipient's),
+        the workspace's default language, then English.
+
+        A workspace with any template for the code owns that notification: only
+        its own active templates are candidates, so switching them off turns the
+        notification off for that shop rather than handing it to the platform
+        copy. A workspace with no template for the code at all inherits the
+        platform-level ones (``workspace=None``).
+        """
+        templates = list(
+            MessageTemplate.objects.filter(workspace=self.workspace, code=template_code).order_by('pk')
+        )
+        if not templates:
+            templates = list(
+                MessageTemplate.objects.filter(workspace__isnull=True, code=template_code).order_by('pk')
+            )
+
+        # Oldest row per language wins: a NULL workspace escapes unique_together,
+        # so the platform level can hold duplicates.
+        active = {}
+        for template in templates:
+            if template.is_active:
+                active.setdefault(template.language.strip().lower(), template)
+        for candidate in self._template_languages(language):
+            if candidate in active:
+                return active[candidate]
+        return None
+
+    def _template_languages(self, language: Optional[str]) -> List[str]:
+        """``language``, the workspace default, then English: normalised, without repeats."""
+        workspace_language = Settings.objects.filter(
+            workspace=self.workspace
+        ).values_list('default_language', flat=True).first()
+
+        languages = []
+        for code in (language, workspace_language, 'en'):
+            code = (code or '').strip().lower()
+            if code and code not in languages:
+                languages.append(code)
+        return languages
+
     @transaction.atomic
     def send_from_template(
         self,
         recipients: List[Customer],
         template_code: str,
         context_data: Dict[str, Any],
-        language: str = 'en',
+        language: Optional[str] = None,
         force_email: Optional[bool] = None,
         force_sms: Optional[bool] = None,
         force_push: Optional[bool] = None
@@ -257,7 +313,8 @@ class MessageService(BaseService):
             recipients: List of Customer instances
             template_code: Template code
             context_data: Template context variables
-            language: Language code
+            language: Preferred language, normally the recipient's; falls back
+                to the workspace default, then English (see ``get_template``)
             force_email: Override email channel on/off (None = use template flag)
             force_sms: Override SMS channel on/off (None = use template flag)
             force_push: Override push channel on/off (None = use template flag)
@@ -265,24 +322,27 @@ class MessageService(BaseService):
         Returns:
             The created in-app Message, or None when the template only targets
             email/SMS/push (no in-app message).
+
+        Raises:
+            TemplateNotFound: neither the workspace nor the platform has an
+                active template for ``template_code``.
         """
-        # Get template
-        template = MessageTemplate.objects.filter(
-            workspace=self.workspace,
-            code=template_code,
-            language=language,
-            is_active=True
-        ).first()
+        template = self.get_template(template_code, language)
         
         if not template:
-            from bfg.core.exceptions import ValidationError
-            raise ValidationError(f"Template '{template_code}' not found")
+            raise TemplateNotFound(
+                f"Template '{template_code}' not found "
+                f"(workspace {getattr(self.workspace, 'pk', None)}, "
+                f"languages tried: {', '.join(self._template_languages(language))})"
+            )
         
         # Log template status for debugging
         import logging
         logger = logging.getLogger(__name__)
         logger.debug(
-            f"Template '{template_code}' found: app_message_enabled={template.app_message_enabled}, "
+            f"Template '{template_code}' found: language={template.language}, "
+            f"platform={template.workspace_id is None}, "
+            f"app_message_enabled={template.app_message_enabled}, "
             f"email_enabled={template.email_enabled}, is_active={template.is_active}"
         )
         

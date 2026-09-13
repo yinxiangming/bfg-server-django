@@ -1,13 +1,14 @@
-# -*- coding: utf-8 -*-
 """
 Who may write through ``/api/v1/platform/workspaces/``.
 
 The endpoint sits on a public path, so no workspace is bound to the request, and
 the viewset's queryset is every workspace the caller is staff of, whatever the
-role. Two writes need more than that:
+role, or owns. Only the owner may update a workspace, and two writes need more
+than that:
 
 * a custom domain decides which workspace a storefront hostname is served by, and
-  hostnames are unique across the install, so neither create nor update takes one;
+  hostnames are unique across the install, so neither create nor update takes one,
+  not even from the owner;
 * suspending or resuming takes a workspace offline, or back, for everyone in it,
   so only platform admins may do either.
 """
@@ -19,6 +20,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 from bfg.common.models import StaffMember, StaffRole, Workspace, WorkspaceDomain
+from bfg.platform.services.ownership import assign_workspace_owner
 
 User = get_user_model()
 pytestmark = pytest.mark.django_db
@@ -71,6 +73,12 @@ def staff_client(workspace, role_code, username):
     return client_for(user)
 
 
+def owner_client(workspace, username):
+    user = User.objects.create_user(username=username, password='x')
+    assign_workspace_owner(workspace, user)
+    return client_for(user)
+
+
 def assert_hostname_still_belongs_to(workspace):
     domain = WorkspaceDomain.objects.get(hostname=OTHER_HOST)
     assert domain.workspace_id == workspace.id
@@ -79,9 +87,10 @@ def assert_hostname_still_belongs_to(workspace):
 
 
 class TestCustomDomainIsNotWritable:
-    @pytest.mark.parametrize('role_code', ['customer_service', 'admin'])
-    def test_update_refuses_another_workspaces_hostname(self, own_shop, other_shop, role_code):
-        client = staff_client(own_shop, role_code, f'{role_code}-user')
+    # Updates are the owner's alone, so it is the owner's request the domain rule has
+    # to refuse; anyone else is turned away before the body is looked at.
+    def test_update_refuses_another_workspaces_hostname(self, own_shop, other_shop):
+        client = owner_client(own_shop, 'owner-user')
 
         response = client.patch(
             f'/api/v1/platform/workspaces/{own_shop.id}/', {'domain': OTHER_HOST}, format='json',
@@ -93,7 +102,7 @@ class TestCustomDomainIsNotWritable:
         assert not own_shop.domains.filter(kind=WorkspaceDomain.KIND_CUSTOM).exists()
 
     def test_update_refuses_an_unclaimed_hostname_too(self, own_shop):
-        client = staff_client(own_shop, 'admin', 'admin-user')
+        client = owner_client(own_shop, 'owner-user')
 
         response = client.patch(
             f'/api/v1/platform/workspaces/{own_shop.id}/', {'domain': 'fresh.own.test'}, format='json',
@@ -103,7 +112,7 @@ class TestCustomDomainIsNotWritable:
         assert not WorkspaceDomain.objects.filter(hostname='fresh.own.test').exists()
 
     def test_update_still_saves_the_other_fields(self, own_shop):
-        client = staff_client(own_shop, 'admin', 'renamer')
+        client = owner_client(own_shop, 'renamer')
 
         response = client.patch(f'/api/v1/platform/workspaces/{own_shop.id}/', {'name': 'Renamed'}, format='json')
 
@@ -158,7 +167,8 @@ class TestSuspendAndResumeArePlatformAdminOnly:
     def test_a_platform_admin_can_suspend_and_resume(self, own_shop, platform_workspace):
         operator = User.objects.create_user(username='platform-operator', password='x')
         join(platform_workspace, operator, 'admin')
-        # The viewset still only reaches workspaces the caller is staff of.
+        # Being a platform admin does not widen the viewset's queryset: the operator
+        # still reaches a workspace only as its staff or its owner.
         join(own_shop, operator, 'staff')
         client = client_for(operator)
 

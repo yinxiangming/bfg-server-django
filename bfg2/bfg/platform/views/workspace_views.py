@@ -8,7 +8,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.apps import apps
+from django.db.models import Q
 
+from bfg.platform.services.ownership import owned_workspace_ids
 from bfg.platform.services.workspace_service import get_user_workspaces, is_platform_admin
 from bfg.platform.services.provision_service import provision_workspace, suspend_workspace, resume_workspace
 from bfg.platform.services.subscription_service import SubscriptionService
@@ -27,17 +29,17 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     """
     Workspace management for Platform.
 
-    list:   GET  /api/v1/platform/workspaces/          — user's workspaces
+    list:   GET  /api/v1/platform/workspaces/          — workspaces the user is staff of or owns
     create: POST /api/v1/platform/workspaces/          — create new workspace
     retrieve: GET /api/v1/platform/workspaces/{id}/
-    update: PATCH /api/v1/platform/workspaces/{id}/        — never binds a custom domain
+    update: PATCH /api/v1/platform/workspaces/{id}/    — owner only: name, email, phone; never a custom domain
 
     @actions:
       POST /api/v1/platform/workspaces/{id}/suspend/   — platform admins only
       POST /api/v1/platform/workspaces/{id}/resume/    — platform admins only
       GET  /api/v1/platform/workspaces/{id}/subscription/
       POST /api/v1/platform/workspaces/{id}/checkout/
-      GET  /api/v1/platform/me/                        — my workspaces + platform admin flag
+      GET  /api/v1/platform/workspaces/me/             — my workspaces + platform admin flag
     """
     permission_classes = [IsAuthenticated]
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
@@ -49,20 +51,33 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             return WorkspaceDetailSerializer
         return WorkspaceListSerializer
 
+    def get_permissions(self):
+        # The queryset lets every staff role reach a workspace, but renaming it
+        # or changing its contact details is for its owner.
+        if self.action in ('update', 'partial_update'):
+            return [IsAuthenticated(), IsWorkspaceOwner()]
+        return super().get_permissions()
+
     def get_queryset(self):
         StaffMember = apps.get_model('common', 'StaffMember')
         Workspace = apps.get_model('common', 'Workspace')
+        user = self.request.user
         # Cross-workspace lookup — must use ``all_objects`` so the platform
         # endpoint sees every workspace the user belongs to, not just the
         # one bound to the current request.
         workspace_ids = StaffMember.all_objects.filter(
-            user=self.request.user, is_active=True,
+            user=user, is_active=True,
         ).values_list('workspace_id', flat=True)
+        # An owner reaches their workspace without being staff of it, and
+        # while it is suspended or inactive.
+        owned_ids = owned_workspace_ids(user)
         # Newest first so freshly-provisioned workspaces appear on page 1
         # without the caller having to paginate or sort. The Workspace
         # model defaults to ordering by ``name`` (alphabetical) which is
         # surprising on a "my workspaces" view.
-        return Workspace.objects.filter(id__in=workspace_ids).order_by('-created_at')
+        return Workspace.objects.filter(
+            Q(id__in=workspace_ids) | Q(id__in=owned_ids),
+        ).order_by('-created_at')
 
     def perform_create(self, serializer):
         workspace = serializer.save()

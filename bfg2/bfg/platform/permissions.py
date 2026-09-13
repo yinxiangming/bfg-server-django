@@ -5,32 +5,28 @@ Platform-specific permissions.
 Supports embedded and standalone modes via is_embedded_mode().
 """
 from rest_framework.permissions import BasePermission
-from django.apps import apps
-
-
-class IsWorkspaceStaff(BasePermission):
-    """Allow access only if user is a StaffMember of the requested workspace."""
-
-    def has_object_permission(self, request, view, obj):
-        workspace = getattr(obj, "workspace", obj)
-        StaffMember = apps.get_model("common", "StaffMember")
-        return StaffMember.objects.filter(
-            user=request.user, workspace=workspace, is_active=True
-        ).exists()
 
 
 class IsWorkspaceOwner(BasePermission):
-    """Allow access only if user is the owner (first admin) of the workspace."""
+    """Allow access only to the owner of the workspace.
+
+    Ownership is an active owner ``PlatformMembership`` (see
+    ``bfg.platform.services.ownership``), not a staff role: a workspace admin is
+    not thereby its owner, and the owner need not be staff of the workspace.
+    """
+
+    # DRF sends a dict message as the response body, which is how the code
+    # reaches the client next to the detail.
+    message = {
+        "detail": "Only the workspace owner can perform this action.",
+        "code": "workspace_owner_required",
+    }
 
     def has_object_permission(self, request, view, obj):
+        from bfg.platform.services.ownership import is_workspace_owner
+
         workspace = getattr(obj, "workspace", obj)
-        StaffMember = apps.get_model("common", "StaffMember")
-        return StaffMember.objects.filter(
-            user=request.user,
-            workspace=workspace,
-            is_active=True,
-            role__code__in=["owner", "admin"],
-        ).exists()
+        return is_workspace_owner(request.user, workspace)
 
 
 class IsPlatformAdmin(BasePermission):

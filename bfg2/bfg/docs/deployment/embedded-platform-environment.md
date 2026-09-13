@@ -28,7 +28,7 @@ If `PLATFORM_WORKSPACE_SLUG` is empty, embedded mode is **off**.
 
 ## Behaviour: `GET /api/v1/platform/workspaces/me/`
 
-- **Embedded (`PLATFORM_EMBEDDED` true):** workspaces are derived from **`StaffMember`** rows for the authenticated user.
+- **Embedded (`PLATFORM_EMBEDDED` true):** workspaces are derived from the authenticated user's active **`StaffMember`** rows, plus the workspaces they own (an active owner **`PlatformMembership`**), suspended or not.
 - **Standalone (embedded off):** workspaces come from **`PlatformMembership`**. Users who only have **`StaffMember`** (typical single-DB Nexus tenants) then see **`workspaces: []`**, which breaks hub login flows that rely on listing tenants and calling `sso/start`.
 
 ## Operations example (Dokku)

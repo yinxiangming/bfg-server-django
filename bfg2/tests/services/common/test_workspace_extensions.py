@@ -12,11 +12,17 @@ from io import StringIO
 import pytest
 from django.conf import settings as django_settings
 from django.core.cache import cache
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import CommandError, call_command
-from rest_framework.test import APIClient
+from rest_framework.authentication import BaseAuthentication
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.test import APIClient, APIRequestFactory
+from rest_framework.views import APIView
 
+from bfg.common.extensions import permissions as extension_permissions
 from bfg.common.extensions import registry, services
+from bfg.common.extensions.permissions import RequiresExtension
 from bfg.common.extensions.manifest import (
     SCOPE_PLATFORM,
     SCOPE_TOOLING,
@@ -591,3 +597,107 @@ def test_the_command_changes_nothing_when_a_name_is_wrong(workspace):
     assert error == 'sign_in is always available and cannot be switched on or off.'
 
     assert not WorkspaceExtension.all_objects.filter(workspace=workspace).exists()
+
+
+# ── Gating ───────────────────────────────────────────────────────────
+
+
+class ReviewsView(APIView):
+    permission_classes = [RequiresExtension]
+    required_extension = 'reviews'
+
+    def get(self, request):
+        return Response({'ok': True})
+
+
+class SignInView(ReviewsView):
+    required_extension = 'sign_in'
+
+
+class UnnamedView(APIView):
+    permission_classes = [RequiresExtension]
+
+    def get(self, request):
+        return Response({'ok': True})
+
+
+def _get(view_class, workspace=None):
+    request = APIRequestFactory().get('/gated/')
+    request.workspace = workspace
+    return view_class.as_view()(request)
+
+
+def test_a_view_of_a_switched_off_extension_says_so(workspace):
+    response = _get(ReviewsView, workspace)
+
+    assert response.status_code == 403
+    assert response.data == {'code': 'extension_disabled', 'detail': 'reviews is not enabled for this workspace.'}
+
+
+def test_a_view_of_an_active_extension_answers(workspace):
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+
+    assert _get(ReviewsView, workspace).status_code == 200
+
+
+def test_an_extension_that_is_always_available_needs_no_workspace(db):
+    assert _get(SignInView).status_code == 200
+
+
+def test_the_extension_can_come_from_the_views_app(workspace, monkeypatch):
+    monkeypatch.setattr(
+        extension_permissions.apps,
+        'get_containing_app_config',
+        lambda module: types.SimpleNamespace(label='reviews_app'),
+    )
+
+    assert _get(UnnamedView, workspace).data['code'] == 'extension_disabled'
+
+
+def test_a_view_whose_app_ships_no_manifest_must_name_its_extension(workspace):
+    with pytest.raises(ImproperlyConfigured):
+        _get(UnnamedView, workspace)
+
+
+def test_the_workspace_bound_while_authenticating_an_api_key_is_checked(workspace):
+    class KeyAuthentication(BaseAuthentication):
+        def authenticate(self, request):
+            request._request.workspace = workspace
+            return (User(username='api-key'), None)
+
+    class KeyView(ReviewsView):
+        authentication_classes = [KeyAuthentication]
+        permission_classes = [IsAuthenticated, RequiresExtension]
+
+    assert KeyView.as_view()(APIRequestFactory().get('/gated/')).data['code'] == 'extension_disabled'
+
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    services.invalidate(workspace.id)
+    assert KeyView.as_view()(APIRequestFactory().get('/gated/')).status_code == 200
+
+
+def test_an_anonymous_caller_is_asked_to_sign_in_before_hearing_about_the_extension(workspace):
+    class SignedInView(ReviewsView):
+        permission_classes = [IsAuthenticated, RequiresExtension]
+
+    response = _get(SignedInView, workspace)
+
+    assert response.status_code in (401, 403)
+    assert 'code' not in response.data
+
+
+def test_lists_can_keep_only_the_rows_of_workspaces_using_an_extension(workspace):
+    paused = Workspace.objects.create(name='Paused', slug='paused-ws', is_active=True)
+    other = Workspace.objects.create(name='Other', slug='other-ws', is_active=True)
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    WorkspaceExtension.all_objects.create(workspace=paused, key='reviews', status=WorkspaceExtension.STATUS_PAUSED)
+    WorkspaceExtension.all_objects.create(workspace=other, key='maps', status=WorkspaceExtension.STATUS_ACTIVE)
+
+    assert list(Workspace.objects.filter(services.where_available('reviews', workspace_field=None))) == [workspace]
+    rows = WorkspaceExtension.all_objects.filter(services.where_available('reviews'))
+    assert sorted(rows.values_list('workspace__slug', 'key')) == [('extensions-ws', 'reviews')]
+    assert (
+        Workspace.objects.filter(services.where_available('sign_in', workspace_field=None)).count()
+        == Workspace.objects.count()
+    )
+    assert not Workspace.objects.filter(services.where_available('not_deployed', workspace_field=None)).exists()

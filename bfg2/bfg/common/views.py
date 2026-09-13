@@ -2256,16 +2256,18 @@ class MeTicketsViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.Cr
     permission_classes = [IsAuthenticated]
 
     def get_serializer_class(self):
+        # The customer view of a ticket. The staff serializers carry internal notes,
+        # the assignment history and the assignee's contact details.
         from bfg.support.serializers import (
-            TicketListSerializer,
-            TicketDetailSerializer,
+            CustomerTicketDetailSerializer,
+            CustomerTicketListSerializer,
             MeTicketCreateSerializer,
         )
         if self.action == 'create':
             return MeTicketCreateSerializer
         if self.action == 'retrieve':
-            return TicketDetailSerializer
-        return TicketListSerializer
+            return CustomerTicketDetailSerializer
+        return CustomerTicketListSerializer
 
     def get_queryset(self):
         from bfg.support.models import SupportTicket
@@ -2275,12 +2277,13 @@ class MeTicketsViewSet(viewsets.GenericViewSet, mixins.ListModelMixin, mixins.Cr
             workspace=workspace,
             defaults={'is_active': True}
         )
-        return SupportTicket.objects.filter(
+        queryset = SupportTicket.objects.filter(
             workspace=workspace,
             customer=customer
-        ).select_related(
-            'customer', 'customer__user', 'priority', 'category', 'assigned_to', 'team'
-        ).order_by('-created_at')
+        ).select_related('priority', 'category').order_by('-created_at')
+        if self.action == 'retrieve':
+            queryset = queryset.prefetch_related('messages__sender')
+        return queryset
 
     def perform_create(self, serializer):
         from bfg.support.models import SupportTicket

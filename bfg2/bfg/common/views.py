@@ -821,6 +821,8 @@ class SettingsViewSet(viewsets.ModelViewSet):
         if not supported_currencies:
             supported_currencies = [DEFAULT_CURRENCY_CODE]
 
+        from bfg.common.extensions.services import availability as extension_availability
+
         payload = {
             'workspace_id': workspace.id,
             'workspace_slug': workspace.slug,
@@ -858,6 +860,9 @@ class SettingsViewSet(viewsets.ModelViewSet):
             # lands on the same default the serializers use, rather than on whatever the
             # settings JSON happens to hold.
             'storefront_display': get_storefront_display_settings(workspace),
+            # Which storefront and account plugins the server manages, and which of them this
+            # workspace has switched on. Admin-only extensions reach staff through /me/.
+            'extensions': extension_availability(workspace, public_only=True),
             # Per-workspace web analytics. The GA4 measurement id is a public
             # client-side tag id, never a secret — and one deployment serves
             # many storefronts, so it has to travel with the workspace config

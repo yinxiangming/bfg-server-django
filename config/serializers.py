@@ -258,14 +258,15 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if dw and dw.is_active:
             if StaffMember.all_objects.filter(workspace=dw, user=user, is_active=True).exists():
                 return dw.id
-        # 2. First active StaffMember workspace
-        staff = StaffMember.all_objects.filter(user=user, is_active=True).select_related('workspace').first()
-        if staff and staff.workspace.is_active:
-            return staff.workspace.id
-        # 3. First active Customer workspace
-        customer = Customer.all_objects.filter(user=user, is_active=True).select_related('workspace').first()
-        if customer and customer.workspace.is_active:
-            return customer.workspace.id
+        # 2. First active StaffMember workspace. The workspace's own status is part of
+        #    the query, so a membership in a deactivated workspace cannot hide the others.
+        staff = StaffMember.all_objects.filter(user=user, is_active=True, workspace__is_active=True).first()
+        if staff:
+            return staff.workspace_id
+        # 3. First active Customer workspace, on the same terms
+        customer = Customer.all_objects.filter(user=user, is_active=True, workspace__is_active=True).first()
+        if customer:
+            return customer.workspace_id
         return None
 
     def validate(self, attrs):
@@ -346,7 +347,22 @@ class CustomTokenRefreshSerializer(TokenRefreshSerializer):
     """
     Refresh access tokens and re-embed ``workspace_id`` so WorkspaceMiddleware
     (PR-10) can resolve the tenant for Bearer requests in production.
+
+    The refresh token's own ``workspace_id`` is kept while the user can still
+    work there, so a workspace chosen through switch-workspace lasts as long as
+    the session rather than until the access token expires.
     """
+
+    @staticmethod
+    def _is_active_member(user, workspace_id):
+        """Whether ``workspace_id`` is active and ``user`` an active staff member or customer there."""
+        from bfg.common.models import StaffMember, Customer
+        # all_objects: /api/v1/auth/ is a public path, so no workspace is bound here.
+        membership = dict(workspace_id=workspace_id, workspace__is_active=True, user=user, is_active=True)
+        return (
+            StaffMember.all_objects.filter(**membership).exists()
+            or Customer.all_objects.filter(**membership).exists()
+        )
 
     def validate(self, attrs):
         refresh = self.token_class(attrs["refresh"])
@@ -361,11 +377,17 @@ class CustomTokenRefreshSerializer(TokenRefreshSerializer):
                     "no_active_account",
                 )
 
-        access = refresh.access_token
         if user is not None:
-            wid = CustomTokenObtainPairSerializer._resolve_workspace_id(user)
-            if wid is not None:
-                access["workspace_id"] = wid
+            wid = refresh.payload.get("workspace_id")
+            if wid is None or not self._is_active_member(user, wid):
+                # No workspace in the token, or the user can no longer work in it: choose
+                # as sign-in does. The choice goes on the refresh token as well, so the
+                # rotated token agrees with the access token on where the session now is.
+                wid = CustomTokenObtainPairSerializer._resolve_workspace_id(user)
+            refresh["workspace_id"] = wid
+
+        # Copies the refresh token's claims, workspace_id included.
+        access = refresh.access_token
 
         data = {"access": str(access)}
 

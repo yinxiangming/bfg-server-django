@@ -18,7 +18,8 @@ def switch_workspace(request):
     Body: {"workspace_id": 42}
 
     Mint a new JWT pair with workspace_id claim for the requested workspace.
-    Requires active StaffMember or Customer membership.
+    Requires active StaffMember or Customer membership. For a staff member the
+    workspace also becomes ``default_workspace``, where the next sign-in lands.
     """
     workspace_id = request.data.get('workspace_id')
     if not workspace_id:
@@ -32,13 +33,18 @@ def switch_workspace(request):
                         status=status.HTTP_404_NOT_FOUND)
 
     user = request.user
-    is_member = (
-        StaffMember.all_objects.filter(workspace=workspace, user=user, is_active=True).exists()
-        or Customer.all_objects.filter(workspace=workspace, user=user, is_active=True).exists()
-    )
+    is_staff = StaffMember.all_objects.filter(workspace=workspace, user=user, is_active=True).exists()
+    is_member = is_staff or Customer.all_objects.filter(workspace=workspace, user=user, is_active=True).exists()
     if not is_member:
         return Response({'detail': 'You are not a member of this workspace.', 'code': 'workspace_access_denied'},
                         status=status.HTTP_403_FORBIDDEN)
+
+    # Sign-in honours default_workspace only where the user is staff. A customer
+    # profile is left alone: it would not change where sign-in lands, and it would
+    # overwrite the shop a shopper signed up at.
+    if is_staff and user.default_workspace_id != workspace.id:
+        user.default_workspace = workspace
+        user.save(update_fields=['default_workspace'])
 
     refresh = RefreshToken.for_user(user)
     refresh['workspace_id'] = workspace.id

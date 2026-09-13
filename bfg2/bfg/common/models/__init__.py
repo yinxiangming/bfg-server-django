@@ -17,3 +17,4 @@ from .preferences import UserPreferences
 from .email import EmailConfig
 from .social_auth import SocialAuthConfig
 from .api_key import APIKey
+from .extension import WorkspaceExtension

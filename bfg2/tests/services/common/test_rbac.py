@@ -216,12 +216,15 @@ class TestMeSerializerStaffMember:
             'customer': None, 'is_active': True, 'is_staff': False, 'is_superuser': False,
         }
 
-        # CustomerService and StaffMember are imported locally inside to_representation
-        # via `from bfg.common.services import CustomerService` and
-        # `from bfg.common.models import StaffMember`. Patch at the package-level
-        # attribute so the in-function import picks up the mock.
+        # CustomerService, StaffMember and availability are imported locally inside
+        # to_representation via `from bfg.common.services import CustomerService`,
+        # `from bfg.common.models import StaffMember` and
+        # `from bfg.common.extensions.services import availability`. Patch at the
+        # module-level attribute so the in-function import picks up the mock.
         with patch('bfg.common.services.CustomerService') as MockCS, \
              patch('bfg.common.models.StaffMember') as MockSM, \
+             patch('bfg.common.extensions.services.availability',
+                   return_value={'available': [], 'offered': []}) as mock_availability, \
              patch('rest_framework.serializers.ModelSerializer.to_representation',
                    return_value=dict(base_data)):
 
@@ -235,6 +238,7 @@ class TestMeSerializerStaffMember:
 
             result = serializer.to_representation(user)
 
+        self.availability_calls = mock_availability.call_args_list
         return result
 
     def test_staff_member_present_for_staff(self):
@@ -263,6 +267,20 @@ class TestMeSerializerStaffMember:
         sm = data['staff_member']
         assert set(sm.keys()) == {'id', 'is_active', 'role'}
         assert set(sm['role'].keys()) == {'id', 'code', 'name', 'permissions'}
+
+    def test_extensions_reported_in_full_for_staff(self):
+        role = _make_role(code='manager')
+        data = self._run_repr(_make_staff(role=role))
+
+        assert data['extensions'] == {'available': [], 'offered': []}
+        assert len(self.availability_calls) == 1
+        assert self.availability_calls[0].kwargs == {'public_only': False}
+
+    def test_extensions_limited_to_public_ones_for_non_staff(self):
+        data = self._run_repr(None)
+
+        assert 'extensions' in data
+        assert self.availability_calls[0].kwargs == {'public_only': True}
 
 
 # ═══════════════════════════════════════════════════════════════════

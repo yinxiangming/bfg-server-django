@@ -741,6 +741,14 @@ class MeSerializer(serializers.ModelSerializer):
             except StaffMember.DoesNotExist:
                 data['staff_member'] = None
 
+            # Which plugins the client should load. Staff learn about every extension, so
+            # the admin shows only the menus, pages and slots of the ones switched on;
+            # anyone else only about extensions that appear outside the admin.
+            from bfg.common.extensions.services import availability
+
+            public_only = data['staff_member'] is None and not instance.is_superuser
+            data['extensions'] = availability(request.workspace, public_only=public_only)
+
         return data
 
 

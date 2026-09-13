@@ -22,6 +22,21 @@ def _safe_workspace_frontend_url(instance):
         return None
 
 
+def _reject_domain(initial_data):
+    """Refuse a ``domain`` in the request body instead of ignoring it.
+
+    A hostname is unique across the install and decides which workspace a
+    storefront request is served by, so binding one takes more than a field
+    write: these endpoints cannot tell whether the caller controls the hostname.
+    Refusing the field outright also keeps an old client from believing a domain
+    was saved.
+    """
+    if initial_data is not None and 'domain' in initial_data:
+        raise serializers.ValidationError({
+            'domain': ['Custom domains cannot be set through this endpoint.'],
+        })
+
+
 def _serialize_workspace_profile(instance):
     profile = getattr(instance, "platform_profile", None)
     cluster = getattr(profile, "cluster", None) if profile else None
@@ -66,11 +81,10 @@ class WorkspaceListSerializer(serializers.Serializer):
 
 
 class WorkspaceCreateSerializer(serializers.Serializer):
-    """Create a new workspace."""
+    """Create a new workspace. Custom domains are bound elsewhere, never here."""
     id = serializers.IntegerField(read_only=True)
     name = serializers.CharField(max_length=255)
     slug = serializers.SlugField(max_length=100)
-    domain = serializers.CharField(max_length=255, required=False, default="")
     region = serializers.ChoiceField(choices=["us", "eu", "apac"], default="us")
 
     def validate_slug(self, value):
@@ -78,6 +92,10 @@ class WorkspaceCreateSerializer(serializers.Serializer):
         if Workspace.objects.filter(slug=value).exists():
             raise serializers.ValidationError("This slug is already taken.")
         return value
+
+    def validate(self, attrs):
+        _reject_domain(getattr(self, 'initial_data', None))
+        return attrs
 
     def create(self, validated_data):
         region = validated_data.pop("region", "us")
@@ -93,21 +111,6 @@ class WorkspaceCreateSerializer(serializers.Serializer):
             owner_user=user,
             region=region,
         )
-
-        raw_domain = validated_data.get('domain', '')
-        hostname = normalize_hostname(raw_domain)
-        if hostname:
-            WorkspaceDomain = apps.get_model('common', 'WorkspaceDomain')
-            WorkspaceDomain.objects.update_or_create(
-                hostname=hostname,
-                defaults={
-                    'workspace': workspace,
-                    'kind': WorkspaceDomain.KIND_CUSTOM,
-                    'verification_status': WorkspaceDomain.VERIFICATION_VERIFIED,
-                    'ssl_status': WorkspaceDomain.SSL_NONE,
-                    'is_primary': True,
-                },
-            )
 
         # Attach region dynamically so the serializer can return it in .data if requested
         workspace.region = region
@@ -126,19 +129,20 @@ class WorkspaceCreateSerializer(serializers.Serializer):
 
 
 class WorkspaceDetailSerializer(serializers.Serializer):
-    """Read/update workspace details."""
+    """Read/update workspace details. ``domain`` is read-only here."""
     id = serializers.IntegerField(read_only=True)
     name = serializers.CharField(max_length=255)
     slug = serializers.SlugField(read_only=True)
-    domain = serializers.CharField(
-        max_length=255, required=False, allow_blank=True, write_only=True
-    )
     email = serializers.EmailField(required=False)
     phone = serializers.CharField(max_length=50, required=False)
     is_active = serializers.BooleanField(read_only=True)
     settings = serializers.JSONField(read_only=True)
     created_at = serializers.DateTimeField(read_only=True)
     updated_at = serializers.DateTimeField(read_only=True)
+
+    def validate(self, attrs):
+        _reject_domain(getattr(self, 'initial_data', None))
+        return attrs
 
     def to_representation(self, instance):
         return {
@@ -156,24 +160,7 @@ class WorkspaceDetailSerializer(serializers.Serializer):
         }
 
     def update(self, instance, validated_data):
-        domain = validated_data.pop('domain', None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
-
-        if domain is not None:
-            WorkspaceDomain = apps.get_model('common', 'WorkspaceDomain')
-            instance.domains.filter(kind=WorkspaceDomain.KIND_CUSTOM, is_primary=True).update(is_primary=False)
-            hostname = normalize_hostname(domain)
-            if hostname:
-                WorkspaceDomain.objects.update_or_create(
-                    hostname=hostname,
-                    defaults={
-                        'workspace': instance,
-                        'kind': WorkspaceDomain.KIND_CUSTOM,
-                        'verification_status': WorkspaceDomain.VERIFICATION_VERIFIED,
-                        'ssl_status': WorkspaceDomain.SSL_NONE,
-                        'is_primary': True,
-                    },
-                )
         return instance

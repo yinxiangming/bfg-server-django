@@ -169,6 +169,27 @@ def workspaces_with(key: str) -> List:
     return [workspace for workspace in workspaces if is_available(workspace, key)]
 
 
+def where_available(key: str, *, workspace_field: str | None = 'workspace'):
+    """A ``Q`` keeping the rows whose workspace has ``key`` active, for lists.
+
+    ``workspace_field`` names the row's workspace relation; pass ``None`` to filter
+    workspaces themselves. The filter reads activation records only: the entitlement
+    check and the extensions ``key`` requires are not applied, so a request that acts
+    on one of the rows should still ask ``is_available`` about it.
+    """
+    from django.db.models import Q
+
+    from bfg.common.models import WorkspaceExtension
+
+    manifest = registry.get_manifest(key)
+    if manifest is None:
+        return Q(pk__in=[])
+    if manifest.scope != SCOPE_WORKSPACE:
+        return Q()
+    prefix = f'{workspace_field}__extension_records' if workspace_field else 'extension_records'
+    return Q(**{f'{prefix}__key': key, f'{prefix}__status': WorkspaceExtension.STATUS_ACTIVE})
+
+
 def invalidate(workspace_id: int) -> None:
     """Drop cached answers that depend on which extensions a workspace uses."""
     cache.delete(available_cache_key(workspace_id))

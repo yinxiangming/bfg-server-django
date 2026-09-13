@@ -4,7 +4,9 @@ Extensions a workspace can switch on or off.
 
 An extension author imports the manifest types from here. Everything that needs to
 know whether an extension is live for a workspace asks ``is_available``; scheduled
-work asks ``workspaces_with``. See ``manifest``, ``registry`` and ``services``.
+work asks ``workspaces_with``, and lists filter with ``where_available``. Views refuse
+requests with ``permissions.RequiresExtension``. See ``manifest``, ``registry``,
+``services`` and ``permissions``.
 """
 
 from bfg.common.extensions.manifest import (  # noqa: F401
@@ -43,3 +45,10 @@ def workspaces_with(key):
     from bfg.common.extensions import services
 
     return services.workspaces_with(key)
+
+
+def where_available(key, *, workspace_field='workspace'):
+    """A ``Q`` keeping the rows whose workspace has ``key`` active; see ``services.where_available``."""
+    from bfg.common.extensions import services
+
+    return services.where_available(key, workspace_field=workspace_field)

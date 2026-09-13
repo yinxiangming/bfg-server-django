@@ -87,7 +87,7 @@ def _is_platform_admin_embedded(user) -> bool:
     # Cross-workspace: use unscoped manager so the answer doesn't depend on
     # whichever tenant the request happens to be bound to.
     return StaffMember.all_objects.filter(
-        user=user, workspace=platform_ws, is_active=True
+        user=user, workspace=platform_ws, is_active=True, role__code="admin"
     ).exists()
 
 

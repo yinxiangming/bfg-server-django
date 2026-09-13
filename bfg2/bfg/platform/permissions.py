@@ -7,8 +7,6 @@ Supports embedded and standalone modes via is_embedded_mode().
 from rest_framework.permissions import BasePermission
 from django.apps import apps
 
-from bfg.platform.utils import is_embedded_mode, get_platform_workspace
-
 
 class IsWorkspaceStaff(BasePermission):
     """Allow access only if user is a StaffMember of the requested workspace."""
@@ -38,26 +36,21 @@ class IsWorkspaceOwner(BasePermission):
 class IsPlatformAdmin(BasePermission):
     """Allow access only to platform administrators.
 
-    Embedded mode: user must be a StaffMember of the management Workspace.
+    Embedded mode: user must be an active admin of the management Workspace.
     Standalone mode: user must be superuser or is_staff.
+
+    Platform endpoints are public paths, so no workspace is bound to the
+    request; the check therefore lives in ``is_platform_admin``, which looks
+    memberships up without tenant scoping.
     """
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        if is_embedded_mode():
-            platform_ws = get_platform_workspace()
-            if not platform_ws:
-                return False
-            StaffMember = apps.get_model("common", "StaffMember")
-            return StaffMember.objects.filter(
-                user=request.user,
-                workspace=platform_ws,
-                is_active=True,
-            ).exists()
-        else:
-            return request.user.is_superuser or request.user.is_staff
+        from bfg.platform.services.workspace_service import is_platform_admin
+
+        return is_platform_admin(request.user)
 
 
 class IsPlatformAPIKey(BasePermission):

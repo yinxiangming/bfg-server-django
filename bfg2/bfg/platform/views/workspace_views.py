@@ -13,6 +13,7 @@ from bfg.platform.services.workspace_service import get_user_workspaces, is_plat
 from bfg.platform.services.provision_service import provision_workspace, suspend_workspace, resume_workspace
 from bfg.platform.services.subscription_service import SubscriptionService
 from bfg.platform.permissions import IsWorkspaceOwner, IsPlatformAdmin
+from bfg.platform.utils import get_platform_workspace, is_embedded_mode
 from bfg.platform.serializers.workspace import (
     WorkspaceListSerializer,
     WorkspaceCreateSerializer,
@@ -150,7 +151,16 @@ class PlanViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         SubscriptionPlan = apps.get_model('shop', 'SubscriptionPlan')
-        return SubscriptionPlan.objects.filter(is_active=True).order_by('price')
+        plans = SubscriptionPlan.objects.filter(is_active=True).order_by('price')
+        if is_embedded_mode():
+            # Every workspace keeps the plans it sells to its own customers in
+            # the same table; the platform's pricing is only the management
+            # Workspace's plans.
+            platform_ws = get_platform_workspace()
+            if platform_ws is None:
+                return plans.none()
+            plans = plans.filter(workspace=platform_ws)
+        return plans
 
 
 class SSOConfigViewSet(viewsets.ViewSet):

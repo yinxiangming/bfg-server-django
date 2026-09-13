@@ -8,10 +8,9 @@ every workspace after that: it creates the rows that nothing else creates
 automatically, and — with ``--check`` — reports which of them a workspace is
 still missing.
 
-The gaps it closes exist because ``WorkspaceService.create_workspace`` (and the
-platform ``POST /api/v1/platform/workspaces/``) only make the workspace, its
-roles and its owner. Everything a shopper actually touches is left unset, and
-each one fails quietly rather than loudly:
+The gaps it closes exist because ``WorkspaceService.create_workspace`` only makes
+the workspace, its roles and its owner. Everything a shopper actually touches is
+left unset, and each one fails quietly rather than loudly:
 
   * no ``shop.Store``           → ``/store/cart/default_store/`` 404s and checkout dies
   * no ``finance.Currency`` row → invoices and payments are written in whatever
@@ -24,6 +23,10 @@ each one fails quietly rather than loudly:
   * no published ``home`` page  → the storefront renders a bare welcome message
   * no notification templates   → order, payment and booking notifications are
                                   skipped, so customers are told nothing
+
+The settings, currency and store steps live in ``bfg.common.onboarding.provisioning``,
+shared with ``POST /api/v1/platform/workspaces/``: on an embedded platform that
+request runs them, and the notification templates, for every workspace it creates.
 
 Usage:
 
@@ -46,8 +49,8 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 
 from bfg.common.middleware import set_current_workspace
+from bfg.common.onboarding import provisioning
 from bfg.common.onboarding.blocks import home_page_blocks
-from bfg.common.onboarding.catalog import get_currency_profile
 from bfg.common.models import (
     Settings,
     StaffMember,
@@ -59,8 +62,6 @@ from bfg.common.models import (
 
 User = get_user_model()
 
-DEFAULT_STORE_CODE = 'main'
-DEFAULT_STORE_NAME = 'Main'
 DEFAULT_THEME_CODE = 'store'
 
 
@@ -80,8 +81,8 @@ class Command(BaseCommand):
         parser.add_argument('--language', default='', help='Default language, e.g. en or zh-hans')
         parser.add_argument('--languages', default='', help='Comma-separated language list for the Site')
         parser.add_argument('--theme', default=DEFAULT_THEME_CODE, help=f'Storefront theme id (default: {DEFAULT_THEME_CODE})')
-        parser.add_argument('--store-name', default=DEFAULT_STORE_NAME)
-        parser.add_argument('--store-code', default=DEFAULT_STORE_CODE)
+        parser.add_argument('--store-name', default=provisioning.DEFAULT_STORE_NAME)
+        parser.add_argument('--store-code', default=provisioning.DEFAULT_STORE_CODE)
         parser.add_argument('--admin-user', default='',
                             help='Username to add as workspace admin (must already exist)')
         parser.add_argument('--seed-home', action='store_true',
@@ -169,75 +170,43 @@ class Command(BaseCommand):
         if not workspace.pk:
             self.change('would set country / currency / language on the new settings row')
             return
-        settings_obj, _ = Settings.objects.get_or_create(workspace=workspace)
-        changed = []
-        for field, value in (
-            ('country', options['country'].strip().upper()[:2]),
-            ('default_currency', options['currency'].strip().upper()[:3]),
-            ('default_language', options['language'].strip()),
-        ):
-            if value and getattr(settings_obj, field) != value:
-                setattr(settings_obj, field, value)
-                changed.append(f'{field}={value}')
-        languages = [x.strip() for x in options['languages'].split(',') if x.strip()]
-        if languages and settings_obj.supported_languages != languages:
-            settings_obj.supported_languages = languages
-            changed.append(f'supported_languages={languages}')
-        if not settings_obj.site_name and options['name']:
-            settings_obj.site_name = options['name'][:255]
-            changed.append('site_name')
+        _, changed = provisioning.ensure_settings(
+            workspace,
+            country=options['country'],
+            currency=options['currency'],
+            language=options['language'],
+            languages=[x.strip() for x in options['languages'].split(',') if x.strip()],
+            site_name=options['name'],
+            dry_run=self.dry_run,
+        )
         if changed:
-            if not self.dry_run:
-                settings_obj.save()
             self.change(f'settings: {", ".join(changed)}')
         else:
             self.ok('settings already match')
 
     def ensure_currency(self, workspace, code):
-        """Make sure the workspace's currency exists as an active row.
-
-        ``OrderService`` looks the code up and, when it is missing, falls back to
-        the first active currency instead of creating it — so an NZD workspace
-        writes CNY invoices. The row is global, not per workspace.
-        """
+        """Make sure the workspace's currency exists as an active row; see ``provisioning.ensure_currency``."""
         code = (code or '').strip().upper()[:3]
         if not code:
             return
-        from bfg.finance.models import Currency
-
-        if Currency.objects.filter(code=code, is_active=True).exists():
+        if not provisioning.ensure_currency(code, dry_run=self.dry_run):
             self.ok(f'currency {code} exists')
-            return
-        if self.dry_run:
+        elif self.dry_run:
             self.change(f'would create currency {code}')
-            return
-        profile = get_currency_profile(code)
-        Currency.objects.update_or_create(
-            code=code,
-            defaults={
-                'name': profile['name'],
-                'symbol': profile['symbol'],
-                'decimal_places': profile['decimal_places'],
-                'is_active': True,
-            },
-        )
-        self.change(f'created currency {code}')
+        else:
+            self.change(f'created currency {code}')
 
     def ensure_store(self, workspace, name, code):
         if not workspace.pk:
             self.change(f'would create store {code}')
             return
-        from bfg.shop.models import Store
-
-        store = Store.all_objects.filter(workspace=workspace, code=code).first()
-        if store:
+        store, created = provisioning.ensure_store(workspace, name=name, code=code, dry_run=self.dry_run)
+        if not created:
             self.ok(f'store {store.code} (id={store.id}) exists')
-            return
-        if self.dry_run:
+        elif store is None:
             self.change(f'would create store {code}')
-            return
-        store = Store.all_objects.create(workspace=workspace, name=name, code=code, is_active=True)
-        self.change(f'created store {store.code} (id={store.id})')
+        else:
+            self.change(f'created store {store.code} (id={store.id})')
 
     def ensure_notification_templates(self, workspace, options):
         """One template per notification code, in the workspace language, in-app only.

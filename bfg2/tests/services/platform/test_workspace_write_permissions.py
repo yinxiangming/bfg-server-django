@@ -120,16 +120,18 @@ class TestCustomDomainIsNotWritable:
         own_shop.refresh_from_db()
         assert own_shop.name == 'Renamed'
 
-    def test_create_refuses_a_hostname(self, other_shop, monkeypatch):
-        from bfg.platform.views import workspace_views
+    def test_create_refuses_a_hostname(self, own_shop, other_shop, monkeypatch):
+        from bfg.platform.services import workspace_creation
 
         queued = []
         monkeypatch.setattr(
-            workspace_views, 'provision_workspace', SimpleNamespace(delay=lambda **kwargs: queued.append(kwargs)),
+            workspace_creation, 'provision_workspace', SimpleNamespace(delay=lambda **kwargs: queued.append(kwargs)),
         )
-        user = User.objects.create_user(username='creator', password='x')
+        # Only the owner or an admin of a workspace may create one; anyone else is turned
+        # away before the body is looked at, so it takes one of them to reach the domain rule.
+        client = owner_client(own_shop, 'creator')
 
-        response = client_for(user).post(
+        response = client.post(
             '/api/v1/platform/workspaces/',
             {'name': 'Newcomer', 'slug': 'newcomer', 'domain': OTHER_HOST},
             format='json',

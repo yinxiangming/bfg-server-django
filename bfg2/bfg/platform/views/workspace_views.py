@@ -10,9 +10,18 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.apps import apps
 from django.db.models import Q
 
+from bfg.common.exceptions import WorkspaceAlreadyExists
 from bfg.platform.services.ownership import owned_workspace_ids
-from bfg.platform.services.workspace_service import get_user_workspaces, is_platform_admin
-from bfg.platform.services.provision_service import provision_workspace, suspend_workspace, resume_workspace
+from bfg.platform.services.workspace_creation import (
+    WorkspaceCreateForbidden,
+    WorkspaceLimitReached,
+    create_owned_workspace,
+    ensure_workspace_create_allowed,
+    max_owned_workspaces,
+    workspace_create_blocked,
+)
+from bfg.platform.services.workspace_service import get_user_workspace, get_user_workspaces, is_platform_admin
+from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
 from bfg.platform.services.subscription_service import SubscriptionService
 from bfg.platform.permissions import IsWorkspaceOwner, IsPlatformAdmin
 from bfg.platform.utils import get_platform_workspace, is_embedded_mode
@@ -25,12 +34,28 @@ from bfg.platform.serializers.subscription import SubscriptionSerializer
 from bfg.platform.serializers.subscription_plan import SubscriptionPlanSerializer
 
 
+def _token_workspace_id(request):
+    """The ``workspace_id`` claim of the caller's access token, if the request carries one.
+
+    Platform paths bind no workspace to the request, so the claim is the only
+    word on which workspace the caller is working in. A session or an API key
+    has none.
+    """
+    payload = getattr(request.auth, 'payload', None)
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return int(payload.get('workspace_id'))
+    except (TypeError, ValueError):
+        return None
+
+
 class WorkspaceViewSet(viewsets.ModelViewSet):
     """
     Workspace management for Platform.
 
     list:   GET  /api/v1/platform/workspaces/          — workspaces the user is staff of or owns
-    create: POST /api/v1/platform/workspaces/          — create new workspace
+    create: POST /api/v1/platform/workspaces/          — owners and admins of a workspace, up to a limit of owned ones
     retrieve: GET /api/v1/platform/workspaces/{id}/
     update: PATCH /api/v1/platform/workspaces/{id}/    — owner only: name, email, phone; never a custom domain
 
@@ -39,7 +64,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
       POST /api/v1/platform/workspaces/{id}/resume/    — platform admins only
       GET  /api/v1/platform/workspaces/{id}/subscription/
       POST /api/v1/platform/workspaces/{id}/checkout/
-      GET  /api/v1/platform/workspaces/me/             — my workspaces + platform admin flag
+      GET  /api/v1/platform/workspaces/me/             — my workspaces, platform admin flag, whether I may create one
     """
     permission_classes = [IsAuthenticated]
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
@@ -79,22 +104,52 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             Q(id__in=workspace_ids) | Q(id__in=owned_ids),
         ).order_by('-created_at')
 
-    def perform_create(self, serializer):
-        workspace = serializer.save()
+    def create(self, request, *args, **kwargs):
+        """POST /api/v1/platform/workspaces/ — a workspace owned by the caller, returned as ``me/`` lists it.
 
-        provision_workspace.delay(
-            workspace_id=workspace.id,
-            initiated_by_id=self.request.user.id,
-        )
+        Whether the caller may create one is asked before the body is read, so a
+        refused caller hears that first, and asked again by ``create_owned_workspace``
+        with the caller's row locked.
+        """
+        user = request.user
+        try:
+            ensure_workspace_create_allowed(user)
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            data = serializer.validated_data
+            workspace = create_owned_workspace(
+                user,
+                name=data['name'],
+                slug=data.get('slug', ''),
+                region=data.get('region'),
+                country=data.get('country', ''),
+                currency=data.get('currency', ''),
+                language=data.get('language', ''),
+                current_workspace_id=_token_workspace_id(request),
+            )
+        except WorkspaceCreateForbidden as exc:
+            return Response({'detail': exc.message, 'code': exc.code}, status=status.HTTP_403_FORBIDDEN)
+        except WorkspaceLimitReached as exc:
+            return Response(
+                {'detail': exc.message, 'code': exc.code, 'limit': exc.limit},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except WorkspaceAlreadyExists as exc:
+            # A slug that was free when the body was validated can be taken by the time it is written.
+            return Response({'slug': [exc.message]}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(get_user_workspace(user, workspace), status=status.HTTP_201_CREATED)
 
     # ── Custom actions ───────────────────────────────────────────────────
 
     @action(detail=False, methods=['get'], url_path='me')
     def me(self, request):
-        """GET /api/v1/platform/workspaces/me/ — current user's workspace list."""
+        """GET /api/v1/platform/workspaces/me/ — current user's workspaces and whether they may create one."""
         return Response({
             'workspaces': get_user_workspaces(request.user),
             'is_platform_admin': is_platform_admin(request.user),
+            'workspace_limit': max_owned_workspaces(),
+            # Asked without a lock: what a create request would meet right now.
+            'create_blocked': workspace_create_blocked(request.user),
         })
 
     # Suspending takes a workspace offline for its staff and its customers alike,

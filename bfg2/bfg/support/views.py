@@ -110,25 +110,9 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         """
         workspace = getattr(self.request, 'workspace', None)
         with transaction.atomic():
-            # Globally unique ticket_number: include workspace id (same date seq reused per workspace before)
-            today_str = timezone.now().strftime('%Y%m%d')
-            ws_part = getattr(workspace, "id", None) or "0"
-            prefix = f"TKT-{ws_part}-{today_str}-"
-            last_ticket = SupportTicket.objects.filter(
-                workspace=workspace,
-                ticket_number__startswith=prefix
-            ).order_by('-ticket_number').first()
-            if last_ticket and last_ticket.ticket_number:
-                try:
-                    last_seq = int(last_ticket.ticket_number.split('-')[-1])
-                except (ValueError, IndexError):
-                    last_seq = 0
-            else:
-                last_seq = 0
-            next_seq = str(last_seq + 1).zfill(4)
-            ticket_number = f"{prefix}{next_seq}"
-
-            instance = serializer.save(workspace=workspace, ticket_number=ticket_number)
+            instance = serializer.save(
+                workspace=workspace, ticket_number=SupportTicket.next_ticket_number(workspace)
+            )
             if instance.assigned_to_id:
                 TicketAssignment.objects.create(
                     ticket=instance,

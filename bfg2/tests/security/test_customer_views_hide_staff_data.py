@@ -1,4 +1,4 @@
-"""Customers see their own tickets and account, not the shop's working notes.
+"""Customers see their own tickets, returns and account, not the shop's working notes.
 
 The customer ticket endpoints served the staff view of a ticket. Its detail
 carried internal notes -- messages staff mark as not for the customer -- with the
@@ -9,6 +9,9 @@ another workspace.
 The customer block of ``/me/`` and of a customer's orders used the staff customer
 serializer the same way, so it carried the shop's notes about that customer, the
 credit limit set for them, and every active segment the workspace defines.
+
+Staff and customers share the returns endpoint, and a customer could read the
+note the shop keeps on their return.
 """
 
 from decimal import Decimal
@@ -18,11 +21,12 @@ from django.core.cache import cache
 from rest_framework.test import APIClient
 
 from bfg.common.models import Customer, CustomerSegment, StaffMember, StaffRole, User, Workspace
-from bfg.shop.models import Order, Store
+from bfg.shop.models import Order, Return, Store
 from bfg.support.models import SupportTicket, SupportTicketMessage, TicketAssignment, TicketCategory
 
 ME_TICKETS_URL = '/api/v1/me/tickets/'
 STAFF_TICKETS_URL = '/api/v1/support/tickets/'
+RETURNS_URL = '/api/v1/shop/returns/'
 
 AGENT_USERNAME = 'sam-agent'
 AGENT_EMAIL = 'sam.agent@shop.test'
@@ -31,6 +35,7 @@ INTERNAL_NOTE = 'Courier confirmed delivery, hold the refund'
 ASSIGNMENT_REASON = 'Escalated for refund review'
 CUSTOMER_NOTE = 'Chargeback risk, check before shipping'
 SEGMENT_NAME = 'Watchlist'
+RETURN_NOTE = 'Seal broken, refund less the restocking fee'
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +99,18 @@ def ticket(workspace, customer, agent):
 @pytest.fixture
 def segment(workspace):
     return CustomerSegment.objects.create(workspace=workspace, name=SEGMENT_NAME, query={'orders': {'gte': 1}})
+
+
+@pytest.fixture
+def order(workspace, customer):
+    # Store.objects is tenant-scoped and empty outside a request; look past the scope.
+    store = Store.all_objects.filter(workspace=workspace).first() or Store.objects.create(
+        workspace=workspace, name='Main', code='main', is_active=True,
+    )
+    return Order.objects.create(
+        workspace=workspace, store=store, customer=customer, order_number='ORD-STAFF-DATA-1',
+        subtotal=Decimal('10.00'), total=Decimal('10.00'),
+    )
 
 
 # --- tickets -------------------------------------------------------------------
@@ -188,15 +205,7 @@ def test_me_leaves_out_the_shops_notes_about_the_customer(workspace, customer, s
     assert_no_staff_view_of_the_customer(response.data['customer'], response.content.decode())
 
 
-def test_an_order_leaves_out_the_shops_notes_about_the_customer(workspace, customer, segment):
-    store = Store.all_objects.filter(workspace=workspace).first() or Store.objects.create(
-        workspace=workspace, name='Main', code='main', is_active=True,
-    )
-    order = Order.objects.create(
-        workspace=workspace, store=store, customer=customer, order_number='ORD-STAFF-DATA-1',
-        subtotal=Decimal('10.00'), total=Decimal('10.00'),
-    )
-
+def test_an_order_leaves_out_the_shops_notes_about_the_customer(workspace, customer, segment, order):
     response = signed_in(customer.user, workspace).get(f'/api/v1/me/orders/{order.id}/')
 
     assert response.status_code == 200, response.data
@@ -210,3 +219,35 @@ def test_staff_still_see_their_notes_on_the_customer(workspace, agent, customer,
     assert response.status_code == 200, response.data
     assert response.data['notes'] == CUSTOMER_NOTE
     assert Decimal(str(response.data['credit_limit'])) == Decimal('500.00')
+
+
+# --- returns -------------------------------------------------------------------
+
+@pytest.fixture
+def customers_return(workspace, customer, order):
+    return Return.objects.create(
+        workspace=workspace, order=order, customer=customer, return_number='RET-STAFF-DATA-1',
+        status='rejected', admin_note=RETURN_NOTE,
+    )
+
+
+def test_a_customer_does_not_see_the_shops_note_on_their_return(workspace, customer, customers_return):
+    client = signed_in(customer.user, workspace)
+
+    detail = client.get(f'{RETURNS_URL}{customers_return.id}/')
+    listing = client.get(RETURNS_URL)
+
+    assert detail.status_code == 200, detail.data
+    assert listing.status_code == 200, listing.data
+    rows = listed(listing)
+    assert [row['id'] for row in rows] == [customers_return.id]
+    assert 'admin_note' not in detail.data
+    assert 'admin_note' not in rows[0]
+    assert RETURN_NOTE not in detail.content.decode() + listing.content.decode()
+
+
+def test_staff_still_see_their_note_on_a_return(workspace, agent, customers_return):
+    response = signed_in(agent, workspace).get(f'{RETURNS_URL}{customers_return.id}/')
+
+    assert response.status_code == 200, response.data
+    assert response.data['admin_note'] == RETURN_NOTE

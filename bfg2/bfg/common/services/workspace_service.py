@@ -94,6 +94,12 @@ class WorkspaceService(BaseService):
             if update_fields:
                 update_fields.append('updated_at')
                 profile.save(update_fields=update_fields)
+            if owner_user:
+                # Ownership is recorded by bfg.platform; the admin StaffMember
+                # assigned below only grants the owner's permissions in the workspace.
+                from bfg.platform.services.ownership import assign_workspace_owner
+
+                assign_workspace_owner(workspace, owner_user)
         except LookupError:
             pass
 

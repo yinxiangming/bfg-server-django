@@ -378,8 +378,10 @@ class StorefrontOrderItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OrderItem
-        fields = ['product_name', 'variant_name', 'sku', 'quantity', 'price', 'subtotal', 'image_url']
-        read_only_fields = ['product_name', 'variant_name', 'sku', 'price', 'subtotal', 'image_url']
+        # `id` is what a return line names (`ReturnLineItem.order_item`); this is the
+        # only place a customer can read their order items from.
+        fields = ['id', 'product_name', 'variant_name', 'sku', 'quantity', 'price', 'subtotal', 'image_url']
+        read_only_fields = ['id', 'product_name', 'variant_name', 'sku', 'price', 'subtotal', 'image_url']
 
     def get_image_url(self, obj):
         """Product primary image URL for order item (from stored path so seed_images/store/... is correct)."""

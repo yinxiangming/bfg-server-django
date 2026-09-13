@@ -12,7 +12,7 @@ Ownership is the same in both modes; see ``bfg.platform.services.ownership``.
 from django.apps import apps
 
 from bfg.common.models import resolve_workspace_public_frontend_base_url
-from bfg.platform.services.ownership import owned_workspace_ids
+from bfg.platform.services.ownership import is_workspace_owner, owned_workspace_ids
 from bfg.platform.utils import is_embedded_mode
 
 
@@ -51,6 +51,23 @@ def get_user_workspaces(user) -> list:
         for workspace_id in ids
         if workspace_id in workspaces
     ]
+
+
+def get_user_workspace(user, workspace) -> dict:
+    """*workspace* with *user*'s standing in it, as ``get_user_workspaces`` lists it.
+
+    The standing is worked out by the same rules, so a workspace *user* has just
+    created comes back exactly as ``me/`` will list it.
+    """
+    Workspace = apps.get_model("common", "Workspace")
+    workspace = Workspace.objects.select_related("platform_profile").get(pk=workspace.pk)
+    member_roles = _member_roles(user)
+    return _workspace_entry(
+        workspace,
+        role=member_roles.get(workspace.pk),
+        is_member=workspace.pk in member_roles,
+        is_owner=is_workspace_owner(user, workspace),
+    )
 
 
 def is_platform_admin(user) -> bool:

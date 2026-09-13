@@ -31,6 +31,15 @@ If `PLATFORM_WORKSPACE_SLUG` is empty, embedded mode is **off**.
 - **Embedded (`PLATFORM_EMBEDDED` true):** workspaces are derived from the authenticated user's active **`StaffMember`** rows, plus the workspaces they own (an active owner **`PlatformMembership`**), suspended or not.
 - **Standalone (embedded off):** workspaces come from **`PlatformMembership`**. Users who only have **`StaffMember`** (typical single-DB Nexus tenants) then see **`workspaces: []`**, which breaks hub login flows that rely on listing tenants and calling `sso/start`.
 
+In both modes the response also carries `workspace_limit`, the most workspaces one account may own, and `create_blocked`: `null` when a create request from the caller would go ahead now, otherwise the `code` it would be refused with.
+
+## Behaviour: `POST /api/v1/platform/workspaces/`
+
+Only an account that owns a workspace, or is an active admin of one, may create a workspace, and it may own `BFG_MAX_OWNED_WORKSPACES_PER_USER` of them at most; see `docs/reference/server-switches.md`. The created workspace is returned as `me/` lists it.
+
+- **Embedded:** the request provisions the workspace itself, in one transaction: its owner and admin, country, currency and language (from the request, else from the workspace the caller's access token was issued for, else the settings defaults), the currency row, a `main` store, the notification templates, the platform profile and a completed `create` operation. Nothing is queued, so creating a workspace needs no Celery worker, and a broker that is down does not fail the request.
+- **Standalone:** the workspace is created and the `provision_workspace` task is queued for the rest.
+
 ## Operations example (Dokku)
 
 ```bash

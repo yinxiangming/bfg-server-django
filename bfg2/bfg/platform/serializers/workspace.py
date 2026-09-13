@@ -6,6 +6,7 @@ from rest_framework import serializers
 from django.apps import apps
 
 from bfg.common.models import normalize_hostname, resolve_workspace_public_frontend_base_url
+from bfg.common.onboarding.catalog import CURRENCY_PROFILES, SUPPORTED_LANGUAGES
 
 
 def _safe_workspace_domain(instance):
@@ -81,51 +82,50 @@ class WorkspaceListSerializer(serializers.Serializer):
 
 
 class WorkspaceCreateSerializer(serializers.Serializer):
-    """Create a new workspace. Custom domains are bound elsewhere, never here."""
-    id = serializers.IntegerField(read_only=True)
+    """What creating a workspace accepts. Custom domains are bound elsewhere, never here.
+
+    Only ``name`` is required; the other fields may be left out, blank or null, and
+    come out as ``""``. A blank ``slug`` is made from the name, and a blank
+    ``country``, ``currency`` or ``language`` is left to ``create_owned_workspace``.
+    """
     name = serializers.CharField(max_length=255)
-    slug = serializers.SlugField(max_length=100)
+    slug = serializers.SlugField(max_length=100, required=False, allow_blank=True, allow_null=True)
     region = serializers.ChoiceField(choices=["us", "eu", "apac"], default="us")
+    country = serializers.RegexField(
+        r"^[A-Za-z]{2}$", required=False, allow_blank=True, allow_null=True,
+        error_messages={"invalid": "Enter a two-letter country code."},
+    )
+    currency = serializers.CharField(max_length=3, required=False, allow_blank=True, allow_null=True)
+    language = serializers.CharField(max_length=10, required=False, allow_blank=True, allow_null=True)
 
     def validate_slug(self, value):
+        # A slug the caller picked is refused when taken, never quietly changed.
+        value = value or ""
         Workspace = apps.get_model("common", "Workspace")
-        if Workspace.objects.filter(slug=value).exists():
+        if value and Workspace.objects.filter(slug=value).exists():
             raise serializers.ValidationError("This slug is already taken.")
         return value
+
+    def validate_country(self, value):
+        return (value or "").upper()
+
+    def validate_currency(self, value):
+        # Currency rows are shared by every workspace, so only a currency the
+        # platform has a profile for is taken.
+        code = (value or "").strip().upper()
+        if code and code not in CURRENCY_PROFILES:
+            raise serializers.ValidationError("Unsupported currency.")
+        return code
+
+    def validate_language(self, value):
+        code = (value or "").strip().lower()
+        if code and code not in SUPPORTED_LANGUAGES:
+            raise serializers.ValidationError("Unsupported language.")
+        return code
 
     def validate(self, attrs):
         _reject_domain(getattr(self, 'initial_data', None))
         return attrs
-
-    def create(self, validated_data):
-        region = validated_data.pop("region", "us")
-        request = self.context.get('request')
-        user = request.user if request else None
-
-        from bfg.common.services.workspace_service import WorkspaceService
-        service = WorkspaceService(user=user)
-
-        workspace = service.create_workspace(
-            name=validated_data.get('name'),
-            slug=validated_data.get('slug'),
-            owner_user=user,
-            region=region,
-        )
-
-        # Attach region dynamically so the serializer can return it in .data if requested
-        workspace.region = region
-        return workspace
-
-    def to_representation(self, instance):
-        return {
-            "id": instance.id,
-            "uuid": str(instance.uuid) if hasattr(instance, "uuid") and instance.uuid else None,
-            "name": instance.name,
-            "slug": instance.slug,
-            "domain": _safe_workspace_domain(instance),
-            "region": getattr(instance, "region", "us"),
-            "is_active": getattr(instance, "is_active", True),
-        }
 
 
 class WorkspaceDetailSerializer(serializers.Serializer):

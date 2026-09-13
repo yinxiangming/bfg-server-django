@@ -115,6 +115,16 @@ It focuses on runtime behavior toggles rather than secrets. Secret values such a
 - Why it matters:
   - This is the key switch for reusable multi-step onboarding flows.
 
+### `BFG_MAX_OWNED_WORKSPACES_PER_USER`
+- Default: `3`
+- Purpose:
+  - Caps how many workspaces one account can own when it creates them through `POST /api/v1/platform/workspaces/`.
+- Behavior:
+  - Counts the account's active owner memberships, suspended and inactive workspaces included.
+  - Only an account that already owns a workspace, or is an active admin of one, can create a workspace at all; any other account gets `403` with `code: workspace_create_forbidden`.
+  - Past the cap the endpoint answers `400` with `code: workspace_limit_reached` and the cap as `limit`.
+  - `GET /api/v1/platform/workspaces/me/` reports the cap as `workspace_limit`, and as `create_blocked` the code a create request would get right now (`null` when it would succeed).
+
 ---
 
 ## 5. Authentication / Social Auth

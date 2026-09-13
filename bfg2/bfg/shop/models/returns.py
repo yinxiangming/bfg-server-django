@@ -28,7 +28,8 @@ class Return(models.Model):
     order = models.ForeignKey('shop.Order', on_delete=models.CASCADE, related_name='returns')
     customer = models.ForeignKey('common.Customer', on_delete=models.CASCADE, related_name='returns')
     
-    return_number = models.CharField(_("Return Number"), max_length=50, unique=True)
+    # Unique within a workspace (Meta.unique_together): each workspace numbers its own returns.
+    return_number = models.CharField(_("Return Number"), max_length=50)
     
     status = models.CharField(_("Status"), max_length=20, choices=STATUS_CHOICES, default='open')
     
@@ -50,6 +51,8 @@ class Return(models.Model):
     created_at = models.DateTimeField(_("Created At"), default=timezone.now)
     updated_at = models.DateTimeField(_("Updated At"), auto_now=True)
     closed_at = models.DateTimeField(_("Closed At"), null=True, blank=True)
+    approved_at = models.DateTimeField(_("Approved At"), null=True, blank=True)
+    refunded_at = models.DateTimeField(_("Refunded At"), null=True, blank=True)
     
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, 

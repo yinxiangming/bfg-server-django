@@ -144,6 +144,25 @@ class SupportTicket(TenantScopedModel):
     def __str__(self):
         return f"{self.ticket_number} - {self.subject}"
 
+    @classmethod
+    def next_ticket_number(cls, workspace):
+        """The next ticket number for today in this workspace.
+
+        ``ticket_number`` is unique across workspaces, so it carries the workspace id.
+        """
+        prefix = f"TKT-{getattr(workspace, 'id', None) or 0}-{timezone.now().strftime('%Y%m%d')}-"
+        last_number = (
+            cls.all_objects.filter(ticket_number__startswith=prefix)
+            .order_by('-ticket_number')
+            .values_list('ticket_number', flat=True)
+            .first()
+        )
+        try:
+            last_sequence = int(last_number.rsplit('-', 1)[1]) if last_number else 0
+        except ValueError:
+            last_sequence = 0
+        return f"{prefix}{last_sequence + 1:04d}"
+
 
 class SupportTicketMessage(models.Model):
     """Support ticket message/reply."""

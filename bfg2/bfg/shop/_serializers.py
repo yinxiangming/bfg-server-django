@@ -501,6 +501,13 @@ class ReturnSerializer(serializers.ModelSerializer):
             return obj.customer.user.get_full_name()
         return None
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Staff and customers share this serializer, and the shop's note is for staff.
+        if not getattr(self.context.get('request'), 'is_staff_member', False):
+            data.pop('admin_note', None)
+        return data
+
 
 class CartItemSerializer(serializers.ModelSerializer):
     """Cart item serializer"""

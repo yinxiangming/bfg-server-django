@@ -661,9 +661,27 @@ class CustomerTagSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 
+class CustomerSelfSerializer(CustomerDetailSerializer):
+    """A customer's own record, as the customer sees it.
+
+    ``notes`` and ``credit_limit`` are the shop's working data about the customer, and
+    ``segments`` lists every active segment of the workspace with its rules. They stay
+    on ``CustomerDetailSerializer``, the staff view.
+    """
+    user_id = None
+    segments = None
+
+    class Meta(CustomerDetailSerializer.Meta):
+        fields = [
+            'id', 'workspace', 'user', 'customer_number', 'company_name', 'tax_number', 'balance',
+            'is_active', 'is_verified', 'verified_at', 'experience_points', 'addresses', 'created_at', 'updated_at'
+        ]
+        read_only_fields = fields
+
+
 class MeSerializer(serializers.ModelSerializer):
     """Me serializer - combines User and Customer info"""
-    customer = CustomerDetailSerializer(read_only=True)
+    customer = CustomerSelfSerializer(read_only=True)
 
     class Meta:
         model = User
@@ -699,7 +717,7 @@ class MeSerializer(serializers.ModelSerializer):
             )
             customer = service.get_customer_by_user(instance, request.workspace)
             if customer:
-                data['customer'] = CustomerDetailSerializer(customer, context=self.context).data
+                data['customer'] = CustomerSelfSerializer(customer, context=self.context).data
             else:
                 data['customer'] = None
 

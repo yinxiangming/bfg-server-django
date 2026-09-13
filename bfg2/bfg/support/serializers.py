@@ -206,6 +206,79 @@ class TicketPrioritySerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
+# --- A customer's view of their own tickets (/api/v1/me/tickets/) -------------------
+#
+# The serializers above are the staff view. They carry internal notes, the assignment
+# history and the assignee's contact details, none of which is for the customer.
+
+
+class CustomerTicketMessageSerializer(serializers.ModelSerializer):
+    """A message on a customer's own ticket: what was said, by whom, and when."""
+    sender_name = serializers.SerializerMethodField()
+    created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
+
+    class Meta:
+        model = SupportTicketMessage
+        fields = ['id', 'message', 'is_staff_reply', 'sender_name', 'created_at']
+        read_only_fields = fields
+
+    @extend_schema_field(OpenApiTypes.STR)
+    def get_sender_name(self, obj) -> Optional[str]:
+        # The full name only: a username is a login name, and is often an email address.
+        if obj.sender:
+            return obj.sender.get_full_name() or None
+        return None
+
+
+class CustomerTicketListSerializer(serializers.ModelSerializer):
+    """A customer's tickets. Who holds a ticket is the shop's business."""
+    category_name = serializers.SerializerMethodField()
+    priority_name = serializers.SerializerMethodField()
+    created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
+    updated_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S', read_only=True)
+
+    class Meta:
+        model = SupportTicket
+        fields = [
+            'id', 'ticket_number', 'subject', 'category', 'category_name',
+            'priority', 'priority_name', 'status', 'created_at', 'updated_at'
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(OpenApiTypes.STR)
+    def get_category_name(self, obj) -> Optional[str]:
+        return obj.category.name if obj.category else None
+
+    @extend_schema_field(OpenApiTypes.STR)
+    def get_priority_name(self, obj) -> Optional[str]:
+        return obj.priority.name if obj.priority else None
+
+
+class CustomerTicketDetailSerializer(CustomerTicketListSerializer):
+    """A customer's own ticket: what they asked, where it stands, and the replies meant for them."""
+    messages = serializers.SerializerMethodField()
+    messages_count = serializers.SerializerMethodField()
+
+    class Meta(CustomerTicketListSerializer.Meta):
+        fields = CustomerTicketListSerializer.Meta.fields + [
+            'description', 'channel', 'related_order', 'first_response_at', 'resolved_at', 'closed_at',
+            'messages', 'messages_count'
+        ]
+        read_only_fields = fields
+
+    @staticmethod
+    def _visible_messages(obj):
+        return sorted((message for message in obj.messages.all() if not message.is_internal), key=lambda message: message.id)
+
+    @extend_schema_field(CustomerTicketMessageSerializer(many=True))
+    def get_messages(self, obj):
+        return CustomerTicketMessageSerializer(self._visible_messages(obj), many=True).data
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_messages_count(self, obj) -> int:
+        return len(self._visible_messages(obj))
+
+
 class MeTicketCreateSerializer(serializers.ModelSerializer):
     """Serializer for customer creating a ticket via /api/v1/me/tickets/."""
 
@@ -216,4 +289,12 @@ class MeTicketCreateSerializer(serializers.ModelSerializer):
             'category': {'required': False, 'allow_null': True},
             'priority': {'required': False, 'allow_null': True},
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Only the request's workspace's active categories and priorities: the default
+        # querysets span every workspace.
+        workspace = getattr(self.context.get('request'), 'workspace', None)
+        for name, model in (('category', TicketCategory), ('priority', TicketPriority)):
+            self.fields[name].queryset = model.objects.filter(workspace=workspace, is_active=True)
 

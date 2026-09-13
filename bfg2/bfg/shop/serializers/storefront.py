@@ -495,10 +495,10 @@ class StorefrontOrderSerializer(serializers.ModelSerializer):
         }
     
     def get_customer(self, obj):
-        """Get customer details including user info"""
+        """The order's customer, as that customer sees their own record"""
         if obj.customer:
-            from bfg.common.serializers import CustomerDetailSerializer
-            return CustomerDetailSerializer(obj.customer, context=self.context).data
+            from bfg.common.serializers import CustomerSelfSerializer
+            return CustomerSelfSerializer(obj.customer, context=self.context).data
         return None
     
     def get_activities(self, obj):

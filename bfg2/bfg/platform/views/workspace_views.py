@@ -30,11 +30,11 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     list:   GET  /api/v1/platform/workspaces/          — user's workspaces
     create: POST /api/v1/platform/workspaces/          — create new workspace
     retrieve: GET /api/v1/platform/workspaces/{id}/
-    update: PATCH /api/v1/platform/workspaces/{id}/
+    update: PATCH /api/v1/platform/workspaces/{id}/        — never binds a custom domain
 
     @actions:
-      POST /api/v1/platform/workspaces/{id}/suspend/
-      POST /api/v1/platform/workspaces/{id}/resume/
+      POST /api/v1/platform/workspaces/{id}/suspend/   — platform admins only
+      POST /api/v1/platform/workspaces/{id}/resume/    — platform admins only
       GET  /api/v1/platform/workspaces/{id}/subscription/
       POST /api/v1/platform/workspaces/{id}/checkout/
       GET  /api/v1/platform/me/                        — my workspaces + platform admin flag
@@ -82,9 +82,12 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             'is_platform_admin': is_platform_admin(request.user),
         })
 
-    @action(detail=True, methods=['post'])
+    # Suspending takes a workspace offline for its staff and its customers alike,
+    # and resuming undoes a suspension whoever made it, so neither is a workspace
+    # staff action: the viewset-wide IsAuthenticated would let any staff role in.
+    @action(detail=True, methods=['post'], permission_classes=[IsPlatformAdmin])
     def suspend(self, request, pk=None):
-        """POST /api/v1/platform/workspaces/{id}/suspend/"""
+        """POST /api/v1/platform/workspaces/{id}/suspend/ — platform admins only."""
         workspace = self.get_object()
         suspend_workspace(
             workspace,
@@ -93,9 +96,9 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         )
         return Response({'status': 'suspended'})
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[IsPlatformAdmin])
     def resume(self, request, pk=None):
-        """POST /api/v1/platform/workspaces/{id}/resume/"""
+        """POST /api/v1/platform/workspaces/{id}/resume/ — platform admins only."""
         workspace = self.get_object()
         resume_workspace(workspace, initiated_by=request.user)
         return Response({'status': 'active'})

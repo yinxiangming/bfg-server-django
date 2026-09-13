@@ -7,16 +7,22 @@ Coverage:
 * Prod-mode: X-Workspace-ID ignored when Bearer present (security assertion)
 * Non-prod / anonymous: X-Workspace-ID still honoured
 * Anonymous + X-Forwarded-Host domain lookup still works
-* switch-workspace: happy path, non-member 403, inactive workspace 404
+* switch-workspace: happy path, non-member 403, inactive workspace 404,
+  default_workspace recorded for staff only
+* Token refresh: keeps the refresh token's workspace while the user can still
+  work there, otherwise falls back to the sign-in choice
 * Session-auth non-member defence-in-depth 403
 """
+
+from datetime import timedelta
 
 import pytest
 from django.core.cache import cache
 from django.test import Client, override_settings
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.test import APIClient
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
 from bfg.common.models import (
     Workspace,
@@ -44,6 +50,36 @@ def _mint_token(user, workspace_id=None):
 
 def _bearer(token):
     return {'HTTP_AUTHORIZATION': f'Bearer {token}'}
+
+
+def _join(user, workspace, membership='staff', **fields):
+    """Give ``user`` an active staff membership or customer profile in ``workspace``."""
+    if membership == 'customer':
+        return Customer.objects.create(workspace=workspace, user=user, is_active=True, **fields)
+    role, _ = StaffRole.objects.get_or_create(workspace=workspace, code='admin', defaults={'name': 'Admin'})
+    return StaffMember.objects.create(workspace=workspace, user=user, role=role, is_active=True, **fields)
+
+
+def _switch(user, workspace):
+    """Switch ``user`` into ``workspace``; return the refresh token it hands back."""
+    client = APIClient()
+    client.force_authenticate(user=user)
+    resp = client.post('/api/v1/platform/switch-workspace/', {'workspace_id': workspace.id})
+    assert resp.status_code == 200, resp.json()
+    return resp.json()['refresh']
+
+
+def _refresh(refresh):
+    """Refresh as a client does once its access token expires.
+
+    Returns the rotated refresh token and the workspace_id claims of the new
+    access and refresh tokens.
+    """
+    resp = APIClient().post('/api/v1/auth/token/refresh/', {'refresh': refresh}, format='json')
+    assert resp.status_code == 200, resp.json()
+    data = resp.json()
+    access, rotated = AccessToken(data['access']), RefreshToken(data['refresh'])
+    return data['refresh'], access.get('workspace_id'), rotated.get('workspace_id')
 
 
 # ─── fixtures ────────────────────────────────────────────────────────
@@ -87,6 +123,18 @@ def customer_user(db, ws):
     return u
 
 
+@pytest.fixture
+def rotating_refresh_tokens(monkeypatch):
+    """Rotate and blacklist refresh tokens on use, as config/settings.py deploys them.
+
+    Patched on the settings object config.serializers imported: override_settings
+    would have simplejwt build a new one, which the serializer never sees.
+    """
+    from config import serializers
+    monkeypatch.setattr(serializers.jwt_api_settings, 'ROTATE_REFRESH_TOKENS', True)
+    monkeypatch.setattr(serializers.jwt_api_settings, 'BLACKLIST_AFTER_ROTATION', True)
+
+
 # ─── JWT claim minting ───────────────────────────────────────────────
 
 
@@ -119,6 +167,18 @@ class TestJwtClaimMinting:
         refresh = CustomTokenObtainPairSerializer.get_token(u)
         # default_workspace is ws_default and user is staff there → should be preferred
         assert refresh['workspace_id'] == ws_default.id
+
+    @pytest.mark.parametrize('membership', ['staff', 'customer'])
+    def test_membership_in_deactivated_workspace_does_not_hide_an_older_one(self, user, ws, ws2, membership):
+        from config.serializers import CustomTokenObtainPairSerializer
+        _join(user, ws, membership, created_at=timezone.now() - timedelta(days=1))
+        _join(user, ws2, membership)
+        ws2.is_active = False
+        ws2.save()
+
+        refresh = CustomTokenObtainPairSerializer.get_token(user)
+
+        assert refresh['workspace_id'] == ws.id
 
 
 # ─── _decode_jwt_workspace_id ────────────────────────────────────────
@@ -384,6 +444,63 @@ class TestSwitchWorkspace:
         client.force_authenticate(user=customer_user)
         resp = client.post('/api/v1/platform/switch-workspace/', {'workspace_id': ws.id})
         assert resp.status_code == 200
+
+    def test_staff_switch_becomes_default_workspace(self, staff_user, ws2):
+        from config.serializers import CustomTokenObtainPairSerializer
+        _join(staff_user, ws2)
+
+        _switch(staff_user, ws2)
+
+        staff_user.refresh_from_db()
+        assert staff_user.default_workspace_id == ws2.id
+        # ...which is where the next sign-in lands
+        assert CustomTokenObtainPairSerializer.get_token(staff_user)['workspace_id'] == ws2.id
+
+    def test_customer_switch_leaves_default_workspace_alone(self, staff_user, ws, ws2):
+        _join(staff_user, ws2, 'customer')
+
+        _switch(staff_user, ws2)
+
+        staff_user.refresh_from_db()
+        assert staff_user.default_workspace_id == ws.id
+
+
+# ─── Token refresh keeps the switched workspace ──────────────────────
+
+
+@pytest.mark.usefixtures('rotating_refresh_tokens')
+class TestTokenRefreshWorkspace:
+    @pytest.mark.parametrize('membership', ['staff', 'customer'])
+    def test_switched_workspace_survives_consecutive_refreshes(self, staff_user, ws2, membership):
+        # A customer switch leaves default_workspace on ws, so only the token's own claim keeps ws2.
+        _join(staff_user, ws2, membership)
+        refresh = _switch(staff_user, ws2)
+
+        for _ in range(2):
+            refresh, access_ws, refresh_ws = _refresh(refresh)
+            assert (access_ws, refresh_ws) == (ws2.id, ws2.id)
+
+    @pytest.mark.parametrize('lost', ['membership_revoked', 'workspace_deactivated'])
+    def test_unusable_workspace_falls_back_to_sign_in_choice(self, staff_user, ws, ws2, lost):
+        _join(staff_user, ws2)
+        refresh = _switch(staff_user, ws2)
+        if lost == 'membership_revoked':
+            StaffMember.all_objects.filter(workspace=ws2, user=staff_user).update(is_active=False)
+        else:
+            ws2.is_active = False
+            ws2.save()
+
+        _, access_ws, refresh_ws = _refresh(refresh)
+
+        # The switch made ws2 default_workspace, and it holds the newest membership:
+        # neither may keep the session there.
+        assert (access_ws, refresh_ws) == (ws.id, ws.id)
+
+    def test_token_without_workspace_claim_gets_sign_in_choice(self, staff_user, ws):
+        # As minted before tokens carried the claim.
+        _, access_ws, refresh_ws = _refresh(str(RefreshToken.for_user(staff_user)))
+
+        assert (access_ws, refresh_ws) == (ws.id, ws.id)
 
 
 # ─── Defence-in-depth: session-auth non-member → 403 ────────────────

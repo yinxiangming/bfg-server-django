@@ -3,14 +3,16 @@
 Workspace Service
 Handles workspace listing and management from the Platform perspective.
 
-Supports two modes:
-  - Embedded: queries StaffMember directly (same DB)
-  - Standalone: queries PlatformMembership (dedicated Platform instance)
+Supports two modes, which differ in what makes a user a member of a workspace:
+  - Embedded: an active StaffMember (same DB)
+  - Standalone: an active PlatformMembership (dedicated Platform instance)
+
+Ownership is the same in both modes; see ``bfg.platform.services.ownership``.
 """
-from django.conf import settings
 from django.apps import apps
 
 from bfg.common.models import resolve_workspace_public_frontend_base_url
+from bfg.platform.services.ownership import owned_workspace_ids
 from bfg.platform.utils import is_embedded_mode
 
 
@@ -26,10 +28,29 @@ def _safe_workspace_domain(workspace):
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def get_user_workspaces(user) -> list:
-    """Return workspaces the user has access to."""
-    if is_embedded_mode():
-        return _get_user_workspaces_embedded(user)
-    return _get_user_workspaces_standalone(user)
+    """Return the workspaces *user* is a member of or owns, with their standing in each.
+
+    Workspaces the user is a member of come first, in membership order; those
+    they own without being a member follow, by id. An owned workspace is listed
+    while suspended or inactive too, so its owner can still find it.
+    """
+    member_roles = _member_roles(user)
+    owned_ids = owned_workspace_ids(user)
+    ids = list(member_roles) + [workspace_id for workspace_id in owned_ids if workspace_id not in member_roles]
+
+    Workspace = apps.get_model("common", "Workspace")
+    workspaces = Workspace.objects.select_related("platform_profile").in_bulk(ids)
+    owned = set(owned_ids)
+    return [
+        _workspace_entry(
+            workspaces[workspace_id],
+            role=member_roles.get(workspace_id),
+            is_member=workspace_id in member_roles,
+            is_owner=workspace_id in owned,
+        )
+        for workspace_id in ids
+        if workspace_id in workspaces
+    ]
 
 
 def is_platform_admin(user) -> bool:
@@ -39,42 +60,63 @@ def is_platform_admin(user) -> bool:
     return _is_platform_admin_standalone(user)
 
 
-# ── Embedded mode ─────────────────────────────────────────────────────────────
+# ── Workspace listing ─────────────────────────────────────────────────────────
 
-def _get_user_workspaces_embedded(user) -> list:
-    """Embedded: list workspaces via StaffMember (same DB).
+def _member_roles(user) -> dict:
+    """``{workspace id: role code}`` for the workspaces *user* is an active member of.
 
-    Uses ``all_objects`` (unscoped manager) — this is a cross-workspace
-    query by definition; ``StaffMember.objects`` would clamp the queryset
-    to the request's resolved workspace and miss every other membership.
+    Embedded, membership is a StaffMember. This is a cross-workspace lookup, so
+    it goes through ``all_objects``: the scoped manager only sees the workspace
+    bound to the request, and platform endpoints bind none.
+
+    Standalone, membership is a PlatformMembership, the record token exchange
+    lets a user into a workspace by. One whose profile has no local workspace
+    row is left out: there is no id, name or slug to list it by.
     """
-    StaffMember = apps.get_model("common", "StaffMember")
-    memberships = (
-        StaffMember.all_objects.filter(user=user, is_active=True)
-        .select_related("workspace", "role")
-    )
+    if is_embedded_mode():
+        StaffMember = apps.get_model("common", "StaffMember")
+        rows = StaffMember.all_objects.filter(user=user, is_active=True).values_list(
+            "workspace_id", "role__code",
+        )
+    else:
+        PlatformMembership = apps.get_model("platform", "PlatformMembership")
+        rows = PlatformMembership.objects.filter(
+            user=user, is_active=True, profile__workspace__isnull=False,
+        ).values_list("profile__workspace_id", "role")
+    return dict(rows)
 
-    platform_slug = getattr(settings, "PLATFORM_WORKSPACE_SLUG", "")
-    result = []
-    for m in memberships:
-        ws = m.workspace
-        result.append({
-            "id": ws.id,
-            "uuid": str(ws.uuid) if getattr(ws, "uuid", None) else None,
-            "remote_workspace_uuid": None,
-            "name": ws.name,
-            "slug": ws.slug,
-            "domain": _safe_workspace_domain(ws),
-            "is_active": ws.is_active,
-            "role": m.role.code if m.role else "staff",
-            "is_platform": ws.slug == platform_slug,
-            "plan": None,
-            "status": "active" if ws.is_active else "suspended",
-            "region": None,
-            "cluster": None,
-        })
-    return result
 
+def _workspace_entry(workspace, *, role, is_member, is_owner) -> dict:
+    profile = getattr(workspace, "platform_profile", None)
+    return {
+        "id": workspace.id,
+        "name": workspace.name,
+        "slug": workspace.slug,
+        "created_at": workspace.created_at,
+        "domain": _safe_workspace_domain(workspace),
+        "status": _get_workspace_status(workspace, profile),
+        "suspended_at": profile.suspended_at if profile else None,
+        "role": role,
+        "is_member": is_member,
+        "is_owner": is_owner,
+        # Billing is not served here yet; these hold its place in the payload.
+        "plan": None,
+        "credits": None,
+        "extensions": [],
+    }
+
+
+def _get_workspace_status(workspace, profile) -> str:
+    if workspace and not workspace.is_active:
+        if profile and profile.suspended_at:
+            return "suspended"
+        return "inactive"
+    if profile and profile.is_suspended:
+        return "suspended"
+    return "active"
+
+
+# ── Embedded mode ─────────────────────────────────────────────────────────────
 
 def _is_platform_admin_embedded(user) -> bool:
     """Embedded: user is admin of the management Workspace."""
@@ -92,51 +134,6 @@ def _is_platform_admin_embedded(user) -> bool:
 
 
 # ── Standalone mode ───────────────────────────────────────────────────────────
-
-def _get_user_workspaces_standalone(user) -> list:
-    """Standalone: list workspaces via PlatformMembership."""
-    PlatformMembership = apps.get_model("platform", "PlatformMembership")
-    memberships = (
-        PlatformMembership.objects.filter(user=user, is_active=True)
-        .select_related(
-            "profile",
-            "profile__workspace",
-            "profile__cluster",
-        )
-    )
-
-    result = []
-    for m in memberships:
-        profile = m.profile
-        ws = profile.workspace
-
-        result.append({
-            "id": ws.id if ws else profile.id,
-            "uuid": str(ws.uuid) if ws and getattr(ws, "uuid", None) else None,
-            "remote_workspace_uuid": str(profile.remote_workspace_uuid) if profile.remote_workspace_uuid else None,
-            "name": ws.name if ws else None,
-            "slug": ws.slug if ws else None,
-            "domain": _safe_workspace_domain(ws),
-            "is_active": ws.is_active if ws else not profile.is_suspended,
-            "role": m.role,
-            "is_platform": False,
-            "plan": None,
-            "status": _get_workspace_status(ws, profile),
-            "region": profile.region,
-            "cluster": profile.cluster.id if profile.cluster else None,
-        })
-    return result
-
-
-def _get_workspace_status(workspace, profile) -> str:
-    if workspace and not workspace.is_active:
-        if profile and profile.suspended_at:
-            return "suspended"
-        return "inactive"
-    if profile and profile.is_suspended:
-        return "suspended"
-    return "active"
-
 
 def _is_platform_admin_standalone(user) -> bool:
     """Standalone: superuser or staff flag."""

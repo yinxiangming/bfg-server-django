@@ -3,9 +3,8 @@
 Let installed apps contribute to the setup checklist.
 
 BFG ships the checklist every shop needs — currency, tax, legal pages, a
-payment method. A deployment always has more than that: this codebase alone adds
-marketplace channels, address lookup, WeChat identity and a legacy importer, and
-none of them belong in a library that other installs use without them.
+payment method. A deployment usually adds checks of its own, and none of them
+belong in a library that other installs use without them.
 
 Discovery is by convention, the same as ``dashboard_extensions``: an app exposes
 ``<app>/onboarding_setup.py`` and it is picked up. Nothing to register, no
@@ -15,7 +14,7 @@ contributes nothing rather than leaving a dead row on the checklist.
 A provider module may define any of:
 
 ``ONBOARDING_ITEMS``
-    ``{step_key: [Item, ...]}`` — rows appended to a step BFG already defines.
+    ``{step_key: [Item, ...]}`` — rows appended to a step BFG or another app defines.
 ``ONBOARDING_STEPS``
     ``[Step, ...]`` — a whole step of its own, appended after BFG's.
 ``get_custom_settings_patch(plan, workspace)``
@@ -32,8 +31,15 @@ A provider module may define any of:
     shop's category tree does not belong in a library that most installs use
     without one.
 
-Item keys must be namespaced by the contributing app (``channels.connected``,
-not ``connected``) — the checklist is a flat key space and ``skip`` addresses
+An app that ships an extension manifest (see ``bfg.common.extensions``) adds rows
+and steps only to the checklists of workspaces using that extension, and rows other
+apps file under its step go with it. Its industries, template fragments and settings
+patch reach every workspace. The wizard runs when a shop is first set up, before it
+has switched anything on, and pre-filled configuration is simply ready once the
+extension is.
+
+Item keys must be namespaced by the contributing app (``reviews.enabled``,
+not ``enabled``) — the checklist is a flat key space and ``skip`` addresses
 rows by key.
 """
 
@@ -66,31 +72,56 @@ def _iter_provider_modules():
             logger.exception('Onboarding provider %s failed to import', module_name)
 
 
-def collect() -> Tuple[List[Any], Dict[str, List[Any]], List[Any]]:
-    """``(extra_steps, items_by_step_key, patch_providers)``, computed once."""
+def collect(workspace=None) -> Tuple[List[Any], Dict[str, List[Any]], List[Any]]:
+    """``(extra_steps, items_by_step_key, patch_providers)`` for ``workspace``'s checklist.
+
+    Steps and rows from an extension the workspace does not use are left out, and so
+    are rows other apps file under such a step. Without a workspace every workspace
+    extension counts as off, as it does for ``is_available``. Settings patches are
+    never left out; see the module docstring.
+    """
+    from bfg.common.extensions import unavailable_apps
+
     data = collect_all()
-    return data['steps'], data['items'], data['patch_providers']
+    hidden = unavailable_apps(workspace)
+
+    steps = [step for label, step in data['steps'] if label not in hidden]
+    hidden_steps = {step.key for label, step in data['steps'] if label in hidden}
+    hidden_steps -= {step.key for step in steps}
+    items: Dict[str, List[Any]] = {}
+    for step_key, rows in data['items'].items():
+        if step_key in hidden_steps:
+            continue
+        kept = [item for label, item in rows if label not in hidden]
+        if kept:
+            items[step_key] = kept
+    return steps, items, data['patch_providers']
 
 
 def collect_all() -> Dict[str, Any]:
-    """Everything the installed apps contribute, discovered once per process."""
+    """Everything the installed apps contribute, discovered once per process.
+
+    Steps and items keep the label of the app that contributed them, which is what
+    ``collect`` filters on.
+    """
     global _cache
     if _cache is not None:
         return _cache
 
-    extra_steps: List[Any] = []
-    items: Dict[str, List[Any]] = {}
+    extra_steps: List[Tuple[str, Any]] = []
+    items: Dict[str, List[Tuple[str, Any]]] = {}
     patch_providers: List[Any] = []
     industries: List[Dict[str, Any]] = []
     fragment_providers: List[Any] = []
 
     for app_config, module in _iter_provider_modules():
+        label = app_config.label
         for step in getattr(module, 'ONBOARDING_STEPS', ()) or ():
-            extra_steps.append(step)
+            extra_steps.append((label, step))
         contributed = getattr(module, 'ONBOARDING_ITEMS', None) or {}
         if isinstance(contributed, dict):
             for step_key, step_items in contributed.items():
-                items.setdefault(step_key, []).extend(step_items)
+                items.setdefault(step_key, []).extend((label, item) for item in step_items)
         else:
             logger.warning(
                 'ONBOARDING_ITEMS in app %s is %s, expected dict',

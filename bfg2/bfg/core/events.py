@@ -126,13 +126,14 @@ class EventDispatcher:
         
         Args:
             event_name: Event name
-            callback: Callback function
+            callback: Callback function, or the callback a wrapping listener was
+                registered for (``bfg.common.extensions.listen_for``)
         """
-        if event_name in self.listeners:
-            try:
-                self.listeners[event_name].remove(callback)
-            except ValueError:
-                pass
+        listeners = self.listeners.get(event_name, [])
+        for registered in listeners:
+            if registered == callback or getattr(registered, '__wrapped__', None) == callback:
+                listeners.remove(registered)
+                return
 
 
 # Global event dispatcher instance

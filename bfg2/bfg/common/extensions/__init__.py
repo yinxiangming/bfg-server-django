@@ -4,9 +4,11 @@ Extensions a workspace can switch on or off.
 
 An extension author imports the manifest types from here. Everything that needs to
 know whether an extension is live for a workspace asks ``is_available``; scheduled
-work asks ``workspaces_with``, and lists filter with ``where_available``. Views refuse
-requests with ``permissions.RequiresExtension``. See ``manifest``, ``registry``,
-``services`` and ``permissions``.
+work asks ``workspaces_with``, lists filter with ``where_available``, and event
+listeners register with ``listen_for``. Views refuse requests with
+``permissions.RequiresExtension``. Code that collects what every installed app
+contributes leaves out the apps in ``unavailable_apps``. See ``manifest``,
+``registry``, ``services``, ``events`` and ``permissions``.
 """
 
 from bfg.common.extensions.manifest import (  # noqa: F401
@@ -52,3 +54,17 @@ def where_available(key, *, workspace_field='workspace'):
     from bfg.common.extensions import services
 
     return services.where_available(key, workspace_field=workspace_field)
+
+
+def unavailable_apps(workspace):
+    """Labels of the apps whose extension is not available to ``workspace``; see ``services.unavailable_apps``."""
+    from bfg.common.extensions import services
+
+    return services.unavailable_apps(workspace)
+
+
+def listen_for(key, event_name, callback, *, workspace_of=None):
+    """Register an event listener that hears only the workspaces using ``key``; see ``events.listen_for``."""
+    from bfg.common.extensions import events
+
+    return events.listen_for(key, event_name, callback, workspace_of=workspace_of)

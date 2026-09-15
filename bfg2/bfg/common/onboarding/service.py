@@ -122,7 +122,7 @@ class OnboardingService(BaseService):
         """Mark a checklist item as a deliberate non-decision, or undo that."""
         from .checklist import items_by_key
 
-        if item_key not in items_by_key():
+        if item_key not in items_by_key(self.workspace):
             raise ValueError(f'Unknown checklist item: {item_key}')
         state = self.get_state()
         current = set(state.get('skipped') or [])

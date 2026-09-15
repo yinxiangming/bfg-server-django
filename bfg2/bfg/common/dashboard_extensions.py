@@ -4,6 +4,8 @@ from typing import Any
 
 from django.apps import apps
 
+from bfg.common.extensions import unavailable_apps
+
 logger = logging.getLogger(__name__)
 
 DASHBOARD_STATS_MODULE = "dashboard_stats"
@@ -16,10 +18,14 @@ def collect_me_dashboard_stats(request: Any, workspace: Any, customer: Any) -> d
 
     Apps can expose `<app>.dashboard_stats.get_me_dashboard_stats(...)` and
     return a dict that will be merged into the `/me/dashboard-stats/` payload.
+    An app whose extension the workspace does not use is skipped.
     """
     stats: dict[str, Any] = {}
+    switched_off = unavailable_apps(workspace)
 
     for app_config in apps.get_app_configs():
+        if app_config.label in switched_off:
+            continue
         module_name = f"{app_config.name}.{DASHBOARD_STATS_MODULE}"
         try:
             module = import_module(module_name)

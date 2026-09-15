@@ -2321,7 +2321,7 @@ class OptionsView(APIView):
 
         # Collect options from registered modules
         options = {}
-        for module_path in self.get_option_providers():
+        for module_path in self.get_option_providers(workspace):
             try:
                 module = __import__(module_path, fromlist=['get_options'])
                 if hasattr(module, 'get_options'):
@@ -2336,13 +2336,19 @@ class OptionsView(APIView):
 
         return Response(options)
 
-    def get_option_providers(self):
+    def get_option_providers(self, workspace=None):
         """
         Dynamically discover option providers from installed bfg.* apps.
-        Looks for <app>.options with a get_options(workspace) function.
+        Looks for <app>.options with a get_options(workspace) function, skipping apps
+        whose extension the workspace does not use.
         """
+        from bfg.common.extensions import unavailable_apps
+
+        switched_off = unavailable_apps(workspace)
         providers = []
         for app_config in apps.get_app_configs():
+            if app_config.label in switched_off:
+                continue
             module_path = f"{app_config.name}.options"
             try:
                 module = importlib.import_module(module_path)

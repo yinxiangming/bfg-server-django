@@ -17,11 +17,11 @@ from django.core.management import CommandError, call_command
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.test import APIClient, APIRequestFactory
+from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 from rest_framework.views import APIView
 
 from bfg.common.extensions import permissions as extension_permissions
-from bfg.common.extensions import registry, services
+from bfg.common.extensions import listen_for, registry, services
 from bfg.common.extensions.permissions import RequiresExtension
 from bfg.common.extensions.manifest import (
     SCOPE_PLATFORM,
@@ -701,3 +701,223 @@ def test_lists_can_keep_only_the_rows_of_workspaces_using_an_extension(workspace
         == Workspace.objects.count()
     )
     assert not Workspace.objects.filter(services.where_available('not_deployed', workspace_field=None)).exists()
+
+
+# ── Listeners and contributions ──────────────────────────────────────
+
+
+def test_the_apps_of_extensions_a_workspace_does_not_use_are_listed(workspace):
+    assert services.unavailable_apps(workspace) == {'reviews_app', 'insights_app', 'maps_app'}
+
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    services.invalidate(workspace.id)
+
+    # Review insights still waits for its own activation; sign-in and the importer are always available.
+    assert services.unavailable_apps(workspace) == {'insights_app', 'maps_app'}
+    assert services.unavailable_apps(None) == {'reviews_app', 'insights_app', 'maps_app'}
+
+
+@pytest.fixture
+def dispatcher(monkeypatch):
+    from bfg.core import events
+
+    fresh = events.EventDispatcher()
+    monkeypatch.setattr(events, 'global_dispatcher', fresh)
+    return fresh
+
+
+def test_a_listener_hears_only_the_workspaces_that_use_its_extension(workspace, dispatcher):
+    other = Workspace.objects.create(name='Other', slug='other-ws', is_active=True)
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    heard = []
+    listen_for('reviews', 'review.requested', heard.append)
+
+    for each in (workspace, other):
+        dispatcher.dispatch('review.requested', {'workspace': each, 'user': None, 'data': {}})
+    # Some events carry the workspace in their data, as workspace.created does.
+    dispatcher.dispatch('review.requested', {'data': {'workspace': other}})
+    dispatcher.dispatch('review.requested', {'data': {'workspace': workspace}})
+
+    assert heard == [
+        {'workspace': workspace, 'user': None, 'data': {}},
+        {'data': {'workspace': workspace}},
+    ]
+
+
+def test_a_workspace_extension_does_not_hear_events_without_a_workspace(dispatcher, caplog):
+    caplog.set_level('WARNING', logger='bfg.common.extensions.events')
+    reviews, sign_in = [], []
+    listen_for('reviews', 'nightly.digest', reviews.append)
+    listen_for('sign_in', 'nightly.digest', sign_in.append)
+
+    for _ in range(2):
+        dispatcher.dispatch('nightly.digest', {'data': {}})
+
+    assert (reviews, len(sign_in)) == ([], 2)
+    # Said once, so an emitter that leaves the workspace out can be found.
+    skipped = [record.levelname for record in caplog.records if 'names no workspace' in record.getMessage()]
+    assert skipped == ['WARNING']
+
+
+def test_a_listener_can_say_where_its_events_keep_the_workspace(workspace, dispatcher):
+    other = Workspace.objects.create(name='Other', slug='other-ws', is_active=True)
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    heard = []
+    listen_for(
+        'reviews', 'order.reviewable', heard.append,
+        workspace_of=lambda event: event['data']['order'].workspace,
+    )
+
+    for each in (workspace, other):
+        dispatcher.dispatch('order.reviewable', {'data': {'order': types.SimpleNamespace(workspace=each)}})
+
+    assert [event['data']['order'].workspace for event in heard] == [workspace]
+
+
+def test_a_listener_can_be_removed_by_the_callback_it_wraps(workspace, dispatcher):
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    heard = []
+
+    def on_review_requested(event):
+        heard.append(event)
+
+    listen_for('reviews', 'review.requested', on_review_requested)
+    dispatcher.remove_listener('review.requested', on_review_requested)
+    dispatcher.dispatch('review.requested', {'workspace': workspace, 'data': {}})
+
+    assert heard == []
+    assert dispatcher.listeners['review.requested'] == []
+
+
+def test_a_listener_waiting_on_an_undeclared_extension_never_runs_and_says_so(dispatcher, caplog):
+    heard = []
+    listen_for('reveiws', 'review.requested', heard.append)
+
+    for _ in range(2):
+        dispatcher.dispatch('review.requested', {'data': {}})
+
+    assert heard == []
+    assert [record.levelname for record in caplog.records if 'reveiws' in record.getMessage()] == ['ERROR']
+
+
+def test_dashboard_stats_skip_apps_whose_extension_is_off(workspace, monkeypatch):
+    from bfg.common import dashboard_extensions
+
+    installed = []
+    for name, label, stats in (
+        ('reviews_pkg', 'reviews_app', {'reviews_to_write': 2}),
+        ('points_pkg', 'points', {'points': 5}),
+    ):
+        module = types.ModuleType(f'{name}.dashboard_stats')
+        module.get_me_dashboard_stats = lambda request, workspace, customer, stats=stats: stats
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+        monkeypatch.setitem(sys.modules, f'{name}.dashboard_stats', module)
+        installed.append(types.SimpleNamespace(name=name, label=label))
+    monkeypatch.setattr(dashboard_extensions, 'apps', types.SimpleNamespace(get_app_configs=lambda: installed))
+
+    assert dashboard_extensions.collect_me_dashboard_stats(None, workspace, None) == {'points': 5}
+
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    services.invalidate(workspace.id)
+
+    assert dashboard_extensions.collect_me_dashboard_stats(None, workspace, None) == {
+        'points': 5, 'reviews_to_write': 2,
+    }
+
+
+def _request(view_class, workspace, data=None):
+    factory = APIRequestFactory()
+    request = factory.get('/') if data is None else factory.post('/', data, format='json')
+    request.workspace = workspace
+    force_authenticate(request, user=User(username='staff'))
+    return view_class.as_view()(request)
+
+
+def test_options_skip_apps_whose_extension_is_off(workspace, monkeypatch):
+    from bfg.common import views as common_views
+
+    installed = []
+    for name, label in (('reviews_pkg', 'reviews_app'), ('points_pkg', 'points')):
+        module = types.ModuleType(f'{name}.options')
+        module.get_options = lambda workspace, name=name: {name: ['a']}
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+        monkeypatch.setitem(sys.modules, f'{name}.options', module)
+        installed.append(types.SimpleNamespace(name=name, label=label))
+    monkeypatch.setattr(common_views, 'apps', types.SimpleNamespace(get_app_configs=lambda: installed))
+
+    assert _request(common_views.OptionsView, workspace).data == {'points_pkg': ['a']}
+
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    services.invalidate(workspace.id)
+
+    assert _request(common_views.OptionsView, workspace).data == {'reviews_pkg': ['a'], 'points_pkg': ['a']}
+
+
+@pytest.fixture
+def capabilities(monkeypatch):
+    from bfg.core.agent import AgentCapability, AgentCapabilityRegistry
+
+    def handler(request, **arguments):
+        return {'success': True}
+
+    fake = {
+        capability.id: capability
+        for capability in (
+            AgentCapability(
+                id='reviews.summarise', name='Summarise reviews', description='',
+                app_label='reviews_app', input_schema={}, handler=handler,
+            ),
+            AgentCapability(
+                id='orders.count', name='Count orders', description='',
+                app_label='shop', input_schema={}, handler=handler,
+            ),
+        )
+    }
+    monkeypatch.setattr(AgentCapabilityRegistry, '_capabilities', fake)
+    return fake
+
+
+def test_agents_are_offered_only_the_capabilities_a_workspace_can_use(workspace, capabilities):
+    from bfg.core.agent_views import AgentCapabilitiesView
+
+    def offered():
+        return [capability['id'] for capability in _request(AgentCapabilitiesView, workspace).data['capabilities']]
+
+    assert offered() == ['orders.count']
+
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    services.invalidate(workspace.id)
+
+    assert offered() == ['reviews.summarise', 'orders.count']
+
+
+def test_a_capability_of_a_switched_off_extension_is_not_executed(workspace, capabilities):
+    from bfg.core.agent_views import AgentExecuteView
+
+    def execute(capability_id):
+        return _request(AgentExecuteView, workspace, {'capability_id': capability_id})
+
+    refused = execute('reviews.summarise')
+    assert refused.status_code == 403
+    assert refused.data['code'] == 'extension_disabled'
+    assert execute('orders.count').status_code == 200
+
+    WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
+    services.invalidate(workspace.id)
+
+    assert execute('reviews.summarise').status_code == 200
+
+
+def test_a_capability_must_name_an_installed_app(monkeypatch):
+    from bfg.core.agent import AgentCapability, AgentCapabilityRegistry
+
+    monkeypatch.setattr(AgentCapabilityRegistry, '_capabilities', {})
+    stray = AgentCapability(
+        id='stray.lookup', name='Stray lookup', description='', app_label='not_an_app',
+        input_schema={}, handler=lambda request: {},
+    )
+
+    with pytest.raises(ValueError, match='not_an_app'):
+        AgentCapabilityRegistry.register(stray)
+    AgentCapabilityRegistry.register(replace(stray, app_label='shop'))
+    assert AgentCapabilityRegistry.get('stray.lookup').app_label == 'shop'

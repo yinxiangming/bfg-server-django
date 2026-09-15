@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.http import StreamingHttpResponse
 
+from bfg.common.extensions.permissions import EXTENSION_DISABLED
 from bfg.core.agent import AgentCapabilityRegistry, AgentCapability, _FakeView
 from bfg.core.api_tool_catalog import get_api_tools, execute_api_tool
 
@@ -193,7 +194,8 @@ class AgentExecuteView(APIView):
     """
     POST /api/v1/agent/execute/
     Body: { "capability_id": "delivery.ship_order", "arguments": { "order_id": 123, ... } }
-    Validates capability exists, user has permission, arguments match input_schema, then calls handler.
+    Validates capability exists, user has permission, the workspace can use it, arguments match input_schema,
+    then calls handler.
     """
     permission_classes = [IsAuthenticated]
 
@@ -232,6 +234,15 @@ class AgentExecuteView(APIView):
         if not _user_has_permission_for_capability(request, capability):
             return Response(
                 {"detail": "You do not have permission to execute this capability."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not AgentCapabilityRegistry.workspace_can_use(request, capability):
+            return Response(
+                {
+                    "code": EXTENSION_DISABLED,
+                    "detail": f"{capability_id} belongs to an extension that is not enabled for this workspace.",
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
 

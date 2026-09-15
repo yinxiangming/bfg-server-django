@@ -190,6 +190,19 @@ def where_available(key: str, *, workspace_field: str | None = 'workspace'):
     return Q(**{f'{prefix}__key': key, f'{prefix}__status': WorkspaceExtension.STATUS_ACTIVE})
 
 
+def unavailable_apps(workspace) -> FrozenSet[str]:
+    """Labels of the installed apps whose extension is not available to ``workspace``.
+
+    For code that collects what every installed app contributes (checklist rows,
+    dashboard stats, agent capabilities) and must leave out the extensions a workspace
+    does not use. An app that ships no manifest is never listed.
+    """
+    live = available_keys(workspace)
+    return frozenset(
+        manifest.app_label for manifest in registry.all_manifests() if manifest.key not in live
+    )
+
+
 def invalidate(workspace_id: int) -> None:
     """Drop cached answers that depend on which extensions a workspace uses."""
     cache.delete(available_cache_key(workspace_id))

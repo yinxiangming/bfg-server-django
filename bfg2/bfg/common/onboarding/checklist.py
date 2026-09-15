@@ -458,18 +458,21 @@ STEPS: List[Step] = [
     ),
 ]
 
-def resolved_steps() -> List[Step]:
-    """BFG's steps plus whatever the installed apps contribute.
+def resolved_steps(workspace=None) -> List[Step]:
+    """BFG's steps plus whatever the installed apps contribute to ``workspace``.
 
-    Contributed rows are appended to the step they name, so an app's checks sit
-    with the ones they belong next to rather than in a bolted-on section at the
-    bottom. A contribution naming a step that does not exist becomes its own
-    step instead of being dropped silently.
+    Contributed rows are appended to the step they name, BFG's or another app's,
+    so an app's checks sit with the ones they belong next to rather than in a
+    bolted-on section at the bottom. A contribution naming a step that does not
+    exist becomes its own step instead of being dropped silently.
+
+    What an extension the workspace does not use contributes is left out; see
+    ``extensions.collect``.
     """
     from .extensions import collect
 
-    extra_steps, contributed_items, _patches = collect()
-    known = {step.key for step in STEPS}
+    extra_steps, contributed_items, _patches = collect(workspace)
+    steps = [*STEPS, *extra_steps]
 
     merged = [
         Step(
@@ -478,14 +481,11 @@ def resolved_steps() -> List[Step]:
             icon=step.icon,
             items=[*step.items, *contributed_items.get(step.key, ())],
         )
-        for step in STEPS
+        for step in steps
     ]
-    merged.extend(extra_steps)
 
-    orphaned = {
-        key: items for key, items in contributed_items.items()
-        if key not in known and key not in {step.key for step in extra_steps}
-    }
+    declared = {step.key for step in steps}
+    orphaned = {key: items for key, items in contributed_items.items() if key not in declared}
     for key, items in orphaned.items():
         merged.append(Step(
             key=key, title=key.replace('_', ' ').title(), title_zh=key,
@@ -494,8 +494,8 @@ def resolved_steps() -> List[Step]:
     return merged
 
 
-def items_by_key() -> Dict[str, Item]:
-    return {item.key: item for step in resolved_steps() for item in step.items}
+def items_by_key(workspace=None) -> Dict[str, Item]:
+    return {item.key: item for step in resolved_steps(workspace) for item in step.items}
 
 
 def template_item_keys() -> tuple:
@@ -560,7 +560,7 @@ def evaluate(workspace, state: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     them about it is how checklists get ignored) but stay flagged in the list.
     """
     facts = Facts(workspace)
-    steps = resolved_steps()
+    steps = resolved_steps(workspace)
     state = state if state is not None else facts.state
     skipped = set(state.get('skipped') or [])
     # An industry with no shipping (services) drops the delivery rows entirely

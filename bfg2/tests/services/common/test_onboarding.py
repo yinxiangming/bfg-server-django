@@ -454,7 +454,7 @@ def contributing_app(monkeypatch):
     }
 
     def fake_iter():
-        yield types.SimpleNamespace(name='fake'), module
+        yield types.SimpleNamespace(name='fake', label='fake'), module
 
     monkeypatch.setattr(extensions, '_iter_provider_modules', fake_iter)
     extensions.reset_cache()
@@ -507,6 +507,116 @@ def test_prefilling_never_clobbers_a_value_the_user_set(service, workspace, cont
     assert custom['fake_plugin']['country_code'] == 'NZ'
 
 
+@pytest.fixture
+def fake_is_an_extension(monkeypatch):
+    """Ship a manifest from the ``fake`` app: its extension is off until a test switches it on."""
+    from django.core.cache import cache
+
+    from bfg.common.extensions import registry
+    from bfg.common.extensions.manifest import ExtensionManifest
+
+    manifest = ExtensionManifest(key='fake_extension', name='Fake extension', app_label='fake')
+    monkeypatch.setattr(registry, '_discover', lambda: {manifest.key: manifest})
+    registry.reset_cache()
+    cache.clear()
+    yield manifest
+    registry.reset_cache()
+    cache.clear()
+
+
+def test_an_extension_the_workspace_does_not_use_adds_no_rows_to_its_checklist(
+    service, workspace, contributing_app, fake_is_an_extension,
+):
+    from bfg.common.extensions import services as extension_services
+    from bfg.common.models import WorkspaceExtension
+
+    def contributed(status):
+        return {step['key'] for step in status['steps']} | {
+            item['key'] for step in status['steps'] for item in step['items']
+        }
+
+    assert contributed(service.status()).isdisjoint({'fake_step', 'fake.connected'})
+    with pytest.raises(ValueError):
+        service.skip_item('fake.connected')
+
+    WorkspaceExtension.all_objects.create(
+        workspace=workspace, key='fake_extension', status=WorkspaceExtension.STATUS_ACTIVE,
+    )
+    extension_services.invalidate(workspace.id)
+
+    assert {'fake_step', 'fake.connected'} <= contributed(service.status())
+
+
+def test_the_wizard_applies_an_extensions_template_before_it_is_switched_on(
+    service, workspace, contributing_app, fake_is_an_extension,
+):
+    """The wizard runs when a shop is first set up, before it has switched anything on."""
+    from bfg.common.models import Settings
+    from bfg.common.onboarding.service import options_payload
+    from bfg.shop.models import ProductCategory
+
+    assert 'consignment' in {item['key'] for item in options_payload()['industries']}
+
+    service.apply(country='NZ', industry='fashion')
+
+    custom = Settings.objects.get(workspace=workspace).custom_settings
+    assert custom['fake_plugin'] == {'country_code': 'NZ', 'enabled': True}
+    assert ProductCategory.all_objects.filter(workspace=workspace, slug='preloved').exists()
+
+
+def test_rows_filed_under_another_apps_step_go_where_that_step_goes(service, workspace, monkeypatch):
+    import types
+
+    from django.core.cache import cache
+
+    from bfg.common.extensions import registry
+    from bfg.common.extensions import services as extension_services
+    from bfg.common.extensions.manifest import ExtensionManifest
+    from bfg.common.models import WorkspaceExtension
+    from bfg.common.onboarding import extensions
+    from bfg.common.onboarding.checklist import Item, Step
+
+    owner = types.ModuleType('owner.onboarding_setup')
+    owner.ONBOARDING_STEPS = [
+        Step(key='owner_step', title='Owner', title_zh='主步骤', description='', description_zh='',
+             icon='tabler-puzzle',
+             items=[Item('owner.row', 'Owner row', '主步骤行', '/admin/owner', lambda facts: True)])
+    ]
+    helper = types.ModuleType('helper.onboarding_setup')
+    helper.ONBOARDING_ITEMS = {
+        'owner_step': [Item('helper.row', 'Helper row', '附加行', '/admin/helper', lambda facts: True)]
+    }
+    monkeypatch.setattr(extensions, '_iter_provider_modules', lambda: iter([
+        (types.SimpleNamespace(name='owner', label='owner'), owner),
+        (types.SimpleNamespace(name='helper', label='helper'), helper),
+    ]))
+    manifest = ExtensionManifest(key='owner_extension', name='Owner extension', app_label='owner')
+    monkeypatch.setattr(registry, '_discover', lambda: {manifest.key: manifest})
+    extensions.reset_cache()
+    registry.reset_cache()
+    cache.clear()
+
+    def rows_by_step():
+        return {step['key']: [item['key'] for item in step['items']] for step in service.status()['steps']}
+
+    try:
+        # Off: the helper's row does not turn up in a step of its own.
+        assert 'owner_step' not in rows_by_step()
+        assert 'helper.row' not in {key for keys in rows_by_step().values() for key in keys}
+
+        WorkspaceExtension.all_objects.create(
+            workspace=workspace, key='owner_extension', status=WorkspaceExtension.STATUS_ACTIVE,
+        )
+        extension_services.invalidate(workspace.id)
+
+        # On: the row joins the step it names.
+        assert rows_by_step()['owner_step'] == ['owner.row', 'helper.row']
+    finally:
+        extensions.reset_cache()
+        registry.reset_cache()
+        cache.clear()
+
+
 def test_a_broken_provider_does_not_take_the_checklist_down(service, monkeypatch):
     """A contributed provider is third-party code; the checklist still has to render."""
     import types
@@ -522,7 +632,7 @@ def test_a_broken_provider_does_not_take_the_checklist_down(service, monkeypatch
 
     monkeypatch.setattr(
         extensions, '_iter_provider_modules',
-        lambda: iter([(types.SimpleNamespace(name='broken'), module)]),
+        lambda: iter([(types.SimpleNamespace(name='broken', label='broken'), module)]),
     )
     extensions.reset_cache()
     try:
@@ -705,7 +815,7 @@ def test_a_broken_fragment_provider_does_not_break_the_wizard(service, monkeypat
 
     monkeypatch.setattr(
         extensions, '_iter_provider_modules',
-        lambda: iter([(types.SimpleNamespace(name='broken'), module)]),
+        lambda: iter([(types.SimpleNamespace(name='broken', label='broken'), module)]),
     )
     extensions.reset_cache()
     try:

@@ -169,6 +169,27 @@ def test_only_workspace_extensions_can_require_others():
         ExtensionManifest(key='gallery', name='Gallery', scope=SCOPE_PLATFORM, requires=('reviews',))
 
 
+def test_display_fields_are_optional():
+    manifest = ExtensionManifest(key='gallery', name='Gallery')
+
+    assert (manifest.name_zh, manifest.description_zh, manifest.icon, manifest.admin_url) == ('', '', '', '')
+
+
+@pytest.mark.parametrize(
+    'admin_url',
+    [
+        'admin/gallery',
+        'https://example.com/admin/gallery',
+        '//example.com/admin/gallery',
+        # Browsers read a backslash in a URL as a slash, so this names a host as well.
+        '/\\example.com/admin/gallery',
+    ],
+)
+def test_an_admin_url_must_be_a_path_that_names_no_host(admin_url):
+    with pytest.raises(ValueError, match='admin_url'):
+        ExtensionManifest(key='gallery', name='Gallery', admin_url=admin_url)
+
+
 # ── Availability ─────────────────────────────────────────────────────
 
 
@@ -399,75 +420,6 @@ def test_a_failing_deactivation_hook_keeps_the_extension_active(workspace, monke
 
 
 # ── API ──────────────────────────────────────────────────────────────
-
-
-def test_staff_see_the_extensions_but_only_administrators_change_them(workspace):
-    staff = _member(workspace, 'clerk', 'staff')
-    admin = _member(workspace, 'owner', 'admin')
-
-    listing = _client(workspace, staff).get('/api/v1/extensions/')
-    assert listing.status_code == 200
-    assert [row['key'] for row in listing.json()] == ['maps', 'review_insights', 'reviews']
-    assert 'config' not in listing.json()[0]
-    assert listing.json()[0]['unmet_prerequisites'] == ['MAPS_KEY is not configured.']
-    assert _client(workspace, staff).post('/api/v1/extensions/reviews/activate/').status_code == 403
-
-    response = _client(workspace, admin).post(
-        '/api/v1/extensions/reviews/activate/', {'config': {'per_page': 5}}, format='json'
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert (body['status'], body['available'], body['config']) == ('active', True, {'per_page': 5})
-
-
-def test_staff_of_another_workspace_are_refused(workspace):
-    other = Workspace.objects.create(name='Other', slug='other-extensions-ws', is_active=True)
-    outsider = _member(other, 'outsider', 'admin')
-
-    assert _client(workspace, outsider).get('/api/v1/extensions/').status_code == 403
-    assert _client(workspace, outsider).post('/api/v1/extensions/reviews/activate/').status_code == 403
-
-
-def test_superusers_can_switch_extensions_in_any_workspace(workspace):
-    root = User.objects.create_superuser(username='root', email='root@example.com', password='x')
-
-    response = _client(workspace, root).post('/api/v1/extensions/reviews/activate/')
-
-    assert (response.status_code, response.json()['status']) == (200, 'active')
-
-
-def test_rejected_changes_say_why(workspace):
-    api = _client(workspace, _member(workspace, 'owner', 'admin'))
-
-    blocked = api.post('/api/v1/extensions/review_insights/activate/')
-    assert blocked.status_code == 400
-    assert blocked.json() == {'code': 'requires_inactive', 'detail': 'Activate reviews first.', 'requires': ['reviews']}
-
-    assert api.post('/api/v1/extensions/not_deployed/activate/').status_code == 404
-
-    too_many = api.patch('/api/v1/extensions/reviews/config/', {'config': {'per_page': 500}}, format='json')
-    assert too_many.status_code == 400
-    assert too_many.json()['code'] == 'invalid_config'
-
-    saved = api.patch('/api/v1/extensions/reviews/config/', {'config': {'per_page': 30}}, format='json')
-    assert saved.status_code == 200
-    assert (saved.json()['status'], saved.json()['config']) == ('inactive', {'per_page': 30})
-
-
-def test_a_broken_prerequisite_check_is_listed_as_unmet(workspace, monkeypatch, caplog):
-    def lookup_fails(workspace):
-        raise RuntimeError('lookup failed')
-
-    broken = Prerequisite(code='broken', message='The lookup service is unreachable.', check=lookup_fails)
-    monkeypatch.setitem(MANIFESTS, 'maps', replace(MANIFESTS['maps'], prerequisites=(broken,)))
-    registry.reset_cache()
-
-    listing = _client(workspace, _member(workspace, 'owner', 'admin')).get('/api/v1/extensions/')
-
-    assert listing.status_code == 200
-    maps = next(row for row in listing.json() if row['key'] == 'maps')
-    assert maps['unmet_prerequisites'] == ['The lookup service is unreachable.']
-    assert 'Prerequisite broken of extension maps failed' in caplog.text
 
 
 def test_me_tells_staff_about_every_extension(workspace, django_capture_on_commit_callbacks):

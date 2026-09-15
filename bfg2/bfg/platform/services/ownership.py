@@ -59,6 +59,29 @@ def is_workspace_owner(user, workspace) -> bool:
     ).exists()
 
 
+def workspace_owners(workspace_ids) -> dict:
+    """``{workspace id: owner}`` for those of *workspace_ids* that have an owner.
+
+    One query however many ids, for lists of workspaces. Should a workspace have
+    more than one active owner, which ``assign_workspace_owner`` prevents, the
+    earliest membership is taken.
+    """
+    PlatformMembership = apps.get_model("platform", "PlatformMembership")
+    memberships = (
+        PlatformMembership.objects.filter(
+            profile__workspace_id__in=list(workspace_ids),
+            role=OWNER_ROLE,
+            is_active=True,
+        )
+        .select_related("user", "profile")
+        .order_by("created_at", "id")
+    )
+    owners = {}
+    for membership in memberships:
+        owners.setdefault(membership.profile.workspace_id, membership.user)
+    return owners
+
+
 def assign_workspace_owner(workspace, user):
     """Make *user* the owner of *workspace* and return the membership.
 

@@ -7,8 +7,9 @@ know whether an extension is live for a workspace asks ``is_available``; schedul
 work asks ``workspaces_with``, lists filter with ``where_available``, and event
 listeners register with ``listen_for``. Views refuse requests with
 ``permissions.RequiresExtension``. Code that collects what every installed app
-contributes leaves out the apps in ``unavailable_apps``. See ``manifest``,
-``registry``, ``services``, ``events`` and ``permissions``.
+contributes leaves out the apps in ``unavailable_apps``. The platform console shows
+and changes a workspace's extensions through ``endpoints``. See ``manifest``,
+``registry``, ``services``, ``events``, ``permissions`` and ``endpoints``.
 """
 
 from bfg.common.extensions.manifest import (  # noqa: F401

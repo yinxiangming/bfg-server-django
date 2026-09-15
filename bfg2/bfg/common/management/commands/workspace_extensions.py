@@ -6,7 +6,7 @@ List and switch workspace extensions from the shell.
     manage.py workspace_extensions activate KEY --workspace ID_OR_SLUG [--workspace ...]
     manage.py workspace_extensions deactivate KEY --workspace ID_OR_SLUG [--workspace ...]
 
-Changes go through the same service as the extension API, so requirements,
+Changes go through the same service as the platform console, so requirements,
 prerequisites, entitlement and hooks all apply. Every workspace named is looked up before
 anything changes. Each is then changed in its own transaction: a refusal for one is
 reported without holding back the rest, and the command fails once all have been tried.

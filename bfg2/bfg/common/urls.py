@@ -24,7 +24,6 @@ from .views import (
     APIKeyViewSet,
     countries_list
 )
-from .extensions.views import ExtensionViewSet
 
 router = DefaultRouter()
 router.register(r'workspaces', WorkspaceViewSet, basename='workspace')
@@ -41,7 +40,6 @@ router.register(r'staff-roles', StaffRoleViewSet, basename='staff-role')
 router.register(r'staff-members', StaffMemberViewSet, basename='staff-member')
 router.register(r'staff-invitations', InvitationViewSet, basename='staff-invitation')
 router.register(r'api-keys', APIKeyViewSet, basename='api-key')
-router.register(r'extensions', ExtensionViewSet, basename='extension')
 # Me API - unified personal information API
 # Note: me/ and me/settings/ are registered as direct paths, not via router to avoid conflicts
 router.register(r'me/addresses', MeAddressViewSet, basename='me-address')

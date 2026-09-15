@@ -44,7 +44,7 @@ ME_URL = '/api/v1/platform/workspaces/me/'
 # Every workspace in ``me/`` carries exactly these, and so does a created one.
 ME_WORKSPACE_FIELDS = {
     'id', 'name', 'slug', 'created_at', 'domain', 'status', 'suspended_at',
-    'role', 'is_member', 'is_owner', 'plan', 'credits', 'extensions',
+    'role', 'role_name', 'is_member', 'is_owner', 'plan', 'credits', 'extensions',
 }
 
 

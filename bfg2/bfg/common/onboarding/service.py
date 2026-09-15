@@ -142,8 +142,10 @@ class OnboardingService(BaseService):
     def _diff(self, plan: Dict[str, Any]) -> List[Dict[str, str]]:
         """Same filtering the ``_apply_*`` methods do, reported instead of run."""
         from bfg.delivery.models import DeliveryZone, Warehouse
-        from bfg.finance.models import Currency, TaxRate
-        from bfg.shop.models import ProductCategory, Store
+        from bfg.finance.models import TaxRate
+        from bfg.shop.models import ProductCategory
+
+        from .provisioning import ensure_currency
 
         settings_obj = self._settings()
         changes: List[Dict[str, str]] = []
@@ -159,7 +161,7 @@ class OnboardingService(BaseService):
 
         code = plan['currency']['code']
         changes.append(self._change(
-            KEEP if Currency.objects.filter(code=code, is_active=True).exists() else CREATE,
+            CREATE if ensure_currency(code, dry_run=True) else KEEP,
             'currency', code, code))
 
         tax = plan['tax']
@@ -169,7 +171,7 @@ class OnboardingService(BaseService):
 
         store = plan['store']
         changes.append(self._change(
-            KEEP if Store.all_objects.filter(workspace=self.workspace, code=store['code']).exists() else CREATE,
+            CREATE if self._store_missing(plan) else KEEP,
             'store', store['code'], store['name']))
 
         if not self._delivery_skipped(plan):
@@ -266,24 +268,14 @@ class OnboardingService(BaseService):
         return changes
 
     def _apply_currency(self, plan: Dict[str, Any]) -> List[Dict[str, str]]:
-        from bfg.finance.models import Currency
+        from .provisioning import ensure_currency
 
         profile = plan['currency']
         code = profile['code']
         if not code:
             return []
-        if Currency.objects.filter(code=code, is_active=True).exists():
+        if not ensure_currency(code):
             return [self._change(KEEP, 'currency', code, code)]
-        # Global row, not per workspace: reactivating a disabled one is right.
-        Currency.objects.update_or_create(
-            code=code,
-            defaults={
-                'name': profile['name'],
-                'symbol': profile['symbol'],
-                'decimal_places': profile['decimal_places'],
-                'is_active': True,
-            },
-        )
         return [self._change(CREATE, 'currency', code, f"{code} {profile['symbol']}")]
 
     def _apply_tax(self, plan: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -304,15 +296,31 @@ class OnboardingService(BaseService):
         return [self._change(CREATE, 'tax_rate', tax['name'], f"{tax['name']} {tax['rate']}%")]
 
     def _apply_store(self, plan: Dict[str, Any]) -> List[Dict[str, str]]:
-        from bfg.shop.models import Store
+        from .provisioning import ensure_store
 
         store = plan['store']
-        if Store.all_objects.filter(workspace=self.workspace, is_active=True).exists():
+        if not self._store_missing(plan):
             return [self._change(KEEP, 'store', store['code'], store['name'])]
-        Store.all_objects.create(
-            workspace=self.workspace, name=store['name'], code=store['code'], is_active=True,
-        )
+        ensure_store(self.workspace, name=store['name'], code=store['code'])
         return [self._change(CREATE, 'store', store['code'], store['name'])]
+
+    def _store_missing(self, plan: Dict[str, Any]) -> bool:
+        """Whether the workspace lacks the plan's store, so ``_apply_store`` creates it.
+
+        Any active store will do, whatever its code: the checklist counts it, and a
+        shop that has set one up does not want a second. Short of that, the store
+        is looked for by its code, as ``provisioning.ensure_store`` does: a store
+        someone switched off stays off, where a second one under its code would
+        break the unique code and fail the whole apply.
+        """
+        from bfg.shop.models import Store
+
+        from .provisioning import ensure_store
+
+        if Store.all_objects.filter(workspace=self.workspace, is_active=True).exists():
+            return False
+        _, missing = ensure_store(self.workspace, code=plan['store']['code'], dry_run=True)
+        return missing
 
     def _apply_delivery(self, plan: Dict[str, Any]) -> List[Dict[str, str]]:
         from bfg.delivery.models import DeliveryZone, Warehouse
@@ -651,7 +659,7 @@ class OnboardingService(BaseService):
 
 def options_payload() -> Dict[str, Any]:
     """Everything the wizard's first screen needs to render its two dropdowns."""
-    from .catalog import INDUSTRIES, SUPPORTED_LANGUAGES, country_options
+    from .catalog import CURRENCY_PROFILES, INDUSTRIES, SUPPORTED_LANGUAGES, country_options
     from .extensions import contributed_industries
 
     # Contributed industries come last: BFG's own list is the familiar one, and
@@ -664,5 +672,7 @@ def options_payload() -> Dict[str, Any]:
         'countries': country_options(),
         'industries': industries,
         'languages': list(SUPPORTED_LANGUAGES),
+        # Every currency with a profile: what a new workspace may be created with.
+        'currencies': sorted(CURRENCY_PROFILES),
         'defaults': {'country': DEFAULT_COUNTRY, 'industry': DEFAULT_INDUSTRY},
     }

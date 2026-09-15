@@ -32,7 +32,7 @@ class OnboardingStatusView(_Base):
 
 
 class OnboardingOptionsView(APIView):
-    """GET /api/v1/onboarding/options/ — countries, industries, languages.
+    """GET /api/v1/onboarding/options/ — countries, industries, languages, currencies.
 
     Static reference data, so it does not need the workspace at all.
     """

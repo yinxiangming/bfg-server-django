@@ -3,17 +3,16 @@
 Workspace Provision Service
 Handles the lifecycle of creating and managing Workspaces.
 
-Supports two modes:
-  - Embedded: creates everything in the same DB; skips PlatformMembership/remote UUID
-  - Standalone: creates WorkspacePlatformProfile + PlatformMembership + remote UUID
+A standalone platform provisions each workspace it creates in the
+``provision_workspace`` task. An embedded platform never queues it: the request
+that creates a workspace provisions it; see
+``bfg.platform.services.workspace_creation``.
 """
 import secrets
 from uuid import uuid4
 from django.apps import apps
 from django.utils import timezone
 from celery import shared_task
-
-from bfg.platform.utils import is_embedded_mode
 
 
 def generate_api_key(prefix: str = "ws") -> str:
@@ -24,15 +23,8 @@ def generate_api_key(prefix: str = "ws") -> str:
 @shared_task(bind=True, max_retries=3)
 def provision_workspace(self, workspace_id: int, cluster_id: str = None, initiated_by_id: int = None):
     """
-    Celery task: Provision a workspace after creation.
+    Celery task: provision a workspace a standalone platform has created.
 
-    Embedded mode:
-      1. Create WorkspacePlatformProfile (no cluster, no API keys, no remote UUID)
-      2. Record WorkspaceOperation
-      3. Seed the default notification templates
-      4. Mark workspace active
-
-    Standalone mode:
       1. Create WorkspacePlatformProfile (with cluster, API keys, remote UUID)
       2. Create PlatformMembership for the initiating user
       3. Record WorkspaceOperation
@@ -44,10 +36,9 @@ def provision_workspace(self, workspace_id: int, cluster_id: str = None, initiat
     """
     WorkspacePlatformProfile = apps.get_model("platform", "WorkspacePlatformProfile")
     WorkspaceOperation = apps.get_model("platform", "WorkspaceOperation")
+    PlatformMembership = apps.get_model("platform", "PlatformMembership")
     Workspace = apps.get_model("common", "Workspace")
     User = apps.get_model("common", "User")
-
-    embedded = is_embedded_mode()
 
     try:
         workspace = Workspace.objects.get(id=workspace_id)
@@ -59,39 +50,27 @@ def provision_workspace(self, workspace_id: int, cluster_id: str = None, initiat
             operation="create",
             status="running",
             initiated_by=initiated_by,
-            details={"cluster_id": cluster_id, "embedded": embedded},
+            details={"cluster_id": cluster_id},
         )
 
-        if embedded:
-            # Embedded: lightweight profile, no cluster/keys/remote UUID
-            profile, created = WorkspacePlatformProfile.objects.get_or_create(
-                workspace=workspace,
-                defaults={
-                    "region": "local",
-                },
-            )
-        else:
-            # Standalone: full profile with cluster, API keys, remote UUID
-            PlatformMembership = apps.get_model("platform", "PlatformMembership")
+        profile, created = WorkspacePlatformProfile.objects.get_or_create(
+            workspace=workspace,
+            defaults={
+                "cluster_id": cluster_id,
+                "region": "us",
+                "platform_api_key": generate_api_key("plat"),
+                "agent_api_key": generate_api_key("agent"),
+                "remote_workspace_uuid": uuid4(),
+            },
+        )
 
-            profile, created = WorkspacePlatformProfile.objects.get_or_create(
-                workspace=workspace,
-                defaults={
-                    "cluster_id": cluster_id,
-                    "region": "us",
-                    "platform_api_key": generate_api_key("plat"),
-                    "agent_api_key": generate_api_key("agent"),
-                    "remote_workspace_uuid": uuid4(),
-                },
+        # Create PlatformMembership for the initiating user (owner)
+        if initiated_by:
+            PlatformMembership.objects.get_or_create(
+                user=initiated_by,
+                profile=profile,
+                defaults={"role": "owner"},
             )
-
-            # Create PlatformMembership for the initiating user (owner)
-            if initiated_by:
-                PlatformMembership.objects.get_or_create(
-                    user=initiated_by,
-                    profile=profile,
-                    defaults={"role": "owner"},
-                )
 
         # Order, payment and booking notifications are each sent from a template
         # of the workspace's own, and creating a workspace writes none. Nothing in
@@ -113,7 +92,6 @@ def provision_workspace(self, workspace_id: int, cluster_id: str = None, initiat
         return {
             "workspace_id": workspace_id,
             "status": "provisioned",
-            "embedded": embedded,
             "notification_templates": templates["created"],
         }
 

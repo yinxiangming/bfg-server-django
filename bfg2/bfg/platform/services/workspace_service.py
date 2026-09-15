@@ -9,6 +9,8 @@ Supports two modes, which differ in what makes a user a member of a workspace:
 
 Ownership is the same in both modes; see ``bfg.platform.services.ownership``.
 """
+from typing import NamedTuple, Optional
+
 from django.apps import apps
 
 from bfg.common.models import resolve_workspace_public_frontend_base_url
@@ -79,31 +81,43 @@ def is_platform_admin(user) -> bool:
 
 # ── Workspace listing ─────────────────────────────────────────────────────────
 
-def _member_roles(user) -> dict:
-    """``{workspace id: role code}`` for the workspaces *user* is an active member of.
+class _MemberRole(NamedTuple):
+    """A member's role in a workspace: its code, and the name it goes by."""
+    code: Optional[str]
+    name: Optional[str]
 
-    Embedded, membership is a StaffMember. This is a cross-workspace lookup, so
-    it goes through ``all_objects``: the scoped manager only sees the workspace
-    bound to the request, and platform endpoints bind none.
+
+def _member_roles(user) -> dict:
+    """``{workspace id: _MemberRole}`` for the workspaces *user* is an active member of.
+
+    Embedded, membership is a StaffMember and the role is its StaffRole. This is
+    a cross-workspace lookup, so it goes through ``all_objects``: the scoped
+    manager only sees the workspace bound to the request, and platform endpoints
+    bind none.
 
     Standalone, membership is a PlatformMembership, the record token exchange
-    lets a user into a workspace by. One whose profile has no local workspace
-    row is left out: there is no id, name or slug to list it by.
+    lets a user into a workspace by, and the role's name is its label. One whose
+    profile has no local workspace row is left out: there is no id, name or slug
+    to list it by.
     """
     if is_embedded_mode():
         StaffMember = apps.get_model("common", "StaffMember")
         rows = StaffMember.all_objects.filter(user=user, is_active=True).values_list(
-            "workspace_id", "role__code",
+            "workspace_id", "role__code", "role__name",
         )
     else:
         PlatformMembership = apps.get_model("platform", "PlatformMembership")
-        rows = PlatformMembership.objects.filter(
-            user=user, is_active=True, profile__workspace__isnull=False,
-        ).values_list("profile__workspace_id", "role")
-    return dict(rows)
+        labels = dict(PlatformMembership._meta.get_field("role").flatchoices)
+        rows = [
+            (workspace_id, code, labels.get(code, code))
+            for workspace_id, code in PlatformMembership.objects.filter(
+                user=user, is_active=True, profile__workspace__isnull=False,
+            ).values_list("profile__workspace_id", "role")
+        ]
+    return {workspace_id: _MemberRole(code, name) for workspace_id, code, name in rows}
 
 
-def _workspace_entry(workspace, *, role, is_member, is_owner) -> dict:
+def _workspace_entry(workspace, *, role: Optional[_MemberRole], is_member, is_owner) -> dict:
     profile = getattr(workspace, "platform_profile", None)
     return {
         "id": workspace.id,
@@ -113,7 +127,9 @@ def _workspace_entry(workspace, *, role, is_member, is_owner) -> dict:
         "domain": _safe_workspace_domain(workspace),
         "status": _get_workspace_status(workspace, profile),
         "suspended_at": profile.suspended_at if profile else None,
-        "role": role,
+        "role": role.code if role else None,
+        # What the workspace calls the role, for the roles a client has no label for.
+        "role_name": role.name if role else None,
         "is_member": is_member,
         "is_owner": is_owner,
         # Billing is not served here yet; these hold its place in the payload.

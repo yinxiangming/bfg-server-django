@@ -29,7 +29,7 @@ ME_URL = '/api/v1/platform/workspaces/me/'
 # Every workspace in ``me/`` carries exactly these.
 ME_WORKSPACE_FIELDS = {
     'id', 'name', 'slug', 'created_at', 'domain', 'status', 'suspended_at',
-    'role', 'is_member', 'is_owner', 'plan', 'credits', 'extensions',
+    'role', 'role_name', 'is_member', 'is_owner', 'plan', 'credits', 'extensions',
 }
 
 
@@ -214,6 +214,29 @@ class TestMe:
         assert parse_datetime(by_slug['shop']['created_at']) == shop.created_at
         assert by_slug['shop']['domain'] == 'shop.example.test'
         assert by_slug['bare']['domain'] is None
+
+    def test_each_role_comes_with_the_name_the_workspace_gave_it(self, shop):
+        member = make_user('member')
+        florist = StaffRole.objects.create(workspace=shop, code='florist', name='Head Florist')
+        StaffMember.all_objects.create(workspace=shop, user=member, role=florist, is_active=True)
+        owned = make_workspace('owned')
+        assign_workspace_owner(owned, member)
+
+        roles = {item['slug']: (item['role'], item['role_name']) for item in get_me(member)['workspaces']}
+
+        # Owned without being staff: no role, and so no name.
+        assert roles == {'shop': ('florist', 'Head Florist'), 'owned': (None, None)}
+
+    def test_standalone_names_a_membership_role_by_its_label(self, settings, shop):
+        settings.PLATFORM_EMBEDDED = False
+        member = make_user('member')
+        PlatformMembership.objects.create(
+            user=member, profile=WorkspacePlatformProfile.objects.create(workspace=shop), role='staff',
+        )
+
+        [item] = get_me(member)['workspaces']
+
+        assert (item['role'], item['role_name']) == ('staff', 'Staff')
 
     def test_memberships_come_first_in_their_order_then_workspaces_only_owned(self):
         member = make_user('member')

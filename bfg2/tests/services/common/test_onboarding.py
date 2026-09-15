@@ -246,6 +246,43 @@ def test_a_currency_the_seed_data_never_creates_still_gets_a_row(service):
     assert row.is_active is True
 
 
+def _store_actions(changes):
+    return [change['action'] for change in changes if change['kind'] == 'store']
+
+
+def test_a_store_set_up_under_another_code_is_kept_without_a_second_one(service, workspace):
+    """Any active store will do: the checklist counts it, and preview says what apply does."""
+    from bfg.shop.models import Store
+
+    Store.all_objects.create(workspace=workspace, name='Flagship', code='flagship', is_active=True)
+
+    preview = service.preview(country='NZ', industry='general_retail')
+    result = service.apply(country='NZ', industry='general_retail')
+
+    assert _store_actions(preview['changes']) == _store_actions(result['changes']) == ['keep']
+    assert list(Store.all_objects.filter(workspace=workspace).values_list('code', flat=True)) == ['flagship']
+
+
+def test_a_switched_off_store_with_the_template_code_is_left_off(service, workspace):
+    """A second store under that code breaks the unique code, and with it the whole apply."""
+    from bfg.shop.models import Store
+
+    Store.all_objects.create(workspace=workspace, name='Main', code='main', is_active=False)
+
+    preview = service.preview(country='NZ', industry='general_retail')
+    result = service.apply(country='NZ', industry='general_retail')
+
+    assert _store_actions(preview['changes']) == _store_actions(result['changes']) == ['keep']
+    assert list(Store.all_objects.filter(workspace=workspace).values_list('code', 'is_active')) == [('main', False)]
+
+
+def test_the_options_offer_every_currency_there_is_a_profile_for(db):
+    from bfg.common.onboarding.catalog import CURRENCY_PROFILES
+    from bfg.common.onboarding.service import options_payload
+
+    assert options_payload()['currencies'] == sorted(CURRENCY_PROFILES)
+
+
 def test_a_services_workspace_is_not_held_back_by_shipping_it_never_does(service):
     service.apply(country='NZ', industry='services')
     status = service.status()

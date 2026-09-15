@@ -72,6 +72,13 @@ def setting_present(name: str) -> Prerequisite:
 class ExtensionManifest:
     """Everything BFG needs to know to offer, activate and gate one extension.
 
+    ``name`` and ``description`` are what an administrator is shown; ``name_zh`` and
+    ``description_zh`` are the Chinese versions, empty when there are none. ``icon`` names
+    the icon shown with the extension, written as the setup checklist writes its icons
+    (``tabler-puzzle``). ``admin_url`` is the path of the extension's page or settings in
+    the admin, such as ``/admin/reviews``; a client resolves it against its own origin, so
+    it must start with ``/`` and name no host.
+
     ``pricing`` defaults to add-on for workspace extensions and to core for the rest.
     ``requires`` names other extensions that must be available first; only workspace
     extensions can require anything, since the rest are always available. ``data_models``
@@ -86,6 +93,10 @@ class ExtensionManifest:
     key: str
     name: str
     description: str = ''
+    name_zh: str = ''
+    description_zh: str = ''
+    icon: str = ''
+    admin_url: str = ''
     scope: str = SCOPE_WORKSPACE
     pricing: str = ''
     surfaces: Tuple[str, ...] = ()
@@ -118,6 +129,13 @@ class ExtensionManifest:
         if self.requires and self.scope != SCOPE_WORKSPACE:
             raise ValueError(
                 f'Extension {self.key!r} is always available, so it cannot require other extensions.'
+            )
+        # "//host/path" starts with "/" too, but takes the browser to another host, and so
+        # does "/\host/path": browsers read a backslash in a URL as a slash.
+        if self.admin_url and (not self.admin_url.startswith('/') or self.admin_url.startswith(('//', '/\\'))):
+            raise ValueError(
+                f'Extension {self.key!r} has admin_url {self.admin_url!r}, '
+                f'which must be a path starting with "/" that names no host.'
             )
 
     @property

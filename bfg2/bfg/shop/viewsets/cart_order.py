@@ -566,18 +566,26 @@ class OrderViewSet(viewsets.ModelViewSet):
             raise ValidationError({'customer_id': 'This field is required for direct order creation.'})
         
         from bfg.common.models import Customer
-        customer = Customer.objects.get(
+        customer = Customer.objects.filter(
             id=customer_id,
             workspace=self.request.workspace
-        )
+        ).first()
+        if customer is None:
+            raise APIValidationError({
+                'customer_id': 'Customer does not belong to this workspace.'
+            })
         
         # Get store
         store_id = serializer.validated_data.pop('store_id')
         from bfg.shop.models import Store
-        store = Store.objects.get(
+        store = Store.objects.filter(
             id=store_id,
             workspace=self.request.workspace
-        )
+        ).first()
+        if store is None:
+            raise APIValidationError({
+                'store_id': 'Store does not belong to this workspace.'
+            })
         
         # Get or create shipping address
         fulfillment_method = serializer.validated_data.get('fulfillment_method', 'shipping')
@@ -589,24 +597,36 @@ class OrderViewSet(viewsets.ModelViewSet):
             if not shipping_address_id:
                 from rest_framework.exceptions import ValidationError
                 raise ValidationError({'shipping_address_id': 'This field is required for shipping orders.'})
-            shipping_address = Address.objects.get(
+            shipping_address = Address.objects.filter(
                 id=shipping_address_id,
                 workspace=self.request.workspace
-            )
+            ).first()
+            if shipping_address is None:
+                raise APIValidationError({
+                    'shipping_address_id': 'Address does not belong to this workspace.'
+                })
         elif shipping_address_id:
-            shipping_address = Address.objects.get(
+            shipping_address = Address.objects.filter(
                 id=shipping_address_id,
                 workspace=self.request.workspace
-            )
+            ).first()
+            if shipping_address is None:
+                raise APIValidationError({
+                    'shipping_address_id': 'Address does not belong to this workspace.'
+                })
         
         # Get billing address (optional, defaults to shipping)
         billing_address_id = serializer.validated_data.pop('billing_address_id', None)
         billing_address = shipping_address
         if billing_address_id:
-            billing_address = Address.objects.get(
+            billing_address = Address.objects.filter(
                 id=billing_address_id,
                 workspace=self.request.workspace
-            )
+            ).first()
+            if billing_address is None:
+                raise APIValidationError({
+                    'billing_address_id': 'Address does not belong to this workspace.'
+                })
         
         # Get additional fields from serializer
         customer_note = serializer.validated_data.get('customer_note', '')

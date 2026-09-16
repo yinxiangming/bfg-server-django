@@ -47,6 +47,17 @@ class WorkspacePlatformProfile(models.Model):
     suspended_at = models.DateTimeField(_("Suspended At"), null=True, blank=True)
     scheduled_deletion_at = models.DateTimeField(_("Scheduled Deletion At"), null=True, blank=True)
 
+    # How many points of metered usage this workspace may run up in a calendar
+    # month before metered calls are refused. Empty follows the deployment's
+    # default, so raising that lifts every workspace that has no cap of its own.
+    monthly_usage_cap_points = models.DecimalField(
+        _("Monthly Usage Cap (points)"),
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+
     # Timestamps
     created_at = models.DateTimeField(_("Created At"), default=timezone.now)
     updated_at = models.DateTimeField(_("Updated At"), auto_now=True)

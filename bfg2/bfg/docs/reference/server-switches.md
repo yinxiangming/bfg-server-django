@@ -282,7 +282,35 @@ Use when you want to preserve the older behavior where registration may provisio
 
 ---
 
-## 11. Notes for Reusable Project Design
+## 11. Metered Usage and Entitlements
+
+Only relevant to a deployment that charges workspaces for what they use. A deployment that does not is unaffected by everything in this section and should leave it alone.
+
+### `BFG_EXTENSION_ENTITLEMENT_CHECK`
+- Default: empty
+- Purpose:
+  - Names a callable `(workspace, manifest) -> bool` deciding whether a workspace may use an extension at all, separately from whether it has switched it on.
+- Behavior:
+  - Empty (the default): every workspace is entitled to every deployed extension.
+  - `bfg.platform.services.entitlements.entitlement_check` answers from the `platform.WorkspaceEntitlement` table — extensions priced as part of the base plan are always entitled, add-ons need a live entitlement row: `active` while its period runs and for `grace_days` after it ends (indefinitely when it has no period end), or `grace` until `grace_until` passes.
+  - An entitlement lapses on time rather than on being swept, so nothing keeps working merely because a scheduled job has not run.
+  - A check that raises makes that extension unavailable and is logged; it never fails the request that asked.
+- Why it matters:
+  - **Setting this without entitlement rows switches every add-on off at once.** Point it at the table only once the rows a deployment's workspaces should hold have been written, which is why no settings module in this repository names it.
+
+### Platform variables
+- Margins, grace periods, retention windows and the default usage cap are rows in `platform.PlatformVariable`, not environment variables: they are policy an operator adjusts while the deployment runs, and each change is recorded in `platform.PlatformVariableChange` with who made it and why.
+- Read and write them through `bfg.platform.services.platform_variables` (`get_variable`, `set_variable`, `all_variables`). Every variable the deployment recognises is declared there with its default, so a deployment that has never set one still behaves sensibly, and an unrecognised key is refused rather than stored.
+
+### Metered calls
+- A meter is a named unit worth counting, declared by the extension that spends it (`meters` on its manifest). Its price is a `platform.MeterPrice` row: a vendor cost, how many calls or tokens that cost buys, an optional margin, and the moment it takes effect. A new rate is a new row, so bills already calculated stay explicable.
+- One point is one US dollar. Usage is totalled per workspace, meter and UTC day in `platform.UsageRecord`.
+- A workspace may run up `WorkspacePlatformProfile.monthly_usage_cap_points` in a calendar month, or the `monthly_usage_cap_points` variable when it has no cap of its own.
+- Callers ask `bfg.platform.metering.allowed(workspace, meter)` before spending and `bfg.platform.metering.meter(workspace, meter, quantity)` after the call succeeded.
+
+---
+
+## 12. Notes for Reusable Project Design
 
 For future projects, the most reusable onboarding architecture is:
 

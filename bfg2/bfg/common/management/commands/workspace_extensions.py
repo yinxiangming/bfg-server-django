@@ -5,16 +5,22 @@ List and switch workspace extensions from the shell.
     manage.py workspace_extensions list [--workspace ID_OR_SLUG ...]
     manage.py workspace_extensions activate KEY --workspace ID_OR_SLUG [--workspace ...]
     manage.py workspace_extensions deactivate KEY --workspace ID_OR_SLUG [--workspace ...]
+    manage.py workspace_extensions restore KEY --workspace ID_OR_SLUG [--workspace ...]
 
 Changes go through the same service as the platform console, so requirements,
 prerequisites, entitlement and hooks all apply. Every workspace named is looked up before
 anything changes. Each is then changed in its own transaction: a refusal for one is
 reported without holding back the rest, and the command fails once all have been tried.
+
+``restore`` is for an extension whose data was archived: it loads the rows back and
+switches it on, which is what activating one cannot do, since the rows are not there. It
+runs here rather than in a worker, so the command takes as long as the archive is large,
+and a restore that fails leaves the extension archived with the reason on the record.
 """
 
 from django.core.management.base import BaseCommand, CommandError
 
-from bfg.common.extensions import registry, services
+from bfg.common.extensions import archive, registry, services
 from bfg.common.models import Workspace, WorkspaceExtension
 
 ROW = '{key:<24} {workspace:>9}  {slug:<32} {status:<10} {available}'
@@ -37,6 +43,7 @@ class Command(BaseCommand):
         for name, help_text in (
             ('activate', 'Switch an extension on.'),
             ('deactivate', 'Switch an extension off, keeping its data and configuration.'),
+            ('restore', 'Load an archived extension\'s data back and switch it on.'),
         ):
             change = subcommands.add_parser(name, help=help_text)
             change.add_argument('key', help='Extension key.')
@@ -103,11 +110,17 @@ class Command(BaseCommand):
         if not manifest.is_activatable:
             raise CommandError(f'{key} is always available and cannot be switched on or off.')
 
-        change = services.activate if subcommand == 'activate' else services.deactivate
+        change = {
+            'activate': services.activate,
+            'deactivate': services.deactivate,
+            'restore': lambda workspace, key: archive.restore(workspace, key),
+        }[subcommand]
         refused = 0
         for workspace in workspaces:
             try:
                 record = change(workspace, key)
+            except archive.ArchiveNotConfigured as unconfigured:
+                raise CommandError(unconfigured.reason)
             except services.ExtensionError as exc:
                 refused += 1
                 self.stderr.write(f'{workspace.pk} {workspace.slug}: {exc.code}: {exc.message}')

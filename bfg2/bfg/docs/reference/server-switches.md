@@ -296,7 +296,8 @@ Only relevant to a deployment that charges workspaces for what they use. A deplo
   - An entitlement lapses on time rather than on being swept, so nothing keeps working merely because a scheduled job has not run.
   - A check that raises makes that extension unavailable and is logged; it never fails the request that asked.
 - Why it matters:
-  - **Setting this without entitlement rows switches every add-on off at once.** Point it at the table only once the rows a deployment's workspaces should hold have been written, which is why no settings module in this repository names it.
+  - **Setting this without entitlement rows switches every add-on off at once.** Point it at the table only once the rows a deployment's workspaces should hold have been written, which is why it defaults to empty and is only ever read from the environment.
+  - `python manage.py grant_entitlements --all-workspaces --switched-on --months 3 [--dry-run]` writes those rows: the base plan for every active workspace, plus every add-on each one currently has switched on, granted rather than sold. Run it before setting this, and a deployment that has been running without billing keeps everything it was using. It is safe to run twice — a workspace already entitled to a key is left alone — and `--dry-run` reports what it would grant without writing.
 
 ### Platform variables
 - Margins, grace periods, retention windows and the default usage cap are rows in `platform.PlatformVariable`, not environment variables: they are policy an operator adjusts while the deployment runs, and each change is recorded in `platform.PlatformVariableChange` with who made it and why.

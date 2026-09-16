@@ -17,17 +17,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone as datetime_timezone
 from decimal import Decimal
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from django.db import transaction
 from django.db.models import F, Sum
 from django.utils import timezone
 
+from bfg.core.exceptions import BFGException
 from bfg.platform.models.metering import UsageRecord
 from bfg.platform.services import pricing
 from bfg.platform.services.platform_variables import get_variable
 
 ZERO = Decimal("0")
+
+
+class InvalidUsageCap(BFGException):
+    """A monthly usage cap that cannot be stored as asked"""
+
+    default_message = "Invalid usage cap"
+    default_code = "invalid_usage_cap"
 
 
 @dataclass(frozen=True)
@@ -151,6 +159,53 @@ def monthly_cap(workspace) -> Decimal:
     if cap is None:
         cap = get_variable("monthly_usage_cap_points")
     return _as_decimal(cap)
+
+
+def set_monthly_cap(workspace, points) -> Optional[Decimal]:
+    """Give ``workspace`` a cap of its own, or ``None`` to follow the deployment's.
+
+    Returns what the column now holds, which is ``None`` for a workspace back on
+    the default: that is not the same as a cap of zero, which stops the workspace
+    metering anything at all, so the two are kept apart rather than one standing
+    for the other.
+
+    The platform profile is written here rather than in a view, because a
+    workspace that has never had one still has a cap to set. Raises
+    ``InvalidUsageCap`` for a number the column cannot hold — a cap silently
+    rounded, or refused by the database, is a workspace billed against a limit
+    nobody chose.
+    """
+    from bfg.platform.models.workspace_profile import WorkspacePlatformProfile
+
+    cap = None if points is None else _as_cap(points)
+    profile, _ = WorkspacePlatformProfile.objects.get_or_create(workspace=workspace)
+    profile.monthly_usage_cap_points = cap
+    profile.save(update_fields=["monthly_usage_cap_points", "updated_at"])
+    return cap
+
+
+def _as_cap(points) -> Decimal:
+    """``points`` as a cap the column can hold: a non-negative number, to its scale."""
+    from bfg.platform.models.workspace_profile import WorkspacePlatformProfile
+
+    # The column's own limits rather than a second copy of them here, so that a
+    # cap too large is refused in words instead of by the database.
+    field = WorkspacePlatformProfile._meta.get_field("monthly_usage_cap_points")
+    whole_digits = field.max_digits - field.decimal_places
+    try:
+        cap = points if isinstance(points, Decimal) else Decimal(str(points))
+    except (ArithmeticError, TypeError, ValueError):
+        raise InvalidUsageCap(
+            f"{points!r} is not a number of points.", details={"cap": str(points)}
+        ) from None
+    if not cap.is_finite() or cap < ZERO:
+        raise InvalidUsageCap("A usage cap is zero or more points.", details={"cap": str(points)})
+    if cap >= Decimal(10) ** whole_digits:
+        raise InvalidUsageCap(
+            f"A usage cap holds fewer than {whole_digits} digits of whole points.",
+            details={"cap": str(points)},
+        )
+    return cap.quantize(Decimal(1).scaleb(-field.decimal_places))
 
 
 def allowance(workspace, *, month=None) -> Allowance:

@@ -11,6 +11,7 @@ happened to be first in the DB — a severe cross-tenant leak.
 
 import logging
 import threading
+from contextlib import contextmanager
 
 from django.apps import apps as django_apps
 from django.conf import settings
@@ -123,6 +124,27 @@ def set_current_workspace(workspace):
             del _thread_locals.workspace
         return
     _thread_locals.workspace = workspace
+
+
+@contextmanager
+def bound_workspace(workspace):
+    """Run a block with *workspace* bound, and put back whatever was bound before.
+
+    For code that acts on a workspace other than the request's own, or on one
+    when the request has none: a platform path binds nothing, and anything it
+    runs on a workspace's behalf — an extension's hooks, a check it declares —
+    may still read tenant-scoped models through ``objects``, which would
+    otherwise be empty.
+
+    The previous binding is restored rather than cleared, so nesting this inside
+    a request that does have a workspace leaves that request as it was.
+    """
+    previous = get_current_workspace()
+    set_current_workspace(workspace)
+    try:
+        yield
+    finally:
+        set_current_workspace(previous)
 
 
 def _get_workspace_by_domain(hostname):

@@ -57,11 +57,11 @@ from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
 from bfg.common.extensions import endpoints, services as extension_services
+from bfg.common.middleware import bound_workspace
 from bfg.core.read_only import exempt_from_read_only
 from bfg.platform.services import acquisitions, bill_payment, console_billing
 from bfg.platform.services.billing import PlatformWorkspaceMissing
 from bfg.platform.services.console_service import ConsoleViewer, console_workspaces, workspace_entries
-from bfg.platform.utils import bound_workspace
 
 WORKSPACE_NOT_FOUND = 'workspace_not_found'
 INVALID_MONTH = 'invalid_month'

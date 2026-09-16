@@ -46,7 +46,8 @@ from typing import Optional
 from bfg.core.exceptions import BFGException
 from bfg.finance.exceptions import PaymentFailed
 from bfg.platform.services import billing
-from bfg.platform.utils import bound_workspace, get_platform_workspace
+from bfg.common.middleware import bound_workspace
+from bfg.platform.utils import get_platform_workspace
 
 logger = logging.getLogger(__name__)
 

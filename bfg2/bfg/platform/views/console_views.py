@@ -37,7 +37,6 @@ the workspace being looked at (extension hooks, prerequisite checks, the deploym
 entitlement check) may still read tenant-scoped models through ``objects``, so that
 workspace is bound while it runs and the previous binding is put back afterwards.
 """
-from contextlib import contextmanager
 from datetime import date, datetime
 
 from django.http import Http404
@@ -50,7 +49,7 @@ from rest_framework.response import Response
 
 from bfg.common.extensions import endpoints
 from bfg.common.extensions import services as extension_services
-from bfg.common.middleware import get_current_workspace, set_current_workspace
+from bfg.common.middleware import bound_workspace
 from bfg.platform.services import acquisitions, console_billing
 from bfg.platform.services.console_service import ConsoleViewer, console_workspaces, workspace_entries
 
@@ -77,16 +76,6 @@ def _month(request):
             {'code': INVALID_MONTH, 'detail': 'month must be written as YYYY-MM.'}
         ) from None
     return date(parsed.year, parsed.month, 1)
-
-
-@contextmanager
-def _bound(workspace):
-    previous = get_current_workspace()
-    set_current_workspace(workspace)
-    try:
-        yield
-    finally:
-        set_current_workspace(previous)
 
 
 class _MayUseConsole(BasePermission):
@@ -129,7 +118,7 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
     def retrieve(self, request, pk=None):
         workspace = self.get_object()
         entry = workspace_entries([workspace], self.viewer)[0]
-        with _bound(workspace):
+        with bound_workspace(workspace):
             entry['extensions'] = endpoints.list_extensions(
                 workspace, viewer_is_platform_admin=self.viewer.is_platform_admin
             )
@@ -187,13 +176,13 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
         """
         workspace = self._workspace_to_change()
         try:
-            with _bound(workspace):
+            with bound_workspace(workspace):
                 acquired = acquisitions.acquire(workspace, key, user=request.user)
         except extension_services.ExtensionError as refused:
             return endpoints.error_response(refused)
         except acquisitions.AcquisitionRefused as refused:
             raise ValidationError({'code': refused.code, 'detail': refused.message}) from None
-        with _bound(workspace):
+        with bound_workspace(workspace):
             state = endpoints.extension_state(
                 workspace, key, viewer_is_platform_admin=self.viewer.is_platform_admin
             )
@@ -210,7 +199,7 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
     @action(detail=True, methods=['post'], url_path=f'{_EXTENSION_PATH}/activate')
     def activate_extension(self, request, pk=None, key=None):
         workspace = self._workspace_to_change()
-        with _bound(workspace):
+        with bound_workspace(workspace):
             return endpoints.activate(
                 workspace,
                 key,
@@ -222,7 +211,7 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
     @action(detail=True, methods=['post'], url_path=f'{_EXTENSION_PATH}/deactivate')
     def deactivate_extension(self, request, pk=None, key=None):
         workspace = self._workspace_to_change()
-        with _bound(workspace):
+        with bound_workspace(workspace):
             return endpoints.deactivate(
                 workspace, key, user=request.user, viewer_is_platform_admin=self.viewer.is_platform_admin
             )
@@ -230,7 +219,7 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
     @action(detail=True, methods=['patch'], url_path=f'{_EXTENSION_PATH}/config')
     def extension_config(self, request, pk=None, key=None):
         workspace = self._workspace_to_change()
-        with _bound(workspace):
+        with bound_workspace(workspace):
             return endpoints.update_config(
                 workspace, key, data=request.data, viewer_is_platform_admin=self.viewer.is_platform_admin
             )

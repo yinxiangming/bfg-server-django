@@ -22,6 +22,10 @@ dotted path of one::
         },
     }
 
+A deployment whose packs are data rather than code — written by whoever runs it,
+next to the rest of what it deploys — points ``BFG_EXTENSION_PLAN_PACKS_FILE`` at
+a JSON file of the same shape instead. The setting wins where both are given.
+
 Unset, there are no packs and nothing here does anything.
 
 **Applying a pack only ever switches things on.** It activates the keys the
@@ -41,7 +45,9 @@ a pack named. Unset, nothing is obtained and every unentitled key is skipped.
 
 from __future__ import annotations
 
+import json
 import logging
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from django.conf import settings
@@ -62,8 +68,27 @@ OUTCOME_ALREADY_ON = 'already_on'
 OUTCOME_SKIPPED = 'skipped'
 
 
+@lru_cache(maxsize=1)
+def _from_file(path: str) -> Dict[str, Any]:
+    """The packs a JSON file holds, read once.
+
+    A file that cannot be read or parsed leaves the deployment with no packs, which
+    is what it had before somebody wrote the file, rather than an import error at
+    the first request that asks what packs there are.
+    """
+    try:
+        with open(path, encoding='utf-8') as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        logger.exception('BFG_EXTENSION_PLAN_PACKS_FILE names %r, which cannot be read as JSON', path)
+        return {}
+
+
 def _configured() -> Dict[str, Any]:
     packs = getattr(settings, 'BFG_EXTENSION_PLAN_PACKS', None) or {}
+    if not packs:
+        path = getattr(settings, 'BFG_EXTENSION_PLAN_PACKS_FILE', '')
+        packs = _from_file(path) if path else {}
     if isinstance(packs, str):
         try:
             packs = import_string(packs)

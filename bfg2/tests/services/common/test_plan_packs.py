@@ -333,3 +333,55 @@ def test_a_key_the_activation_refuses_for_another_reason_is_not_offered_to_the_h
     packs.apply_pack(workspace, "boutique")
 
     assert asked == []
+
+
+# ── Packs written as a file ──────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def forget_the_file():
+    """The file is read once; every test here writes a different one."""
+    packs._from_file.cache_clear()
+    yield
+    packs._from_file.cache_clear()
+
+
+def test_packs_can_be_read_from_a_json_file(deployed, settings, tmp_path):
+    settings.BFG_EXTENSION_PLAN_PACKS = None
+    written = tmp_path / "packs.json"
+    written.write_text(
+        '{"boutique": {"name": "From a file", "industries": ["fashion"], '
+        f'"extensions": ["{FIRST}"]}}}}',
+        encoding="utf-8",
+    )
+    settings.BFG_EXTENSION_PLAN_PACKS_FILE = str(written)
+
+    pack = packs.get_pack("boutique")
+
+    assert pack["name"] == "From a file"
+    assert pack["extensions"] == (FIRST,)
+
+
+def test_the_setting_wins_over_the_file(deployed, settings, tmp_path):
+    written = tmp_path / "packs.json"
+    written.write_text('{"other": {"name": "From a file"}}', encoding="utf-8")
+    settings.BFG_EXTENSION_PLAN_PACKS_FILE = str(written)
+
+    assert packs.get_pack("boutique") is not None
+    assert packs.get_pack("other") is None
+
+
+def test_a_file_that_cannot_be_read_leaves_the_deployment_with_no_packs(settings, tmp_path):
+    settings.BFG_EXTENSION_PLAN_PACKS = None
+    settings.BFG_EXTENSION_PLAN_PACKS_FILE = str(tmp_path / "nothing-here.json")
+
+    assert packs.all_packs() == []
+
+
+def test_a_file_that_is_not_json_leaves_the_deployment_with_no_packs(settings, tmp_path):
+    settings.BFG_EXTENSION_PLAN_PACKS = None
+    written = tmp_path / "packs.json"
+    written.write_text("not json at all", encoding="utf-8")
+    settings.BFG_EXTENSION_PLAN_PACKS_FILE = str(written)
+
+    assert packs.all_packs() == []

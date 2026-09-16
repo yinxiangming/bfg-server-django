@@ -399,10 +399,9 @@ def test_an_api_key_read_is_not_refused(read_only_on, shop, api_key_auth, api_ke
 # ``bfg.platform.middleware``; this is the list that proves each mark is
 # actually wired to the route it was meant for.
 EXEMPT_WRITES = [
-    # Paying for the plan, and the gateway confirming the payment. Without both,
-    # a lapsed workspace has no way back.
-    '/api/v1/platform/workspaces/1/checkout/',
-    '/api/v1/platform/webhooks/stripe/',
+    # Settling a platform bill, and the gateway confirming the payment (the
+    # callback below). Without both, a lapsed workspace has no way back.
+    '/api/v1/platform/console/workspaces/1/invoices/PLAT-1-202608/pay/',
     # Account operations. Somebody has to be able to get in and pay.
     '/api/v1/me/change-password/',
     '/api/v1/me/reset-password/',
@@ -429,6 +428,8 @@ REFUSED_WRITES = [
     '/api/v1/shop/orders/1/update_items/',
     # Read-only mode deletes nothing, and creates no shipments of its own.
     '/api/v1/delivery/consignments/',
+    # The rest of the console: paying is the only write on it that is allowed.
+    '/api/v1/platform/console/workspaces/1/extensions/reviews/activate/',
     # Ordinary shop administration.
     '/api/v1/customer-tags/',
     '/api/v1/shop/products/',

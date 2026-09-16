@@ -940,17 +940,27 @@ sms/                     CRUD
 
 ## Local App: `apps.platform` — SaaS Platform Management
 
-Models: `WorkspaceProfile`, `Cluster`, `FeatureFlag`, `PlatformSubscription`, `PlatformBillingRecord`
+Models: `WorkspacePlatformProfile`, `PlatformMembership`, `Cluster`, `FeatureDefinition`,
+`WorkspaceEntitlement`, `UsageRecord`, `MeterPrice`, `PlatformVariable`, `WorkspaceOperation`
+
+There is no subscription model here: a workspace's entitlements are periods on
+`WorkspaceEntitlement`, and what it owes for them is a `finance.Invoice` issued by the platform
+workspace.
 
 ### API Endpoints — `/api/v1/platform/`
 ```
 workspaces/              GET list, POST create, GET/PUT/PATCH/DELETE detail
-subscriptions/           GET list/detail, POST create
-subscription-plans/      GET list/detail
-webhooks/stripe/         POST (Stripe webhook)
+plans/                   GET list/detail (public — pricing page)
+console/workspaces/      GET list/detail — the workspaces the caller runs
+console/workspaces/{id}/usage/                     GET  ?month=YYYY-MM
+console/workspaces/{id}/invoices/                  GET  the platform bills, newest first
+console/workspaces/{id}/invoices/{number}/pay/     POST {"gateway": <id>} — settle one
 auth/provision-user/     POST (internal — provision user from platform)
 auth/provision-workspace/    POST (internal — provision workspace from platform)
 ```
+
+Platform bills are settled through the platform workspace's own `finance` gateways and confirmed
+the way every other payment on the deployment is; see `server-switches.md`, "Paying a bill".
 
 ---
 

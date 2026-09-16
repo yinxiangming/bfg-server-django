@@ -6,6 +6,7 @@ GET   /api/v1/platform/console/workspaces/                                  ?sea
 GET   /api/v1/platform/console/workspaces/{id}/                             also every extension, with its config
 GET   /api/v1/platform/console/workspaces/{id}/usage/                       ?month=YYYY-MM, this month by default
 GET   /api/v1/platform/console/workspaces/{id}/invoices/                    the platform bills, newest first
+POST  /api/v1/platform/console/workspaces/{id}/invoices/{number}/pay/       optional body: {"gateway": <id>}
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/acquire/    obtain an add-on, or be billed for it
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/activate/   optional body: {"config": {...}}
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/deactivate/
@@ -25,6 +26,12 @@ one whose owner most needs to see the bill. Money and points are strings rather 
 JSON numbers, so that nothing is rounded on the way to the console; see
 ``console_billing``.
 
+Paying a bill is open to the same people, and for the same reason — a workspace that
+has been stopped is the one with something to settle. It is the one write here that
+a read-only workspace may still make, so it carries the mark that says so; see
+``bill_payment`` for everything it refuses and ``bfg.platform.middleware`` for the
+list the mark belongs to.
+
 A change records the caller as the one who switched the extension on or off. Only a
 platform administrator is told that person's email: an owner is told the id and
 username of a changer who is active staff or the owner of the workspace, and for anyone
@@ -35,28 +42,42 @@ the refusal's ``code``, or 404 ``unknown_extension`` for a key no app declares.
 Platform paths are public, so no workspace is bound to these requests. What runs for
 the workspace being looked at (extension hooks, prerequisite checks, the deployment's
 entitlement check) may still read tenant-scoped models through ``objects``, so that
-workspace is bound while it runs and the previous binding is put back afterwards.
+workspace is bound while it runs and the previous binding is put back afterwards. The
+same goes for paying a bill, where what is bound is the *management* workspace: the
+bill and the payment are its own.
 """
 from datetime import date, datetime
 
 from django.http import Http404
 from django.utils.functional import cached_property
-from rest_framework import viewsets
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
-from bfg.common.extensions import endpoints
-from bfg.common.extensions import services as extension_services
+from bfg.common.extensions import endpoints, services as extension_services
 from bfg.common.middleware import bound_workspace
-from bfg.platform.services import acquisitions, console_billing
+from bfg.core.read_only import exempt_from_read_only
+from bfg.platform.services import acquisitions, bill_payment, console_billing
+from bfg.platform.services.billing import PlatformWorkspaceMissing
 from bfg.platform.services.console_service import ConsoleViewer, console_workspaces, workspace_entries
 
 WORKSPACE_NOT_FOUND = 'workspace_not_found'
 INVALID_MONTH = 'invalid_month'
 
 _EXTENSION_PATH = r'extensions/(?P<key>[a-z][a-z0-9_]*)'
+# An invoice number as ``billing`` writes one, and as ``finance.Invoice`` stores
+# one: at most fifty characters of the alphabet a number is built from. Anything
+# else never reaches the view, and anything shaped like this that is not one of
+# this workspace's bills is answered as not found.
+_INVOICE_PATH = r'invoices/(?P<number>[A-Za-z0-9][A-Za-z0-9_-]{0,49})'
+
+
+class _DeploymentNotReady(APIException):
+    """503 for something the deployment has not configured, not the caller's doing."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
 
 def _month(request):
@@ -152,6 +173,73 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
         """
         return Response(console_billing.invoice_history(self.get_object()))
 
+    # Read-only exemption: this is how a workspace settles what it owes, and
+    # settling it is what ends read-only mode. Refusing it would leave a lapsed
+    # workspace with no way back. The console is served outside any workspace, so
+    # the middleware would not act on it in the ordinary course — but an API-key
+    # caller is resolved to a workspace by the middleware itself, and the one
+    # write that must never be refused should say so on itself rather than rely
+    # on the path it happens to be mounted at.
+    @exempt_from_read_only
+    @action(detail=True, methods=['post'], url_path=f'{_INVOICE_PATH}/pay')
+    def pay_invoice(self, request, pk=None, number=None):
+        """Start paying one of this workspace's platform bills.
+
+        Body: ``{"gateway": <id>}``, optional — one of the management workspace's
+        active gateways, the lowest-numbered one by default. The deployment is
+        what is being paid, so the gateway is its own and not the workspace's.
+
+        Answers 201 with the bill, the payment raised against it, the gateway and
+        whatever that gateway needs the payer to act on. The payment comes back
+        ``pending``: money is never taken on the payer's word, so a card is
+        settled by the gateway's callback and an offline payment by whoever
+        reconciles it, and only then is the bill marked paid and what it bought
+        renewed.
+
+        Refusals, all with a ``code``: 404 ``workspace_not_found`` for a workspace
+        the caller does not reach and 404 ``invoice_not_found`` for a number that
+        is not one of *this* workspace's platform bills — another tenant's bill is
+        answered exactly as one that does not exist; 400 ``invoice_already_paid``,
+        ``invoice_cancelled``, ``invoice_nothing_to_pay``, ``no_payment_gateway``,
+        ``payment_gateway_not_found``, ``payment_gateway_unavailable``,
+        ``payment_in_progress``, or whatever ``finance`` refused the payment with;
+        and 503 ``platform_workspace_missing`` where the deployment has no
+        management workspace to be paid.
+
+        Open to anyone who reaches the workspace, suspended and inactive ones
+        included, rather than to ``_workspace_to_change``: a workspace that has
+        been stopped is the one that most needs to settle up, and being unable to
+        pay is what keeps it stopped.
+        """
+        workspace = self.get_object()
+        try:
+            paid = bill_payment.start_payment(
+                workspace,
+                number,
+                gateway_id=self._gateway_id(request),
+                user=request.user,
+            )
+        except bill_payment.BillNotFound as missing:
+            raise NotFound({'code': missing.code, 'detail': missing.message}) from None
+        except bill_payment.BillPaymentRefused as refusal:
+            raise ValidationError({'code': refusal.code, 'detail': refusal.message}) from None
+        except PlatformWorkspaceMissing as missing:
+            raise _DeploymentNotReady({'code': missing.code, 'detail': missing.message}) from None
+        return Response(paid, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _gateway_id(request):
+        """The gateway the body names, or ``None`` for the deployment's own choice."""
+        body = request.data if isinstance(request.data, dict) else {}
+        wanted = body.get('gateway')
+        if wanted in (None, ''):
+            return None
+        try:
+            return int(wanted)
+        except (TypeError, ValueError):
+            raise ValidationError(
+                {'code': bill_payment.PAYMENT_GATEWAY_NOT_FOUND, 'detail': 'gateway must be an id.'}
+            ) from None
     @action(detail=True, methods=['post'], url_path=f'{_EXTENSION_PATH}/acquire')
     def acquire_extension(self, request, pk=None, key=None):
         """Obtain an add-on for the workspace, or bill it for one.

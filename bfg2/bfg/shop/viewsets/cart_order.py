@@ -12,7 +12,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
-from bfg.core.permissions import IsWorkspaceStaff
+from bfg.core.permissions import IsWorkspaceStaff, CanManagePayments
 from rest_framework.exceptions import PermissionDenied, ValidationError as APIValidationError
 from decimal import Decimal
 
@@ -152,7 +152,7 @@ class CartViewSet(viewsets.ModelViewSet):
         
         try:
             product = Product.objects.get(id=product_id, workspace=request.workspace)
-            variant = ProductVariant.objects.get(id=variant_id) if variant_id else None
+            variant = ProductVariant.objects.get(id=variant_id, product=product) if variant_id else None
             
             service.add_to_cart(cart, product, quantity, variant)
             
@@ -308,10 +308,16 @@ class CartViewSet(viewsets.ModelViewSet):
             billing_address = None
             
             if shipping_address_id:
-                shipping_address = Address.objects.get(id=shipping_address_id)
+                shipping_address = Address.objects.get(
+                    id=shipping_address_id,
+                    workspace=request.workspace,
+                )
             
             if billing_address_id:
-                billing_address = Address.objects.get(id=billing_address_id)
+                billing_address = Address.objects.get(
+                    id=billing_address_id,
+                    workspace=request.workspace,
+                )
             elif fulfillment_method == 'shipping':
                 billing_address = shipping_address
             
@@ -366,6 +372,11 @@ class OrderViewSet(viewsets.ModelViewSet):
     """
     permission_classes = [IsAuthenticated, IsWorkspaceStaff]
     http_method_names = ['get', 'post', 'patch']
+
+    def get_permissions(self):
+        if self.action in ('mark_paid', 'refund'):
+            return [IsAuthenticated(), CanManagePayments()]
+        return super().get_permissions()
     
     def get_serializer_class(self):
         """Return appropriate serializer"""
@@ -598,8 +609,6 @@ class OrderViewSet(viewsets.ModelViewSet):
             )
         
         # Get additional fields from serializer
-        status = serializer.validated_data.get('status', 'pending')
-        payment_status = serializer.validated_data.get('payment_status', 'pending')
         customer_note = serializer.validated_data.get('customer_note', '')
         admin_note = serializer.validated_data.get('admin_note', '')
         
@@ -619,14 +628,9 @@ class OrderViewSet(viewsets.ModelViewSet):
                 qty = int(it.get('quantity', 1))
             except (TypeError, ValueError):
                 continue
-            price = Decimal(str(it.get('price', '0')))
-            line = price * qty
-            subtotal += line
             order_items.append({
                 'product_id': pid,
                 'quantity': qty,
-                'price': price,
-                'subtotal': line,
             })
         # A staff-created order carries no freight quote, so the only delivery
         # charge that can apply is what the pickup point asks for.
@@ -644,8 +648,6 @@ class OrderViewSet(viewsets.ModelViewSet):
             fulfillment_method=fulfillment_method,
             pickup_point=pickup_point,
             pickup_code=serializer.validated_data.get('pickup_code', ''),
-            status=status,
-            payment_status=payment_status,
             customer_note=customer_note,
             admin_note=admin_note,
             subtotal=subtotal,

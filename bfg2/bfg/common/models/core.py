@@ -322,11 +322,9 @@ def media_upload_to(instance, filename):
     workspace_id = instance.workspace_id if hasattr(instance, 'workspace_id') else 1
     
     # Get folder from temporary attribute set in ViewSet
-    folder = getattr(instance, '_upload_folder', '').strip('/') if hasattr(instance, '_upload_folder') else ''
-    # Ensure folder path is clean (no leading/trailing slashes, no double slashes)
-    if folder:
-        folder = '/'.join(folder.split('/'))  # Normalize path separators
-        folder = folder.strip('/')
+    folder = getattr(instance, '_upload_folder', '').strip() if hasattr(instance, '_upload_folder') else ''
+    if folder in {'.', '..'} or '/' in folder or '\\' in folder or '\x00' in folder:
+        raise ValueError('Media upload folder must be a single directory name')
     
     # Simplified path: media/{workspace_id}/{folder}/{filename}
     path_parts = ['media', str(workspace_id)]

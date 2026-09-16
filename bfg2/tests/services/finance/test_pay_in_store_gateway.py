@@ -184,7 +184,7 @@ def test_another_workspaces_gateway_is_not_offered(workspace, gateway, db):
 
 @pytest.fixture
 def currency(db):
-    return Currency.objects.create(code='NZD', name='New Zealand Dollar', symbol='$', is_active=True)
+    return Currency.objects.create(code='USD', name='US Dollar', symbol='$', is_active=True)
 
 
 @pytest.fixture

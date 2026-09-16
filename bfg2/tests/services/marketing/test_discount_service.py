@@ -713,12 +713,6 @@ def test_apply_coupon_to_order_updates_discount_and_total(monkeypatch):
 def test_apply_gift_card_to_order_deducts_from_gift_card_balance(monkeypatch):
     service = DiscountCalculationService(workspace=SimpleNamespace(id=1), user=None)
 
-    monkeypatch.setattr(
-        service,
-        "_calculate_gift_card_amount",
-        lambda *_a, **_kw: Decimal("30.00"),
-    )
-
     gift_card_data = {"balance": Decimal("50.00")}
 
     class _GiftCardObjects:
@@ -726,7 +720,9 @@ def test_apply_gift_card_to_order_deducts_from_gift_card_balance(monkeypatch):
         def get(**_kwargs):
             return SimpleNamespace(
                 balance=gift_card_data["balance"],
-                save=lambda: gift_card_data.update({"balance": gc.balance}),
+                expires_at=None,
+                is_active=True,
+                save=lambda **_kwargs: gift_card_data.update({"balance": gc.balance}),
             )
 
     gc = _GiftCardObjects.get()
@@ -737,7 +733,7 @@ def test_apply_gift_card_to_order_deducts_from_gift_card_balance(monkeypatch):
 
     monkeypatch.setattr(
         "bfg.marketing.services.discount_service.GiftCard.objects",
-        SimpleNamespace(get=_get_gc),
+        SimpleNamespace(select_for_update=lambda: SimpleNamespace(get=_get_gc)),
     )
 
     saved = {}
@@ -747,11 +743,12 @@ def test_apply_gift_card_to_order_deducts_from_gift_card_balance(monkeypatch):
         tax=Decimal("0.00"),
         discount=Decimal("0.00"),
         total=Decimal("110.00"),
-        save=lambda: saved.update({"discount": order.discount, "total": order.total}),
+        save=lambda **_kwargs: saved.update({"discount": order.discount, "total": order.total}),
     )
 
     amount, err = service.apply_gift_card_to_order(order, "GC50")
 
-    assert amount == Decimal("30.00")
+    assert amount == Decimal("50.00")
     assert err is None
-    assert saved["discount"] == Decimal("30.00")
+    assert saved["discount"] == Decimal("50.00")
+    assert gift_card_data["balance"] == Decimal("0.00")

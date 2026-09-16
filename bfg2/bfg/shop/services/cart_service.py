@@ -156,6 +156,9 @@ class CartService(BaseService):
             InsufficientStock: If not enough stock available
         """
         self.validate_workspace_access(product)
+        self.validate_workspace_access(cart)
+        if variant is not None and getattr(variant, 'product_id', product.id) != product.id:
+            raise ValueError("Product variant does not belong to the selected product")
 
         # Check stock availability.
         #
@@ -219,8 +222,11 @@ class CartService(BaseService):
         """
         # Check stock availability — same single definition as add_to_cart.
         product = cart_item.product
+        variant = getattr(cart_item, 'variant', None)
+        if variant is not None and getattr(variant, 'product_id', product.id) != product.id:
+            raise ValueError("Product variant does not belong to the selected product")
         if not self._allows_backorder():
-            available_stock = available_units(product, cart_item.variant)
+            available_stock = available_units(product, variant)
             if available_stock is not None and available_stock < quantity:
                 raise InsufficientStock(
                     f"Only {available_stock} units available"

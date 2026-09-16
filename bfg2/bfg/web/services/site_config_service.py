@@ -7,9 +7,16 @@ Load from JSON/YAML config (Site, Theme, Pages, Menus, Product categories) or ex
 from typing import Any, Dict, List, Optional
 from django.utils import timezone
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from bfg.common.constants import DEFAULT_CURRENCY_CODE
 from bfg.core.services import BaseService
-from bfg.common.models import Settings, Workspace, normalize_hostname, upsert_custom_workspace_domain
+from bfg.common.models import (
+    Settings,
+    Workspace,
+    WorkspaceDomain,
+    normalize_hostname,
+    upsert_custom_workspace_domain,
+)
 from bfg.common.utils import first_staff_user_for_workspace
 from bfg.web.models import Site, Theme, Language, Page, Menu, MenuItem
 
@@ -19,6 +26,7 @@ User = get_user_model()
 class SiteConfigService(BaseService):
     """Load site config into workspace or export workspace site data."""
 
+    @transaction.atomic
     def load_from_config(
         self,
         config: Dict[str, Any],
@@ -110,11 +118,14 @@ class SiteConfigService(BaseService):
         host = normalize_hostname(raw)
         if not host:
             return
+        existing = WorkspaceDomain.objects.filter(hostname=host).first()
+        if existing is not None and existing.workspace_id == self.workspace.id:
+            return
         upsert_custom_workspace_domain(
             self.workspace,
             host,
-            is_primary=True,
-            verification_status="verified",
+            is_primary=False,
+            verification_status="pending",
             ssl_status="none",
         )
 

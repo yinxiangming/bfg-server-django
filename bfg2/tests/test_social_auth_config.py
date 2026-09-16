@@ -313,7 +313,10 @@ def request_for(host, session=None, workspace_header=None):
 
 def domain(workspace, hostname):
     return WorkspaceDomain.objects.create(
-        workspace=workspace, hostname=hostname, kind=WorkspaceDomain.KIND_CUSTOM,
+        workspace=workspace,
+        hostname=hostname,
+        kind=WorkspaceDomain.KIND_CUSTOM,
+        verification_status=WorkspaceDomain.VERIFICATION_VERIFIED,
     )
 
 

@@ -70,18 +70,6 @@ class WorkspaceService(BaseService):
         )
 
         try:
-            WorkspaceDomain = apps.get_model('common', 'WorkspaceDomain')
-            if legacy_domain:
-                WorkspaceDomain.objects.update_or_create(
-                    hostname=legacy_domain,
-                    defaults={
-                        'workspace': workspace,
-                        'kind': WorkspaceDomain.KIND_CUSTOM,
-                        'verification_status': WorkspaceDomain.VERIFICATION_VERIFIED,
-                        'ssl_status': WorkspaceDomain.SSL_NONE,
-                        'is_primary': True,
-                    },
-                )
             WorkspacePlatformProfile = apps.get_model('platform', 'WorkspacePlatformProfile')
             profile, _ = WorkspacePlatformProfile.objects.get_or_create(workspace=workspace)
             update_fields = []
@@ -105,7 +93,13 @@ class WorkspaceService(BaseService):
 
         ensure_system_default_workspace_domain(workspace)
         if legacy_domain:
-            upsert_custom_workspace_domain(workspace, legacy_domain, is_primary=True)
+            upsert_custom_workspace_domain(
+                workspace,
+                legacy_domain,
+                is_primary=False,
+                verification_status='pending',
+                ssl_status='none',
+            )
 
         # Emit workspace created event - modules will respond to initialize their data
         # This must happen before assigning owner, as owner assignment requires admin role

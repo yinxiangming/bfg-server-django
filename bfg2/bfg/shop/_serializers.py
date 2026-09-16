@@ -720,7 +720,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'order_number', 'customer', 'store', 'created_at',
-            'subtotal', 'shipping_cost', 'tax', 'discount', 'total'
+            'subtotal', 'shipping_cost', 'tax', 'discount', 'total',
+            'status', 'payment_status',
         ]
 
 

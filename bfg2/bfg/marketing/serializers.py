@@ -79,6 +79,30 @@ class DiscountRuleSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Discount value cannot exceed 999999")
         return value
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None) if request else None
+        if workspace is None:
+            return attrs
+
+        from bfg.shop.models import Product, ProductCategory
+
+        product_ids = attrs.get('product_ids')
+        if product_ids is not None and Product.objects.filter(
+            id__in=product_ids,
+            workspace=workspace,
+        ).count() != len(set(product_ids)):
+            raise serializers.ValidationError({'product_ids': 'One or more products were not found in this workspace.'})
+
+        category_ids = attrs.get('category_ids')
+        if category_ids is not None and ProductCategory.objects.filter(
+            id__in=category_ids,
+            workspace=workspace,
+        ).count() != len(set(category_ids)):
+            raise serializers.ValidationError({'category_ids': 'One or more categories were not found in this workspace.'})
+        return attrs
+
     def create(self, validated_data):
         product_ids = validated_data.pop('product_ids', [])
         category_ids = validated_data.pop('category_ids', [])
@@ -117,7 +141,7 @@ class CampaignSerializer(serializers.ModelSerializer):
             'requires_participation', 'min_participants', 'max_participants', 'promo_display_type',
             'config',
         ]
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['workspace', 'created_at', 'updated_at']
 
     def validate_config(self, value):
         """Validate Campaign.config against schema."""
@@ -139,6 +163,15 @@ class CampaignSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Budget cannot be negative")
         return value
 
+    def validate_group_id(self, value):
+        if value is None:
+            return value
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None) if request else None
+        if workspace is not None and not CampaignGroup.objects.filter(id=value, workspace=workspace).exists():
+            raise serializers.ValidationError('Campaign group does not belong to this workspace.')
+        return value
+
 
 class CampaignParticipationSerializer(serializers.ModelSerializer):
     """Campaign participation (Boost) serializer."""
@@ -150,7 +183,7 @@ class CampaignParticipationSerializer(serializers.ModelSerializer):
             'id', 'campaign', 'campaign_name', 'customer', 'status',
             'created_at', 'updated_at', 'order',
         ]
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['workspace', 'created_at', 'updated_at']
 
 
 class CampaignDisplaySerializer(serializers.ModelSerializer):
@@ -167,7 +200,7 @@ class CampaignDisplaySerializer(serializers.ModelSerializer):
             'rules', 'post', 'is_active',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['workspace', 'created_at', 'updated_at']
 
     def get_campaign_name(self, obj):
         return obj.campaign.name if obj.campaign_id else None
@@ -185,17 +218,22 @@ class CampaignDisplaySerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         campaign = attrs.get('campaign') or (self.instance.campaign if self.instance else None)
-        workspace = attrs.get('workspace') or (self.instance.workspace_id if self.instance else None)
-        if not campaign and not workspace:
-            raise serializers.ValidationError({'workspace': 'Either campaign or workspace is required.'})
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None) if request else None
+        if workspace is None:
+            raise serializers.ValidationError({'workspace': 'Workspace context is required.'})
+        if campaign is not None and campaign.workspace_id != workspace.id:
+            raise serializers.ValidationError({'campaign': 'Campaign does not belong to this workspace.'})
+        post = attrs.get('post') or (self.instance.post if self.instance else None)
+        if post is not None and post.workspace_id != workspace.id:
+            raise serializers.ValidationError({'post': 'Post does not belong to this workspace.'})
         return attrs
 
     def save(self, **kwargs):
         if self.validated_data.get('campaign'):
             kwargs['workspace_id'] = self.validated_data['campaign'].workspace_id
-        elif self.validated_data.get('workspace'):
-            w = self.validated_data['workspace']
-            kwargs['workspace_id'] = getattr(w, 'id', w)
+        else:
+            kwargs['workspace'] = self.context['request'].workspace
         return super().save(**kwargs)
 
 
@@ -244,6 +282,24 @@ class CouponSerializer(serializers.ModelSerializer):
         if value is not None and value < 0:
             raise serializers.ValidationError("Usage limit per customer cannot be negative")
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None) if request else None
+        if workspace is None:
+            return attrs
+
+        checks = (
+            ('campaign_id', Campaign),
+            ('discount_rule_id', DiscountRule),
+            ('boost_id', CampaignParticipation),
+        )
+        for field, model in checks:
+            value = attrs.get(field)
+            if value is not None and not model.objects.filter(id=value, workspace=workspace).exists():
+                raise serializers.ValidationError({field: 'Related object does not belong to this workspace.'})
+        return attrs
 
 
 class GiftCardSerializer(serializers.ModelSerializer):
@@ -295,6 +351,13 @@ class GiftCardSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Balance cannot exceed initial value")
         return value
 
+    def validate_customer(self, customer):
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None) if request else None
+        if customer is not None and workspace is not None and customer.workspace_id != workspace.id:
+            raise serializers.ValidationError('Customer does not belong to this workspace.')
+        return customer
+
 
 class ReferralProgramSerializer(serializers.ModelSerializer):
     """Referral program serializer"""
@@ -336,4 +399,3 @@ class ReferralProgramSerializer(serializers.ModelSerializer):
             if value < 0:
                 raise serializers.ValidationError("Minimum purchase cannot be negative")
         return value
-

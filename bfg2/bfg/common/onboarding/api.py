@@ -12,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from bfg.core.permissions import IsWorkspaceAdmin
+from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff
 
 from .service import OnboardingService, options_payload
 
@@ -26,6 +26,8 @@ class _Base(APIView):
 
 class OnboardingStatusView(_Base):
     """GET /api/v1/onboarding/status/ — the checklist and the percentage."""
+
+    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
 
     def get(self, request):
         return Response(self.service(request).status())

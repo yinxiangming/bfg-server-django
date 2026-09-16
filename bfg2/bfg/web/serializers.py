@@ -12,6 +12,25 @@ from bfg.web.models import (
 )
 
 
+def _validate_workspace_assignee(serializer, user):
+    if user is None:
+        return None
+    request = serializer.context.get('request')
+    workspace = getattr(request, 'workspace', None) if request else None
+    if workspace is None:
+        return user
+
+    from bfg.common.models import StaffMember
+
+    if not StaffMember.all_objects.filter(
+        workspace=workspace,
+        user=user,
+        is_active=True,
+    ).exists():
+        raise serializers.ValidationError('Assignee must be an active staff member of this workspace.')
+    return user
+
+
 class SiteSerializer(serializers.ModelSerializer):
     """Site serializer"""
     
@@ -37,7 +56,7 @@ class ThemeSerializer(serializers.ModelSerializer):
             'custom_css', 'custom_js', 'config', 'is_active',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'workspace', 'created_at', 'updated_at']
 
 
 class LanguageSerializer(serializers.ModelSerializer):
@@ -49,7 +68,7 @@ class LanguageSerializer(serializers.ModelSerializer):
             'id', 'workspace', 'code', 'name', 'native_name',
             'is_default', 'is_active', 'order', 'is_rtl'
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'workspace']
 
 
 class PageListSerializer(serializers.ModelSerializer):
@@ -328,6 +347,9 @@ class InquiryListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'type_display', 'status_display', 'assigned_to_name', 'created_at', 'updated_at']
 
+    def validate_assigned_to(self, user):
+        return _validate_workspace_assignee(self, user)
+
 
 class InquiryDetailSerializer(serializers.ModelSerializer):
     """Inquiry detail serializer (full)"""
@@ -351,6 +373,9 @@ class InquiryDetailSerializer(serializers.ModelSerializer):
             'ip_address', 'user_agent', 'notification_sent', 'notification_sent_at',
             'created_at', 'updated_at'
         ]
+
+    def validate_assigned_to(self, user):
+        return _validate_workspace_assignee(self, user)
 
 
 class InquiryCreateSerializer(serializers.ModelSerializer):
@@ -405,13 +430,21 @@ class BookingSerializer(serializers.ModelSerializer):
             'status', 'notes', 'admin_notes', 'metadata',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'workspace', 'status', 'admin_notes', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id', 'workspace', 'customer', 'status', 'admin_notes', 'created_at', 'updated_at',
+        ]
 
     def validate(self, attrs):
         """
         If customer is not provided, require guest contact fields.
         When request is authenticated, use resolved_customer from context so guest fields are not required.
         """
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None) if request else None
+        timeslot = attrs.get('timeslot') or getattr(self.instance, 'timeslot', None)
+        if workspace is not None and timeslot is not None and timeslot.workspace_id != workspace.id:
+            raise serializers.ValidationError({'timeslot': 'Time slot does not belong to this workspace.'})
+
         customer = attrs.get('customer')
         if not customer:
             resolved = self.context.get('resolved_customer')
@@ -481,7 +514,14 @@ class NewsletterSendSerializer(serializers.ModelSerializer):
             'id', 'subject', 'content', 'template', 'scheduled_at', 'status',
             'sent_at', 'created_at', 'updated_at', 'created_by',
         ]
-        read_only_fields = ['id', 'status', 'sent_at', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'status', 'sent_at', 'created_at', 'updated_at', 'created_by']
+
+    def validate_template(self, template):
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None) if request else None
+        if template is not None and workspace is not None and template.workspace_id != workspace.id:
+            raise serializers.ValidationError('Template does not belong to this workspace.')
+        return template
 
 
 class NewsletterSendLogSerializer(serializers.ModelSerializer):

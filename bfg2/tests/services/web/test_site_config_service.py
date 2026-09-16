@@ -23,4 +23,5 @@ def test_sync_workspace_custom_domain_upserts_workspace_domain(db):
 
     domain = WorkspaceDomain.objects.get(workspace=real_workspace, hostname="shop.example.test")
     assert domain.kind == WorkspaceDomain.KIND_CUSTOM
-    assert domain.is_primary is True
+    assert domain.is_primary is False
+    assert domain.verification_status == WorkspaceDomain.VERIFICATION_PENDING

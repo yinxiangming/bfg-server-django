@@ -46,11 +46,10 @@ class MessageRecipientSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'delivered_at', 'read_at']
     
     def get_sender(self, obj):
-        """Get sender information if available"""
+        """Return only the identity needed for display, without staff contact data."""
         if obj.message and obj.message.sender:
             return {
                 'id': obj.message.sender.id,
-                'email': obj.message.sender.email,
                 'first_name': getattr(obj.message.sender, 'first_name', None),
                 'last_name': getattr(obj.message.sender, 'last_name', None)
             }

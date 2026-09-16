@@ -136,13 +136,12 @@ class OrderService(BaseService):
         # Calculate tax based on address or default rate
         tax = self._calculate_tax(subtotal, shipping_address)
         
-        # Apply gift card amount (reduces total)
         gift_card_amount = discount_result.get('gift_card_amount', Decimal('0.00'))
         if gift_card_amount > 0:
             discount += gift_card_amount
         
         # Calculate total
-        total = subtotal + shipping_cost + tax - discount
+        total = max(subtotal + shipping_cost + tax - discount, Decimal('0.00'))
         
         return {
             'subtotal': subtotal,
@@ -152,6 +151,7 @@ class OrderService(BaseService):
             'total': total,
             'shipping_discount': shipping_discount,
             'coupon_discount': discount_result.get('coupon_discount', Decimal('0.00')),
+            'gift_card_amount': gift_card_amount,
         }
     
     def _calculate_cart_weight(self, cart: Cart) -> Decimal:
@@ -390,6 +390,16 @@ class OrderService(BaseService):
         """
         self.validate_workspace_access(cart)
         self.validate_workspace_access(store)
+        if cart.workspace_id != store.workspace_id:
+            raise APIValidationError({'store': 'Store does not belong to this cart workspace.'})
+
+        # Serialize checkout attempts for the same cart. Once the first checkout
+        # clears the rows, a concurrent request observes an empty cart instead of
+        # creating a duplicate order.
+        cart = Cart.all_objects.select_for_update().get(
+            pk=cart.pk,
+            workspace=self.workspace,
+        )
         
         # Check cart has items
         cart_items = cart.items.select_related('product', 'variant').all()
@@ -403,6 +413,16 @@ class OrderService(BaseService):
         pickup_point = self.resolve_pickup_point(fulfillment_method, kwargs.get('pickup_point'))
         if not billing_address:
             billing_address = shipping_address
+
+        for field_name, address in (
+            ('shipping_address', shipping_address),
+            ('billing_address', billing_address),
+        ):
+            if address is None:
+                continue
+            self.validate_workspace_access(address)
+            if cart.customer_id is None or address.content_object != cart.customer:
+                raise APIValidationError({field_name: 'Address does not belong to this customer.'})
         
         # Use unified price calculation
         # Priority: freight_service_id > shipping_method > provided shipping_cost
@@ -411,58 +431,24 @@ class OrderService(BaseService):
         coupon_code = kwargs.get('coupon_code')
         gift_card_code = kwargs.get('gift_card_code')
         
-        if freight_service_id is not None or shipping_method is not None:
-            # Use unified calculation function with FreightService support
-            totals = self.calculate_order_totals(
-                cart=cart,
-                shipping_method=shipping_method,
-                freight_service_id=freight_service_id,
-                coupon_code=coupon_code,
-                gift_card_code=gift_card_code,
-                user=kwargs.get('user'),
-                shipping_address=shipping_address,
-                fulfillment_method=fulfillment_method,
-                pickup_point=pickup_point
-            )
-            subtotal = totals['subtotal']
-            discount = totals['discount']
-            shipping_cost = totals['shipping_cost']
-            tax = totals['tax']
-            total = totals['total']
-        else:
-            # Backward compatibility: use provided shipping_cost and tax
-            # But still calculate discount using unified method
-            totals = self.calculate_order_totals(
-                cart=cart,
-                shipping_method=None,
-                freight_service_id=None,
-                coupon_code=coupon_code,
-                gift_card_code=gift_card_code,
-                user=kwargs.get('user'),
-                shipping_address=shipping_address,
-                fulfillment_method=fulfillment_method,
-                pickup_point=pickup_point
-            )
-            subtotal = totals['subtotal']
-            discount = totals['discount']
-            
-            # Use provided shipping_cost and tax if available, otherwise use calculated
-            shipping_cost = kwargs.get('shipping_cost')
-            if shipping_cost is not None:
-                shipping_cost = Decimal(str(shipping_cost))
-                # Apply free shipping discount if applicable
-                if totals['shipping_discount'] > Decimal('0.00'):
-                    shipping_cost = Decimal('0.00')
-            else:
-                shipping_cost = totals['shipping_cost']
-            
-            tax = kwargs.get('tax')
-            if tax is not None:
-                tax = Decimal(str(tax))
-            else:
-                tax = totals['tax']
-            
-            total = subtotal + shipping_cost + tax - discount
+        # Prices are always server-derived. Legacy client-supplied shipping_cost,
+        # tax and total values are intentionally ignored.
+        totals = self.calculate_order_totals(
+            cart=cart,
+            shipping_method=shipping_method,
+            freight_service_id=freight_service_id,
+            coupon_code=coupon_code,
+            gift_card_code=gift_card_code,
+            user=kwargs.get('user'),
+            shipping_address=shipping_address,
+            fulfillment_method=fulfillment_method,
+            pickup_point=pickup_point,
+        )
+        subtotal = totals['subtotal']
+        discount = totals['discount']
+        shipping_cost = totals['shipping_cost']
+        tax = totals['tax']
+        total = totals['total']
 
         coupon_row_to_record = None
         if coupon_code:
@@ -472,7 +458,7 @@ class OrderService(BaseService):
                 from bfg.marketing.services.discount_service import DiscountCalculationService
 
                 try:
-                    coupon_row = Coupon.objects.get(
+                    coupon_row = Coupon.objects.select_for_update().get(
                         workspace=self.workspace,
                         code=code_upper,
                         is_active=True,
@@ -491,6 +477,37 @@ class OrderService(BaseService):
                     # Includes usage-limit exhaustion: expected business response (4xx), not a server fault
                     raise APIValidationError({'coupon_code': v_err})
                 coupon_row_to_record = coupon_row
+
+        gift_card_row_to_debit = None
+        gift_card_amount = totals.get('gift_card_amount', Decimal('0.00'))
+        if gift_card_code:
+            from bfg.marketing.models import GiftCard
+
+            try:
+                gift_card_row_to_debit = GiftCard.objects.select_for_update().select_related('currency').get(
+                    workspace=self.workspace,
+                    code=str(gift_card_code).strip().upper(),
+                    is_active=True,
+                )
+            except GiftCard.DoesNotExist:
+                raise APIValidationError({'gift_card_code': 'Invalid or inactive gift card.'})
+            if gift_card_row_to_debit.expires_at and gift_card_row_to_debit.expires_at < timezone.localdate():
+                raise APIValidationError({'gift_card_code': 'Gift card has expired.'})
+            if gift_card_row_to_debit.customer_id not in (None, cart.customer_id):
+                raise APIValidationError({'gift_card_code': 'Gift card does not belong to this customer.'})
+            from bfg.common.constants import get_default_currency_for_workspace
+            if gift_card_row_to_debit.currency.code != get_default_currency_for_workspace(self.workspace):
+                raise APIValidationError({'gift_card_code': 'Gift card currency does not match the order currency.'})
+
+            payable_before_gift = max(
+                subtotal + shipping_cost + tax - totals.get('coupon_discount', Decimal('0.00')),
+                Decimal('0.00'),
+            )
+            gift_card_amount = min(gift_card_row_to_debit.balance, payable_before_gift)
+            if gift_card_amount <= 0:
+                raise APIValidationError({'gift_card_code': 'Gift card has no available balance.'})
+            discount = totals.get('coupon_discount', Decimal('0.00')) + gift_card_amount
+            total = max(subtotal + shipping_cost + tax - discount, Decimal('0.00'))
         
         # Get freight_service object if freight_service_id is provided
         freight_service = None
@@ -524,6 +541,7 @@ class OrderService(BaseService):
             tax=tax,
             discount=discount,
             total=total,
+            coupon=coupon_row_to_record,
             shipping_address=shipping_address,
             billing_address=billing_address,
             customer_note=kwargs.get('customer_note', ''),
@@ -592,12 +610,25 @@ class OrderService(BaseService):
             CouponModel.objects.filter(pk=coupon_row_to_record.pk).update(
                 times_used=F('times_used') + 1
             )
+
+        if gift_card_row_to_debit is not None:
+            gift_card_row_to_debit.balance -= gift_card_amount
+            if gift_card_row_to_debit.balance == 0:
+                gift_card_row_to_debit.is_active = False
+            gift_card_row_to_debit.save(update_fields=['balance', 'is_active', 'updated_at'])
         
         # Auto-create Invoice
         invoice = self._create_invoice_for_order(order)
-        
-        # Auto-create pending Payment record
-        self._create_payment_for_order(order, invoice)
+
+        if order.total == 0 and gift_card_row_to_debit is not None:
+            self.mark_as_paid(order)
+            if invoice is not None:
+                invoice.status = 'paid'
+                invoice.paid_date = timezone.now().date()
+                invoice.save(update_fields=['status', 'paid_date', 'updated_at'])
+        # A payment attempt is created only after the shopper chooses a gateway.
+        # Pre-creating one here binds an arbitrary gateway and makes retries or a
+        # saved payment method ambiguous.
         
         # Log order creation
         audit = AuditService(workspace=self.workspace, user=self.user)
@@ -653,15 +684,53 @@ class OrderService(BaseService):
         pickup_point = self.resolve_pickup_point(fulfillment_method, kwargs.get('pickup_point'))
         if not billing_address:
             billing_address = shipping_address
-        
-        # Get order data
-        subtotal = kwargs.get('subtotal', Decimal('0.00'))
-        shipping_cost = kwargs.get('shipping_cost', Decimal('0.00'))
-        tax = kwargs.get('tax', Decimal('0.00'))
-        discount = kwargs.get('discount', Decimal('0.00'))
-        total = kwargs.get('total', subtotal + shipping_cost + tax - discount)
-        status = kwargs.get('status', 'pending')
-        payment_status = kwargs.get('payment_status', 'pending')
+
+        for field_name, address in (
+            ('shipping_address', shipping_address),
+            ('billing_address', billing_address),
+        ):
+            if address is None:
+                continue
+            self.validate_workspace_access(address)
+            if address.content_object != customer:
+                raise APIValidationError({field_name: 'Address does not belong to this customer.'})
+
+        prepared_items = []
+        raw_items = kwargs.get('order_items', [])
+        if raw_items:
+            from bfg.shop.models import Product, ProductVariant
+
+            calculated_subtotal = Decimal('0.00')
+            for item_data in raw_items:
+                product = Product.objects.get(id=item_data['product_id'], workspace=self.workspace)
+                quantity = int(item_data.get('quantity', 1))
+                if quantity <= 0 or quantity > 10000:
+                    raise APIValidationError({'order_items': 'Quantity must be between 1 and 10000.'})
+                variant = None
+                if item_data.get('variant_id'):
+                    variant = ProductVariant.objects.get(
+                        id=item_data['variant_id'],
+                        product=product,
+                    )
+                price = variant.price if variant and variant.price is not None else product.price
+                line_subtotal = price * quantity
+                calculated_subtotal += line_subtotal
+                prepared_items.append((product, variant, quantity, price, line_subtotal))
+            subtotal = calculated_subtotal
+        else:
+            subtotal = Decimal(str(kwargs.get('subtotal', Decimal('0.00'))))
+
+        shipping_cost = Decimal(str(kwargs.get('shipping_cost', Decimal('0.00'))))
+        tax = Decimal(str(kwargs.get('tax', Decimal('0.00'))))
+        discount = Decimal(str(kwargs.get('discount', Decimal('0.00'))))
+        if min(subtotal, shipping_cost, tax, discount) < 0:
+            raise APIValidationError({'amounts': 'Order amounts must not be negative.'})
+        gross_total = subtotal + shipping_cost + tax
+        if discount > gross_total:
+            raise APIValidationError({'discount': 'Discount cannot exceed the order amount.'})
+        total = gross_total - discount
+        status = 'pending'
+        payment_status = 'pending'
         
         # Generate order number
         order_number = self._generate_order_number()
@@ -689,14 +758,7 @@ class OrderService(BaseService):
         )
         
         # Create order items if provided
-        order_items = kwargs.get('order_items', [])
-        for item_data in order_items:
-            from bfg.shop.models import Product, ProductVariant
-            product = Product.objects.get(id=item_data['product_id'], workspace=self.workspace)
-            variant = None
-            if item_data.get('variant_id'):
-                variant = ProductVariant.objects.get(id=item_data['variant_id'])
-            
+        for product, variant, quantity, price, line_subtotal in prepared_items:
             OrderItem.objects.create(
                 order=order,
                 product=product,
@@ -704,9 +766,9 @@ class OrderService(BaseService):
                 product_name=product.name,
                 variant_name=variant.name if variant else '',
                 sku=variant.sku if variant else product.sku,
-                quantity=item_data.get('quantity', 1),
-                price=item_data.get('price', product.price),
-                subtotal=item_data.get('subtotal', Decimal('0.00')),
+                quantity=quantity,
+                price=price,
+                subtotal=line_subtotal,
             )
         
         # Emit order created event
@@ -923,6 +985,12 @@ class OrderService(BaseService):
             Order: Updated order instance
         """
         self.validate_workspace_access(order)
+        order = Order.all_objects.select_for_update().get(
+            pk=order.pk,
+            workspace=self.workspace,
+        )
+        if order.payment_status == 'paid':
+            return order
         
         old_payment_status = order.payment_status
         order.payment_status = 'paid'

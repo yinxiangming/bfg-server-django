@@ -23,6 +23,37 @@ from bfg.delivery.schemas import (
 )
 
 
+SECRET_MASK = '********'
+SENSITIVE_CONFIG_FRAGMENTS = (
+    'secret', 'password', 'private', 'token', 'credential', 'api_key', 'subscription_key',
+)
+
+
+def _mask_credentials(carrier_type, config):
+    from bfg.delivery.carriers import CarrierLoader
+
+    plugin_info = CarrierLoader.get_plugin_info(carrier_type) or {}
+    schema = plugin_info.get('config_schema') or {}
+    masked = dict(config or {})
+    for key, value in list(masked.items()):
+        declared_sensitive = bool((schema.get(key) or {}).get('sensitive'))
+        conventional_secret = any(fragment in key.lower() for fragment in SENSITIVE_CONFIG_FRAGMENTS)
+        if value not in (None, '') and (declared_sensitive or conventional_secret):
+            masked[key] = SECRET_MASK
+    return masked
+
+
+def _merge_masked_credentials(existing, incoming):
+    merged = dict(incoming or {})
+    for key, value in list(merged.items()):
+        if value == SECRET_MASK:
+            if key in (existing or {}):
+                merged[key] = existing[key]
+            else:
+                merged.pop(key)
+    return merged
+
+
 class WarehouseSerializer(CoordinateFieldsMixin, serializers.ModelSerializer):
     """Warehouse serializer"""
     
@@ -108,6 +139,22 @@ class CarrierSerializer(serializers.ModelSerializer):
     def validate_test_config(self, value):
         """Validate test carrier config."""
         return self._validate_config_payload(value)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['config'] = _mask_credentials(instance.carrier_type, instance.config)
+        data['test_config'] = _mask_credentials(instance.carrier_type, instance.test_config)
+        return data
+
+    def update(self, instance, validated_data):
+        if 'config' in validated_data:
+            validated_data['config'] = _merge_masked_credentials(instance.config, validated_data['config'])
+        if 'test_config' in validated_data:
+            validated_data['test_config'] = _merge_masked_credentials(
+                instance.test_config,
+                validated_data['test_config'],
+            )
+        return super().update(instance, validated_data)
 
 
 class PackagingTypeSerializer(serializers.ModelSerializer):
@@ -214,6 +261,15 @@ class PackageSerializer(serializers.ModelSerializer):
             'state', 'status', 'status_name', 'description', 'created_at'
         ]
         read_only_fields = ['id', 'package_number', 'created_at']
+
+    def validate_status(self, freight_status):
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None) if request else None
+        if workspace is not None and freight_status.workspace_id != workspace.id:
+            raise serializers.ValidationError('Status does not belong to this workspace.')
+        if freight_status.type != 'package':
+            raise serializers.ValidationError('Status is not a package status.')
+        return freight_status
 
 
 class ConsignmentListSerializer(serializers.ModelSerializer):
@@ -415,5 +471,3 @@ class PackageTemplateSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'volume_cm3', 'created_at', 'updated_at']
-
-

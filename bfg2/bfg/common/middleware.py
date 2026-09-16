@@ -65,6 +65,15 @@ PUBLIC_PATHS = (
     '/static/',
 )
 
+# Exact collection endpoints that must work before a tenant exists. They are
+# still protected by their DRF permissions; only workspace resolution is
+# deferred to the view. Do not turn this into a prefix match, because detail
+# routes such as /api/v1/workspaces/123/ must stay tenant-bound.
+TENANT_BOOTSTRAP_PATHS = {
+    '/api/v1/workspaces/',
+    '/api/v1/workspaces',
+}
+
 # Deployments add their own prefixes through ``settings.BFG_EXTRA_PUBLIC_PATHS``
 # (a tuple of path prefixes, default empty) instead of editing the tuple above —
 # e.g. an app serving many tenants from one client, which takes the tenant from
@@ -130,7 +139,11 @@ def _get_workspace_by_domain(hostname):
     try:
         domain = (
             WorkspaceDomain.objects
-            .filter(hostname=normalized, workspace__is_active=True)
+            .filter(
+                hostname=normalized,
+                workspace__is_active=True,
+                verification_status=WorkspaceDomain.VERIFICATION_VERIFIED,
+            )
             .select_related('workspace')
             .first()
         )
@@ -373,6 +386,9 @@ class WorkspaceMiddleware:
         workspace = self._resolve_workspace(request)
 
         if workspace is None:
+            if path in TENANT_BOOTSTRAP_PATHS:
+                request.workspace = None
+                return self.get_response(request)
             if self._delegates_to_view_auth(request):
                 request.workspace = None
                 return self.get_response(request)

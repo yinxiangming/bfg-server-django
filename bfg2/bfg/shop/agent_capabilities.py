@@ -166,14 +166,17 @@ def _create_order_handler(
         if not pid:
             continue
         product = Product.objects.get(id=pid, workspace=workspace)
-        price = product.price
-        if isinstance(row.get("price"), (int, float)):
-            price = Decimal(str(row["price"]))
+        variant = None
+        variant_id = row.get("variant_id")
+        if variant_id:
+            from bfg.shop.models import ProductVariant
+            variant = ProductVariant.objects.get(id=variant_id, product=product)
+        price = variant.price if variant and variant.price is not None else product.price
         item_subtotal = price * qty
         subtotal += item_subtotal
         order_items_data.append({
             "product_id": pid,
-            "variant_id": row.get("variant_id"),
+            "variant_id": variant_id,
             "quantity": qty,
             "price": price,
             "subtotal": item_subtotal,

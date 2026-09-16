@@ -182,21 +182,15 @@ def create_carriers(workspace, stdout=None, style=None):
             'name': 'ParcelPort',
             'code': 'PARCELPORT',
             'carrier_type': 'parcelport',
-            'config': {
-                'username': 'surlex',
-                'password': 'Abcd123321',
-            },
-            'is_test_mode': False,
+            'config': {},
+            'is_test_mode': True,
         },
         {
             'name': 'Starshipit',
             'code': 'STARSHIPIT',
             'carrier_type': 'starshipit',
-            'config': {
-                'api_key': 'cc3996b75b1c43fb8628789d921669e5',
-                'subscription_key': '38dc581b5dae454aa79c273c7010c6df',
-            },
-            'is_test_mode': False,
+            'config': {},
+            'is_test_mode': True,
         },
     ]
     carriers = []
@@ -209,7 +203,7 @@ def create_carriers(workspace, stdout=None, style=None):
                 'carrier_type': data.get('carrier_type', ''),
                 'config': data.get('config', {}),
                 'is_test_mode': data.get('is_test_mode', False),
-                'is_active': True,
+                'is_active': bool(data.get('config')),
             }
         )
         if created and stdout:
@@ -645,4 +639,3 @@ def create_package_templates(workspace, stdout=None, style=None):
         templates.append(template)
     
     return templates
-

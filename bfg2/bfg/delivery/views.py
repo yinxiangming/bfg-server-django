@@ -124,7 +124,12 @@ class PickupPointViewSet(viewsets.ModelViewSet):
 class CarrierViewSet(viewsets.ModelViewSet):
     """Carrier management ViewSet (Staff)"""
     serializer_class = CarrierSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
+
+    def get_permissions(self):
+        if self.action == 'get_shipping_options':
+            return [IsAuthenticated(), IsWorkspaceStaff()]
+        return super().get_permissions()
 
     def get_queryset(self):
         """Get carriers for current workspace"""
@@ -1224,7 +1229,11 @@ class PackageViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         """Get packages"""
-        queryset = Package.objects.select_related('consignment', 'status')
+        workspace = self.request.workspace
+        queryset = Package.objects.filter(
+            models.Q(consignment__workspace=workspace) |
+            models.Q(order__workspace=workspace)
+        ).select_related('consignment', 'order', 'status').distinct()
         
         # Filter by consignment
         consignment_id = self.request.query_params.get('consignment')
@@ -1308,7 +1317,9 @@ class TrackingEventViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         """Get tracking events filtered by consignment/package"""
-        queryset = TrackingEvent.objects.select_related('content_type', 'workspace', 'created_by')
+        queryset = TrackingEvent.objects.filter(
+            workspace=self.request.workspace
+        ).select_related('content_type', 'workspace', 'created_by')
         
         consignment_id = self.request.query_params.get('consignment')
         if consignment_id:

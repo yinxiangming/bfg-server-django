@@ -11,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
+from rest_framework.throttling import AnonRateThrottle
 from django.db import models
 from django.db.models import Q
 from django.shortcuts import get_object_or_404 as django_get_object_or_404
@@ -649,7 +650,7 @@ class TagViewSet(viewsets.ModelViewSet):
 class ThemeViewSet(viewsets.ModelViewSet):
     """Theme management ViewSet"""
     serializer_class = ThemeSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+    permission_classes = [IsAuthenticated, StaffReadAdminWrite]
     parser_classes = [MultiPartParser, FormParser]
     
     def get_queryset(self):
@@ -1327,6 +1328,14 @@ def _send_feedback_admin_email(
         logging.warning('Feedback admin email failed: %s', e)
 
 
+class FeedbackThrottle(AnonRateThrottle):
+    scope = 'feedback'
+    THROTTLE_RATES = {'feedback': '10/hour'}
+
+    def get_rate(self):
+        return self.THROTTLE_RATES[self.scope]
+
+
 class FeedbackView(APIView):
     """
     Public endpoint to submit feedback (bug/feature). POST only, AllowAny.
@@ -1341,6 +1350,7 @@ class FeedbackView(APIView):
     Sends email to admin if configured.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [FeedbackThrottle]
 
     def post(self, request):
         workspace = get_workspace(request)
@@ -1353,6 +1363,11 @@ class FeedbackView(APIView):
             return Response(
                 {'detail': 'content is required'},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        if len(content) > 5000:
+            return Response(
+                {'detail': 'content must be 5000 characters or fewer'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         source = (data.get('source') or 'storefront').strip().lower()
         if source not in ('admin', 'account', 'storefront'):
@@ -1543,7 +1558,10 @@ class BookingViewSet(viewsets.ModelViewSet):
             customer = Customer.objects.filter(workspace=workspace, user=self.request.user).first()
 
         with transaction.atomic():
-            locked = BookingTimeSlot.objects.select_for_update().get(pk=timeslot.pk)
+            locked = BookingTimeSlot.objects.select_for_update().get(
+                pk=timeslot.pk,
+                workspace=workspace,
+            )
             if not locked.is_active:
                 raise ValidationError("Selected time slot is not active.")
             if locked.current_bookings >= locked.max_bookings:

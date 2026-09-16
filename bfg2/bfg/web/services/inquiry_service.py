@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 from bfg.core.services import BaseService
 from bfg.web.models import Inquiry, Site
 
@@ -174,9 +175,18 @@ class InquiryService(BaseService):
         self.validate_workspace_access(inquiry)
         
         if user_id:
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            inquiry.assigned_to = User.objects.get(id=user_id)
+            from bfg.common.models import StaffMember
+
+            membership = StaffMember.all_objects.select_related('user').filter(
+                workspace=self.workspace,
+                user_id=user_id,
+                is_active=True,
+            ).first()
+            if membership is None:
+                raise ValidationError({
+                    'user_id': 'Assignee must be an active staff member of this workspace.',
+                })
+            inquiry.assigned_to = membership.user
         else:
             inquiry.assigned_to = None
         

@@ -582,6 +582,7 @@ class Refund(models.Model):
     )
     
     payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name='refunds')
+    idempotency_key = models.CharField(max_length=255)
     
     amount = models.DecimalField(_("Amount"), max_digits=10, decimal_places=2)
     reason = models.TextField(_("Reason"), blank=True)
@@ -599,6 +600,12 @@ class Refund(models.Model):
         verbose_name = _("Refund")
         verbose_name_plural = _("Refunds")
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['payment', 'idempotency_key'],
+                name='finance_refund_payment_idempotency_uniq',
+            ),
+        ]
     
     def __str__(self):
         return f"Refund {self.id} - {self.amount} {self.payment.currency.code}"

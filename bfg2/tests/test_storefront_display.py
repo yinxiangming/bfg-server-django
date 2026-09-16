@@ -353,10 +353,7 @@ class TestHidePolicy:
 class TestBackorderReachesTheCart:
     def add(self, workspace, product, quantity=1):
         client = APIClient()
-        client.credentials(
-            HTTP_X_WORKSPACE_ID=str(workspace.id),
-            HTTP_X_BFG_CART_SESSION='display-policy-guest-key',
-        )
+        client.credentials(HTTP_X_WORKSPACE_ID=str(workspace.id))
         return client.post(
             '/api/v1/store/cart/add_item/',
             {'product': product.id, 'quantity': quantity},
@@ -391,10 +388,7 @@ class TestBadgeAndCartAgree:
 
     def add(self, workspace, product, quantity=1, variant=None):
         client = APIClient()
-        client.credentials(
-            HTTP_X_WORKSPACE_ID=str(workspace.id),
-            HTTP_X_BFG_CART_SESSION='agreement-guest-key',
-        )
+        client.credentials(HTTP_X_WORKSPACE_ID=str(workspace.id))
         payload = {'product': product.id, 'quantity': quantity}
         if variant is not None:
             payload['variant'] = variant.id

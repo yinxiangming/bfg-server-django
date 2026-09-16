@@ -17,7 +17,6 @@ from bfg.shop.models import Product
 POINTS_URL = '/api/v1/delivery/pickup-points/for_storefront/'
 PREVIEW_URL = '/api/v1/store/cart/preview/'
 CART_URL = '/api/v1/store/cart/'
-GUEST_KEY = 'pickup-key-2f9a1c04-7b3d-4e18-a0c6-51d8e7b39a42'
 
 
 @pytest.fixture
@@ -28,10 +27,7 @@ def workspace(db):
 @pytest.fixture
 def client(workspace):
     c = APIClient()
-    c.credentials(
-        HTTP_X_WORKSPACE_ID=str(workspace.id),
-        HTTP_X_BFG_CART_SESSION=GUEST_KEY,
-    )
+    c.credentials(HTTP_X_WORKSPACE_ID=str(workspace.id))
     return c
 
 

@@ -139,7 +139,8 @@ class BasePaymentGateway(ABC):
         currency: Currency,
         payment_method_id: Optional[str] = None,
         order_id: Optional[int] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create payment intent/request in gateway
@@ -151,6 +152,7 @@ class BasePaymentGateway(ABC):
             payment_method_id: Optional PaymentMethod ID (if using saved method)
             order_id: Optional order ID for metadata
             metadata: Optional additional metadata
+            idempotency_key: Stable key for safe gateway retries
         
         Returns:
             dict: Payment intent data with client_secret or similar
@@ -218,7 +220,8 @@ class BasePaymentGateway(ABC):
         self,
         payment: Payment,
         amount: Decimal,
-        reason: Optional[str] = None
+        reason: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create refund
@@ -227,6 +230,7 @@ class BasePaymentGateway(ABC):
             payment: BFG Payment instance
             amount: Refund amount
             reason: Optional refund reason
+            idempotency_key: Stable key for safe gateway retries
         
         Returns:
             dict: Refund result
@@ -368,4 +372,3 @@ class BasePaymentGateway(ABC):
             dict: e.g. {'instructions': '...'}, {'publishable_key': '...'}, etc.
         """
         return {}
-

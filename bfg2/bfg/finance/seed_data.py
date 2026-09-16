@@ -737,6 +737,7 @@ def create_refunds(payments, admin_user, stdout=None, style=None):
         if payment.status == 'completed':
             refund, created = Refund.objects.get_or_create(
                 payment=payment,
+                idempotency_key=f'seed-refund-{payment.pk}',
                 amount=payment.amount * Decimal('0.5'),
                 defaults={
                     'reason': 'Customer requested refund',
@@ -841,4 +842,3 @@ def create_billing_statements(billing_cycles, stdout=None, style=None):
     
     if statements and stdout:
         stdout.write(style.SUCCESS(f'✓ Created {len(statements)} billing statements'))
-

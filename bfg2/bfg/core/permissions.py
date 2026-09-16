@@ -8,6 +8,43 @@ from django.conf import settings
 from rest_framework import permissions
 
 
+def _permission_action_allowed(actions, action) -> bool:
+    """Interpret a role permission value consistently for every permission class."""
+    if isinstance(actions, bool):
+        return actions
+    if isinstance(actions, list):
+        return '*' in actions or action in actions
+    return False
+
+
+def _object_workspace(obj):
+    """Return the tenant an object belongs to, including Workspace itself."""
+    from bfg.common.models import Workspace
+
+    if isinstance(obj, Workspace):
+        return obj
+    return getattr(obj, 'workspace', None)
+
+
+def _has_workspace_role(request, workspace, *, admin_only=False) -> bool:
+    """Check membership against the target tenant, not the JWT-selected tenant."""
+    if not request.user or not request.user.is_authenticated or workspace is None:
+        return False
+    if _superuser_bypasses_workspace_permissions(request):
+        return True
+
+    from bfg.common.models import StaffMember
+
+    membership = StaffMember.all_objects.select_related('role').filter(
+        workspace=workspace,
+        user=request.user,
+        is_active=True,
+    ).first()
+    if membership is None:
+        return False
+    return not admin_only or membership.role.code == 'admin'
+
+
 def _superuser_bypasses_workspace_permissions(request) -> bool:
     """When BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS is True, superuser skips StaffMember checks."""
     if not request.user or not getattr(request.user, 'is_superuser', False):
@@ -44,6 +81,10 @@ class IsWorkspaceAdmin(permissions.BasePermission):
         except StaffMember.DoesNotExist:
             return False
 
+    def has_object_permission(self, request, view, obj):
+        workspace = _object_workspace(obj) or getattr(request, 'workspace', None)
+        return _has_workspace_role(request, workspace, admin_only=True)
+
 
 class StaffReadAdminWrite(permissions.BasePermission):
     """
@@ -60,6 +101,14 @@ class StaffReadAdminWrite(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return IsWorkspaceStaff().has_permission(request, view)
         return IsWorkspaceAdmin().has_permission(request, view)
+
+    def has_object_permission(self, request, view, obj):
+        workspace = _object_workspace(obj) or getattr(request, 'workspace', None)
+        return _has_workspace_role(
+            request,
+            workspace,
+            admin_only=request.method not in permissions.SAFE_METHODS,
+        )
 
 
 class ReadOnlyOrSuperuser(permissions.BasePermission):
@@ -101,6 +150,10 @@ class IsWorkspaceStaff(permissions.BasePermission):
             user=request.user,
             is_active=True
         ).exists()
+
+    def has_object_permission(self, request, view, obj):
+        workspace = _object_workspace(obj) or getattr(request, 'workspace', None)
+        return _has_workspace_role(request, workspace)
 
 
 class HasPermission(permissions.BasePermission):
@@ -149,20 +202,12 @@ class HasPermission(permissions.BasePermission):
             # Check role permissions JSON
             role_perms = staff.role.permissions
 
-            def _action_allowed(actions, act):
-                """actions is a list or bool; '*' in list means all actions."""
-                if isinstance(actions, bool):
-                    return actions
-                if isinstance(actions, list):
-                    return '*' in actions or act in actions
-                return False
-
             if module in role_perms:
-                return _action_allowed(role_perms[module], action)
+                return _permission_action_allowed(role_perms[module], action)
 
             # Check wildcard module key
             if '*' in role_perms:
-                return _action_allowed(role_perms['*'], action)
+                return _permission_action_allowed(role_perms['*'], action)
 
             return False
             
@@ -215,14 +260,17 @@ class CanManagePayments(permissions.BasePermission):
         'update': 'finance.payment.update',
         'partial_update': 'finance.payment.update',
         'destroy': 'finance.payment.delete',
-        'list': 'finance.payment.view',
-        'retrieve': 'finance.payment.view',
+        'list': 'finance.payment.read',
+        'retrieve': 'finance.payment.read',
+        'process': 'finance.payment.update',
+        'intent': 'finance.payment.create',
+        'mark_paid': 'finance.payment.update',
+        'refund': 'finance.payment.update',
     }
     
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        
         workspace = getattr(request, 'workspace', None)
         if not workspace:
             return False
@@ -232,12 +280,12 @@ class CanManagePayments(permissions.BasePermission):
 
         # Get the required permission for this action
         action = getattr(view, 'action', None)
-        required_perm = self.ACTION_PERMISSIONS.get(action, 'finance.payment.view')
+        required_perm = self.ACTION_PERMISSIONS.get(action, 'finance.payment.read')
         
         # Check staff member and their role permissions
         from bfg.common.models import StaffMember
         try:
-            staff = StaffMember.objects.select_related('role').get(
+            staff = StaffMember.all_objects.select_related('role').get(
                 workspace=workspace,
                 user=request.user,
                 is_active=True
@@ -260,20 +308,26 @@ class CanManagePayments(permissions.BasePermission):
             
             # Check if module exists and action is allowed
             if module in role_perms:
-                module_actions = role_perms[module]
-                if isinstance(module_actions, list):
-                    return action_name in module_actions
-                elif isinstance(module_actions, bool):
-                    return module_actions
+                return _permission_action_allowed(role_perms[module], action_name)
             
             # Check wildcard permission
             if '*' in role_perms:
-                return True
+                return _permission_action_allowed(role_perms['*'], action_name)
             
             return False
             
         except StaffMember.DoesNotExist:
             return False
+
+
+class CanProcessRefunds(CanManagePayments):
+    """Require payment update permission outside a ViewSet action context."""
+
+    def has_permission(self, request, view):
+        class RefundActionView:
+            action = 'refund'
+
+        return super().has_permission(request, RefundActionView())
 
 
 class CanManageInvoices(permissions.BasePermission):
@@ -290,8 +344,8 @@ class CanManageInvoices(permissions.BasePermission):
         'update': 'finance.invoice.update',
         'partial_update': 'finance.invoice.update',
         'destroy': 'finance.invoice.delete',
-        'list': 'finance.invoice.view',
-        'retrieve': 'finance.invoice.view',
+        'list': 'finance.invoice.read',
+        'retrieve': 'finance.invoice.read',
         'send': 'finance.invoice.update',
     }
     
@@ -308,7 +362,7 @@ class CanManageInvoices(permissions.BasePermission):
 
         # Get the required permission for this action
         action = getattr(view, 'action', None)
-        required_perm = self.ACTION_PERMISSIONS.get(action, 'finance.invoice.view')
+        required_perm = self.ACTION_PERMISSIONS.get(action, 'finance.invoice.read')
         
         from bfg.common.models import StaffMember
         try:
@@ -331,14 +385,10 @@ class CanManageInvoices(permissions.BasePermission):
             module, action_name = parts
             
             if module in role_perms:
-                module_actions = role_perms[module]
-                if isinstance(module_actions, list):
-                    return action_name in module_actions
-                elif isinstance(module_actions, bool):
-                    return module_actions
+                return _permission_action_allowed(role_perms[module], action_name)
             
             if '*' in role_perms:
-                return True
+                return _permission_action_allowed(role_perms['*'], action_name)
             
             return False
             

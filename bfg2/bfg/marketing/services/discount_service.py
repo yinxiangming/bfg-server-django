@@ -20,6 +20,25 @@ from bfg.shop.models import Order, OrderItem, Product, ProductCategory
 from bfg.common.models import Customer
 
 
+def _gift_card_has_expired(expires_at) -> bool:
+    """Compare both DateField values and datetime-shaped legacy fixtures safely."""
+    if not expires_at:
+        return False
+    if hasattr(expires_at, 'date'):
+        expires_at = expires_at.date()
+    return expires_at < timezone.localdate()
+
+
+def _gift_card_matches_context(gift_card, workspace, customer=None) -> bool:
+    """A gift card is valid only for its owner and the workspace order currency."""
+    from bfg.common.constants import get_default_currency_for_workspace
+
+    if customer is not None and getattr(gift_card, 'customer_id', None) not in (None, customer.id):
+        return False
+    currency = getattr(gift_card, 'currency', None)
+    return currency is None or currency.code == get_default_currency_for_workspace(workspace)
+
+
 class DiscountCalculationService(BaseService):
     """
     Discount calculation service
@@ -84,7 +103,8 @@ class DiscountCalculationService(BaseService):
             gift_card_amount = self._calculate_gift_card_amount(
                 gift_card_code=gift_card_code,
                 subtotal=subtotal,
-                existing_discount=result['coupon_discount']
+                existing_discount=result['coupon_discount'],
+                customer=customer,
             )
             result['gift_card_amount'] = gift_card_amount
         
@@ -264,15 +284,14 @@ class DiscountCalculationService(BaseService):
         
         # Check per-customer usage limit
         if customer and coupon.usage_limit_per_customer:
-            # Count how many times this customer has used this coupon
             from bfg.shop.models import Order
             customer_usage_count = Order.objects.filter(
                 workspace=self.workspace,
-                customer=customer
-            ).exclude(discount=Decimal('0.00')).count()  # Simplified check
-            
-            # Note: This is a simplified check. In production, you'd track coupon usage per order
-            # For now, we'll allow it if the coupon hasn't reached its limit
+                customer=customer,
+                coupon=coupon,
+            ).count()
+            if customer_usage_count >= coupon.usage_limit_per_customer:
+                return "Coupon usage limit per customer reached"
             
         # Check minimum purchase requirement
         if coupon.discount_rule.minimum_purchase:
@@ -285,7 +304,8 @@ class DiscountCalculationService(BaseService):
         self,
         gift_card_code: str,
         subtotal: Decimal,
-        existing_discount: Decimal = Decimal('0.00')
+        existing_discount: Decimal = Decimal('0.00'),
+        customer: Optional[Customer] = None,
     ) -> Decimal:
         """
         Calculate amount to apply from gift card
@@ -308,7 +328,9 @@ class DiscountCalculationService(BaseService):
             return Decimal('0.00')
         
         # Check if gift card is expired
-        if gift_card.expires_at and gift_card.expires_at < timezone.now():
+        if _gift_card_has_expired(gift_card.expires_at):
+            return Decimal('0.00')
+        if not _gift_card_matches_context(gift_card, self.workspace, customer):
             return Decimal('0.00')
         
         # Calculate remaining order total after discount
@@ -379,37 +401,45 @@ class DiscountCalculationService(BaseService):
         Returns:
             Tuple of (amount_applied, error_message)
         """
-        subtotal = order.subtotal
-        existing_discount = order.discount
-        
-        amount = self._calculate_gift_card_amount(
-            gift_card_code=gift_card_code,
-            subtotal=subtotal,
-            existing_discount=existing_discount
-        )
-        
-        if amount <= 0:
-            return Decimal('0.00'), "Gift card cannot be applied"
-        
-        # Update order total (gift card reduces the amount to pay)
-        # Note: Gift card is not stored as discount, but reduces the total
-        # For simplicity, we'll treat it as additional discount
-        order.discount += amount
-        order.total = order.subtotal + order.shipping_cost + order.tax - order.discount
-        order.save()
-        
-        # Deduct from gift card balance
-        try:
-            gift_card = GiftCard.objects.get(
-                workspace=self.workspace,
-                code=gift_card_code.upper()
+        from django.db import transaction
+
+        with transaction.atomic():
+            try:
+                gift_card = GiftCard.objects.select_for_update().get(
+                    workspace=self.workspace,
+                    code=gift_card_code.upper(),
+                    is_active=True,
+                )
+            except GiftCard.DoesNotExist:
+                return Decimal('0.00'), "Gift card cannot be applied"
+
+            if _gift_card_has_expired(gift_card.expires_at):
+                return Decimal('0.00'), "Gift card has expired"
+            if not _gift_card_matches_context(
+                gift_card,
+                self.workspace,
+                getattr(order, 'customer', None),
+            ):
+                return Decimal('0.00'), "Gift card does not belong to this customer or currency"
+
+            payable = max(order.total, Decimal('0.00'))
+            amount = min(gift_card.balance, payable)
+            if amount <= 0:
+                return Decimal('0.00'), "Gift card cannot be applied"
+
+            order.discount += amount
+            order.total = max(
+                order.subtotal + order.shipping_cost + order.tax - order.discount,
+                Decimal('0.00'),
             )
+            order.save(update_fields=['discount', 'total', 'updated_at'])
+
             gift_card.balance -= amount
-            gift_card.save()
-        except GiftCard.DoesNotExist:
-            pass
-        
-        return amount, None
+            if gift_card.balance == 0:
+                gift_card.is_active = False
+            gift_card.save(update_fields=['balance', 'is_active', 'updated_at'])
+
+            return amount, None
     
     def _calculate_auto_discount(
         self,

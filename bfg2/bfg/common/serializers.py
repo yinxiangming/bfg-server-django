@@ -690,7 +690,9 @@ class MeSerializer(serializers.ModelSerializer):
             'avatar', 'language', 'timezone_name', 'customer', 'is_active',
             'is_staff', 'is_superuser'
         ]
-        read_only_fields = ['id', 'is_active', 'is_staff', 'is_superuser']
+        # Login identifiers require dedicated verification flows and must not be
+        # mass-assigned through the general profile endpoint.
+        read_only_fields = ['id', 'username', 'email', 'is_active', 'is_staff', 'is_superuser']
         extra_kwargs = {'avatar': {'required': False, 'allow_null': True}}
 
     def update(self, instance, validated_data):

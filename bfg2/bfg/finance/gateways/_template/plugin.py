@@ -138,7 +138,8 @@ class TemplateGateway(BasePaymentGateway):
         currency: Currency,
         payment_method_id: Optional[str] = None,
         order_id: Optional[int] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create payment intent/request in gateway
@@ -206,7 +207,8 @@ class TemplateGateway(BasePaymentGateway):
         self,
         payment: Payment,
         amount: Decimal,
-        reason: Optional[str] = None
+        reason: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create refund
@@ -320,4 +322,3 @@ class TemplateGateway(BasePaymentGateway):
         
         # Default: return customer ID as-is
         return str(customer.id)
-

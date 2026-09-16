@@ -1771,6 +1771,7 @@ class MePaymentMethodViewSet(viewsets.ModelViewSet):
         """Create payment method for current customer"""
         from bfg.common.models import Customer
         from bfg.common.models import Address
+        from django.contrib.contenttypes.models import ContentType
         
         # Get required workspace
         workspace = get_required_workspace(self.request)
@@ -1782,13 +1783,17 @@ class MePaymentMethodViewSet(viewsets.ModelViewSet):
             defaults={'is_active': True}
         )
         
+        serializer.validated_data.pop('customer_id', None)
+
         # Get billing address if provided
         billing_address = None
         billing_address_id = serializer.validated_data.pop('billing_address_id', None)
         if billing_address_id:
             billing_address = Address.objects.filter(
                 id=billing_address_id,
-                workspace=workspace
+                workspace=workspace,
+                object_id=customer.id,
+                content_type=ContentType.objects.get_for_model(Customer),
             ).first()
             if not billing_address:
                 from rest_framework.exceptions import ValidationError
@@ -1809,6 +1814,9 @@ class MePaymentMethodViewSet(viewsets.ModelViewSet):
         if not gateway:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'gateway': 'Gateway is required'})
+        if gateway.workspace_id != workspace.id:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'gateway': 'Gateway does not belong to this workspace'})
         
         # Check if gateway supports plugin system and payment_method_data is provided
         gateway_payment_method_data = serializer.validated_data.pop('gateway_payment_method_data', None)
@@ -1880,17 +1888,22 @@ class MePaymentMethodViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         """Update payment method"""
         from bfg.common.models import Address
+        from django.contrib.contenttypes.models import ContentType
         
         # Get required workspace
         workspace = get_required_workspace(self.request)
         
+        serializer.validated_data.pop('customer_id', None)
+
         # Get billing address if provided
         billing_address_id = serializer.validated_data.pop('billing_address_id', None)
         if billing_address_id is not None:
             if billing_address_id:
                 billing_address = Address.objects.filter(
                     id=billing_address_id,
-                    workspace=workspace
+                    workspace=workspace,
+                    object_id=serializer.instance.customer_id,
+                    content_type=ContentType.objects.get_for_model(Customer),
                 ).first()
                 if not billing_address:
                     from rest_framework.exceptions import ValidationError

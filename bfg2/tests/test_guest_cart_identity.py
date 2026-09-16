@@ -23,10 +23,9 @@ import pytest
 from rest_framework.test import APIClient
 
 from bfg.common.models import Workspace, User, Customer
-from bfg.shop.models import Product, Cart
+from bfg.shop.models import Product, Cart, Store
 
 CART_URL = '/api/v1/store/cart/'
-GUEST_KEY = 'guest-key-6f1c0a3e-1d4b-4f2a-9c77-0b2e5a8d3c19'
 
 
 @pytest.fixture
@@ -46,40 +45,49 @@ def product(workspace):
     )
 
 
-def guest(workspace, key=GUEST_KEY):
-    """A cookie-less client that identifies itself only by the header."""
+def guest(workspace, token):
+    """A cookie-less client that identifies itself only by a signed token."""
     client = APIClient()
     client.credentials(
         HTTP_X_WORKSPACE_ID=str(workspace.id),
-        HTTP_X_BFG_CART_SESSION=key,
+        HTTP_X_BFG_CART_SESSION=token,
     )
     return client
 
 
-def add_item(workspace, product, key=GUEST_KEY, quantity=1):
-    response = guest(workspace, key).post(
+def new_guest_token(workspace):
+    client = APIClient()
+    client.credentials(HTTP_X_WORKSPACE_ID=str(workspace.id))
+    response = client.get(f'{CART_URL}current/')
+    assert response.status_code == 200, response.data
+    return response.data['cart_token']
+
+
+def add_item(workspace, product, token=None, quantity=1):
+    token = token or new_guest_token(workspace)
+    response = guest(workspace, token).post(
         f'{CART_URL}add_item/',
         {'product': product.id, 'quantity': quantity},
         format='json',
     )
     assert response.status_code == 200, response.data
-    return response
+    return response, token
 
 
 def test_preview_totals_match_the_items_added_under_the_same_key(workspace, product):
     """The $0.00 Order Summary regression."""
-    add_item(workspace, product)
+    _, token = add_item(workspace, product)
 
-    response = guest(workspace).get(f'{CART_URL}preview/')
+    response = guest(workspace, token).get(f'{CART_URL}preview/')
 
     assert response.status_code == 200, response.data
     assert response.data['subtotal'] == '5.00'
 
 
 def test_cart_contents_survive_across_requests_without_a_cookie(workspace, product):
-    add_item(workspace, product)
+    _, token = add_item(workspace, product)
 
-    response = guest(workspace).get(f'{CART_URL}current/')
+    response = guest(workspace, token).get(f'{CART_URL}current/')
 
     assert response.status_code == 200, response.data
     assert [(item['name'], item['quantity']) for item in response.data['items']] == [
@@ -90,8 +98,9 @@ def test_cart_contents_survive_across_requests_without_a_cookie(workspace, produ
 def test_each_key_gets_its_own_cart(workspace, product):
     """The key is a bearer credential: it must not be a shared workspace cart."""
     add_item(workspace, product)
+    other_token = new_guest_token(workspace)
 
-    response = guest(workspace, key='a-different-guest-key').get(f'{CART_URL}preview/')
+    response = guest(workspace, other_token).get(f'{CART_URL}preview/')
 
     assert response.status_code == 200, response.data
     assert response.data['subtotal'] == '0.00'
@@ -99,14 +108,14 @@ def test_each_key_gets_its_own_cart(workspace, product):
 
 def test_guest_cart_merges_into_the_customer_cart_on_sign_in(workspace, product):
     """Items added before signing in must follow the visitor into their account."""
-    add_item(workspace, product)
+    _, token = add_item(workspace, product)
     user = User.objects.create_user(username='shopper', email='shopper@test.com', password='x')
 
     client = APIClient()
     client.force_authenticate(user=user)
     client.credentials(
         HTTP_X_WORKSPACE_ID=str(workspace.id),
-        HTTP_X_BFG_CART_SESSION=GUEST_KEY,
+        HTTP_X_BFG_CART_SESSION=token,
     )
     response = client.get(f'{CART_URL}current/')
 
@@ -122,16 +131,46 @@ def test_guest_cart_merges_into_the_customer_cart_on_sign_in(workspace, product)
 
 def test_merging_the_same_key_twice_does_not_double_the_quantity(workspace, product):
     """The client keeps sending the key after sign-in; the merge must be idempotent."""
-    add_item(workspace, product)
+    _, token = add_item(workspace, product)
     user = User.objects.create_user(username='shopper2', email='shopper2@test.com', password='x')
 
     client = APIClient()
     client.force_authenticate(user=user)
     client.credentials(
         HTTP_X_WORKSPACE_ID=str(workspace.id),
-        HTTP_X_BFG_CART_SESSION=GUEST_KEY,
+        HTTP_X_BFG_CART_SESSION=token,
     )
     client.get(f'{CART_URL}current/')
     response = client.get(f'{CART_URL}current/')
 
     assert [item['quantity'] for item in response.data['items']] == [1]
+
+
+def test_guest_checkout_cannot_attach_order_to_an_existing_email(workspace, product):
+    """Knowing an account email is not proof that the guest owns that account."""
+    _, token = add_item(workspace, product)
+    victim = User.objects.create_user(
+        username='existing-victim',
+        email='victim@example.test',
+        password='secret',
+    )
+    store = Store.objects.create(workspace=workspace, name='Main', code='main')
+
+    response = guest(workspace, token).post(
+        f'{CART_URL}guest_checkout/',
+        {
+            'store': store.id,
+            'email': victim.email,
+            'full_name': 'Impersonated Victim',
+            'phone': '0210000000',
+            'shipping_address': {
+                'address_line1': '1 Queen Street',
+                'city': 'Auckland',
+                'country': 'NZ',
+            },
+        },
+        format='json',
+    )
+
+    assert response.status_code == 409
+    assert not Customer.all_objects.filter(workspace=workspace, user=victim).exists()

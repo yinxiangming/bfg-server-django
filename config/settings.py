@@ -342,6 +342,76 @@ else:
 # Absolute API/site origin for media URLs when storage returns relative paths (e.g. GitHub issue embeds).
 MEDIA_PUBLIC_BASE_URL = os.environ.get('MEDIA_PUBLIC_BASE_URL', '').strip().rstrip('/')
 
+# ─── Extension archives ─────────────────────────────────────────────────
+# Where the data of an extension a workspace stopped using is written before the
+# rows are deleted; see bfg.common.extensions.archive. **Set none of this and
+# nothing is ever archived or deleted** — the sweep says so and stops, which is
+# the right default for a deployment that has not decided where archives live.
+#
+# This must be storage nothing serves: an archive holds whole tables verbatim, so
+# a public URL to one is a data breach. Give it a bucket of its own, or at the
+# very least a prefix of its own — the code refuses the media bucket, anything
+# behind a CDN, and any directory inside MEDIA_ROOT. Whoever runs the deployment
+# also has to put a retention rule on the prefix: nothing here ever deletes an
+# archive, on purpose.
+BFG_EXTENSION_ARCHIVE_BUCKET = os.environ.get('BFG_EXTENSION_ARCHIVE_BUCKET', '').strip()
+# Somewhere on disk instead, for a deployment with no second bucket. It is a place
+# to put an archive, not an off-site copy of one: back the directory up.
+BFG_EXTENSION_ARCHIVE_DIR = os.environ.get('BFG_EXTENSION_ARCHIVE_DIR', '').strip()
+BFG_EXTENSION_ARCHIVE_PREFIX = os.environ.get(
+    'BFG_EXTENSION_ARCHIVE_PREFIX', 'extension-archives'
+).strip().strip('/')
+# Restore in a worker rather than while the request waits. Either way the console
+# reads the state off the record, so this only decides who waits for the loading.
+BFG_EXTENSION_ARCHIVE_RESTORE_ASYNC = os.environ.get(
+    'BFG_EXTENSION_ARCHIVE_RESTORE_ASYNC', 'false'
+).strip().lower() in ('1', 'true', 'yes')
+# How long a run may be in flight before a sweep decides the process running it died
+# and puts the extension back on the status it had.
+BFG_EXTENSION_ARCHIVE_STUCK_MINUTES = int(
+    os.environ.get('BFG_EXTENSION_ARCHIVE_STUCK_MINUTES', '60')
+)
+
+#: Alias in STORAGES that archives are written to; empty means archiving is off.
+BFG_EXTENSION_ARCHIVE_STORAGE = ''
+
+if BFG_EXTENSION_ARCHIVE_BUCKET or BFG_EXTENSION_ARCHIVE_DIR:
+    if 'STORAGES' not in globals():
+        # Only the S3 branch above defines STORAGES; start from what Django would
+        # have used so that adding an archive alias changes nothing else.
+        from django.conf import global_settings
+
+        STORAGES = {alias: dict(value) for alias, value in global_settings.STORAGES.items()}
+
+    if BFG_EXTENSION_ARCHIVE_BUCKET:
+        STORAGES['extension_archive'] = {
+            'BACKEND': 'storages.backends.s3.S3Storage',
+            'OPTIONS': {
+                'bucket_name': BFG_EXTENSION_ARCHIVE_BUCKET,
+                'region_name': os.environ.get(
+                    'BFG_EXTENSION_ARCHIVE_REGION',
+                    os.environ.get('AWS_S3_REGION_NAME', 'ap-southeast-2'),
+                ).strip(),
+                # Credentials of its own when the deployment wants the archive bucket
+                # writable by a key that cannot touch anything else; otherwise boto3's.
+                'access_key': os.environ.get('BFG_EXTENSION_ARCHIVE_ACCESS_KEY_ID', '').strip() or None,
+                'secret_key': os.environ.get(
+                    'BFG_EXTENSION_ARCHIVE_SECRET_ACCESS_KEY', ''
+                ).strip() or None,
+                'endpoint_url': os.environ.get('BFG_EXTENSION_ARCHIVE_ENDPOINT_URL', '').strip() or None,
+                'default_acl': 'private',
+                'querystring_auth': True,
+                'file_overwrite': False,      # an archive is never written over
+                'custom_domain': None,        # never reachable through a CDN
+            },
+        }
+    else:
+        STORAGES['extension_archive'] = {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+            'OPTIONS': {'location': BFG_EXTENSION_ARCHIVE_DIR},
+        }
+    BFG_EXTENSION_ARCHIVE_STORAGE = 'extension_archive'
+
 # REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],

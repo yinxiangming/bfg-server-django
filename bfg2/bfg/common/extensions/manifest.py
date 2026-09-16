@@ -93,7 +93,12 @@ class ExtensionManifest:
     ``requires`` names other extensions that must be available first; only workspace
     extensions can require anything, since the rest are always available. ``data_models``
     lists the ``app_label.ModelName`` tables the extension owns, which is what gets
-    archived when a workspace stops using it. ``clean_config`` validates and
+    archived when a workspace stops using it; each of them must carry a ``workspace``
+    relation, since that is what says whose rows they are. ``restore_converters`` maps an
+    app label to ``(archive_manifest, model_label, rows) -> rows``, called when an archive
+    written before that app's migrations moved is loaded back, and raising ``ValueError``
+    to refuse: an app whose migrations have moved and that has no converter is not
+    restored at all. ``clean_config`` validates and
     normalises a workspace's configuration, raising ``ValueError`` (or Django's
     ``ValidationError``) on bad input. ``on_activate`` and ``on_deactivate`` are called
     with ``(workspace, record)`` inside the transaction that changes the state, so a
@@ -114,6 +119,7 @@ class ExtensionManifest:
     prerequisites: Tuple[Prerequisite, ...] = ()
     meters: Tuple[str, ...] = ()
     data_models: Tuple[str, ...] = ()
+    restore_converters: Optional[dict] = None
     config_schema: Optional[dict] = None
     clean_config: Optional[Callable[[dict], dict]] = None
     on_activate: Optional[Callable[[Any, Any], None]] = None

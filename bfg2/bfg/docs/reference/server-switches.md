@@ -307,6 +307,9 @@ Only relevant to a deployment that charges workspaces for what they use. A deplo
 - One point is one US dollar. Usage is totalled per workspace, meter and UTC day in `platform.UsageRecord`.
 - A workspace may run up `WorkspacePlatformProfile.monthly_usage_cap_points` in a calendar month, or the `monthly_usage_cap_points` variable when it has no cap of its own.
 - Callers ask `bfg.platform.metering.allowed(workspace, meter)` before spending and `bfg.platform.metering.meter(workspace, meter, quantity)` after the call succeeded.
+- Prices are read and written with `python manage.py meter_prices list` and `python manage.py meter_prices set KEY --cost 0.15 --unit-size 1000000 [--margin 0.30] [--from 2026-10-01T00:00:00Z]`. `list` shows each meter's whole history with the row in force marked; `set` only ever adds a row.
+- The assistant (`POST /api/v1/agent/chat/`) meters its own model calls as `ai.<model>.input`, `ai.<model>.input_cached` and `ai.<model>.output`, `<model>` being the lowercased id of the model actually asked — the model that answers and the cheaper one that picks its tools fill separate meters. Price every meter a deployment's `OPENAI_MODEL` and `OPENAI_TOOL_SELECTOR_MODEL` will fill; an unpriced meter is logged and goes uncounted rather than billed as free.
+- A workspace over its cap gets `402` with `{"code": "usage_cap_reached"}` from that endpoint, asked once per request before anything is sent.
 - A meter nothing has priced yet is logged as a warning once an hour per meter, not as an error with a stack trace on every call: wiring a meter up before pricing it is what every rollout looks like for a while. Nothing is billed for it until a `MeterPrice` row exists, so watch for that warning after switching a new meter on.
 
 ### The billing month

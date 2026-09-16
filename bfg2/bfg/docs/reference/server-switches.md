@@ -315,6 +315,7 @@ Only relevant to a deployment that charges workspaces for what they use. A deplo
   - The set of extensions a kind of shop starts with, so the same question does not have to be answered for every new workspace.
 - Shape:
   - A mapping of pack key to `{name, name_zh, description, description_zh, industries, extensions}`, or the dotted path of one (or of a callable returning one). `industries` names the setup wizard's industry keys the pack suits; `extensions` names extension keys.
+  - `BFG_EXTENSION_PLAN_PACKS_FILE` takes the path of a JSON file of the same shape, for a deployment whose packs are data written by whoever runs it rather than code. Read once; a file that is missing or unparsable leaves the deployment with no packs and is logged. The setting above wins where both are given.
 - Behavior:
   - The setup wizard applies the pack matching the industry a new shop picks, after the template has been written and outside its transaction — an extension's activation hook failing costs the shop its pack, not its currency, tax and pages.
   - `python manage.py plan_packs list` shows what is configured; `python manage.py plan_packs apply <pack> --workspace <id|slug> [--dry-run]` applies one to a workspace that already exists.

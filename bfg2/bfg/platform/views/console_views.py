@@ -233,7 +233,7 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
         write, in which case nothing was ever archived either.
         """
         workspace = self._workspace_to_change()
-        with _bound(workspace):
+        with bound_workspace(workspace):
             return endpoints.restore(
                 workspace, key, user=request.user, viewer_is_platform_admin=self.viewer.is_platform_admin
             )

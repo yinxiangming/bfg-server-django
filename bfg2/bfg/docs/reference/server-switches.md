@@ -298,6 +298,29 @@ Only relevant to a deployment that charges workspaces for what they use. A deplo
 - Why it matters:
   - **Setting this without entitlement rows switches every add-on off at once.** Point it at the table only once the rows a deployment's workspaces should hold have been written, which is why it defaults to empty and is only ever read from the environment.
   - `python manage.py grant_entitlements --all-workspaces --switched-on --months 3 [--dry-run]` writes those rows: the base plan for every active workspace, plus every add-on each one currently has switched on, granted rather than sold. Run it before setting this, and a deployment that has been running without billing keeps everything it was using. It is safe to run twice — a workspace already entitled to a key is left alone — and `--dry-run` reports what it would grant without writing.
+- What the console is told:
+  - Every extension in the console's payload carries both `entitled` — the answer this check gives, whether the workspace may use it at all — and `available`, whether it is live right now, which also wants the extension switched on and everything it requires available. An add-on nobody has obtained is `entitled: false`; one obtained and then switched off is `entitled: true, available: false`. Without the switch set, `entitled` is true for everything.
+
+### What an add-on costs, and acquiring one
+
+- **A plan is a thing the deployment sells.** One `shop.SubscriptionPlan` on the platform workspace (`PLATFORM_WORKSPACE_SLUG`) per item, its `code` naming what it prices: the key of the add-on extension, or the empty string for the base plan itself — the same code `platform.WorkspaceEntitlement.KEY_BASE_PLAN` uses. Its `price` is one month, in the platform workspace's own currency. Leave no other plan of that workspace uncoded, since an uncoded one there reads as the base plan; a workspace's own plans, sold to its own customers, are unaffected and stay uncoded.
+- **An add-on no plan names has not been priced**, and cannot be acquired until somebody prices it. That is a refusal (`no_plan`) rather than a free add-on, because the alternative is giving away whatever the deployment forgot to price.
+- `POST /api/v1/platform/console/workspaces/<id>/extensions/<key>/acquire/` obtains one, for whoever may switch that workspace's extensions on. Priced at nothing, the entitlement is written and the extension switched on in one transaction, and the answer says `entitled: true`. Priced at anything else, an invoice is issued and **nothing else is written until it is paid**; the answer carries the bill. Asking twice for a priced add-on hands back the unpaid bill that already exists rather than issuing a second.
+- Refused with 400 and a `code`: `already_entitled`, `not_an_addon` (it is part of the base plan), `no_plan`, and — for a bill that cannot be written — `no_owner`, `unknown_currency`, `no_exchange_rate`, `key_too_long`. 404 `unknown_extension` for a key no app declares.
+- **Paying the bill is what writes the first period**, a month from the day the bill was issued, exactly as paying a monthly bill writes the next one; see below.
+
+### `BFG_EXTENSION_PLAN_PACKS`
+- Default: empty
+- Purpose:
+  - The set of extensions a kind of shop starts with, so the same question does not have to be answered for every new workspace.
+- Shape:
+  - A mapping of pack key to `{name, name_zh, description, description_zh, industries, extensions}`, or the dotted path of one (or of a callable returning one). `industries` names the setup wizard's industry keys the pack suits; `extensions` names extension keys.
+- Behavior:
+  - The setup wizard applies the pack matching the industry a new shop picks, after the template has been written and outside its transaction — an extension's activation hook failing costs the shop its pack, not its currency, tax and pages.
+  - `python manage.py plan_packs list` shows what is configured; `python manage.py plan_packs apply <pack> --workspace <id|slug> [--dry-run]` applies one to a workspace that already exists.
+  - **Applying only ever switches things on.** It never deactivates anything, including extensions the pack does not mention, and it never grants an entitlement: a key the workspace is not entitled to is reported and skipped, so a pack can be offered to somebody who has not bought everything in it.
+  - A pack naming an extension the deployment does not ship drops that key and logs it once, next to the pack that named it.
+  - Two packs claiming one industry is a configuration mistake; the first wins, so the answer at least stays the same between calls.
 
 ### Platform variables
 - Margins, grace periods, retention windows and the default usage cap are rows in `platform.PlatformVariable`, not environment variables: they are policy an operator adjusts while the deployment runs, and each change is recorded in `platform.PlatformVariableChange` with who made it and why.
@@ -322,11 +345,22 @@ There is no scheduler in this library, and the deployments it was written for ru
 - `python manage.py refresh_exchange_rates [--base USD] [--symbols NZD,CNY]` — stores the ECB's daily reference rates (through Frankfurter; free, no key) in `finance.ExchangeRate`, under the day the bank published them. Run daily, and in any case before issuing bills. Every published rate is read and the ones the deployment has currencies for are kept, so a currency the bank does not publish is logged and skipped rather than costing the refresh every other currency. A refresh that fails writes nothing and leaves the rates already on file, which is what conversions then use. A day the feed could not be read for at all leaves that currency unbillable until somebody enters the rate by hand from the console, which records that it was typed rather than published; a later refresh that does reach the feed replaces it with the published number.
 - `python manage.py issue_monthly_bills [--month YYYY-MM] [--dry-run]` — issues one invoice per workspace for a month of metered usage and the entitlements whose period ended in it, defaulting to last month. The invoice is issued by the platform workspace (`PLATFORM_WORKSPACE_SLUG`) and made out to the workspace's owner, in the workspace's own currency at the day's rate; it falls due after `invoice_due_days`. Its number is `PLAT-<workspace id>-<YYYYMM>`, which is what stops a month being billed twice — the unique index on (workspace, invoice number) refuses the second attempt — and is, with the platform workspace itself, how an invoice is tied back to the workspace it is about.
 
+A platform invoice number has two shapes, and both start `PLAT-<workspace id>-` so that everything reading a workspace's bills by prefix — what it owes, what the console lists — reads all of them:
+
+| Number | What it bills | What paying it writes |
+|---|---|---|
+| `PLAT-<workspace id>-<YYYYMM>` | a month of usage and the renewals that fell in it | the next period of everything the bill renewed |
+| `PLAT-<workspace id>-ADD-<key>-<n>` | one acquisition of one add-on | that add-on's first period, a month from the issue date |
+
+`<n>` counts the workspace's acquisitions of that add-on, so buying it again after it lapsed is a new number. Each shape is read back by its own function and neither reads the other's. The whole number has to fit `finance.Invoice.invoice_number` (50 characters), which is what bounds how long an add-on's key can be if the deployment means to sell it.
+
 Three things about a bill are worth knowing before switching this on:
 
 - **Bills are for the month that ran.** An entitlement is billed for the month its period ended in, whatever has become of it since — including one that lapsed and one a sweep has already moved to `ended`. Reading only the rows still live would make whether a month is billed depend on whether `close_entitlement_periods` ran first, which for a fortnight's grace would silently drop every period ending in the first half of a month. Issuing a bill does not itself write the next period; renewing is a purchase.
 - **Tax is only worked out for New Zealand**, at whatever rate the platform workspace has recorded for `NZ` in `finance.TaxRate`, applied over the whole invoice. Every other country is billed untaxed, which is right for some and wrong for others; nothing yet records a customer's tax registration, so do not sell into a country whose rules have not been settled first.
 - **The trial credit is a one-off.** The `trial_points` variable comes off a workspace's first bill, never more than the bill itself, and `WorkspacePlatformProfile.trial_points_used_at` records that it has been spent. A first bill smaller than the credit does not keep the difference.
+
+**Paying a bill is what buys the period**, whichever shape it is, and it is heard three ways — a gateway payment, `InvoiceService.mark_as_paid`, and the status written straight onto the row by the invoice editor — all of which end up in the same idempotent place. A period is worked out from the invoice rather than from when the money arrived, so paying late buys the same period as paying on time, and the same payment reported twice writes it once.
 
 ### What an unpaid bill stops
 

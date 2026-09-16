@@ -8,14 +8,29 @@ owner who pays. It is written in the billed workspace's own currency, from point
 that are US dollars, at the rate in force on the day it is issued.
 
 An invoice is identified by a number the deployment builds itself — the prefix,
-the billed workspace and the period — which is what keeps a month from being
-billed twice. ``finance.Invoice`` is already unique on (workspace, number) within
-the management workspace, so the database refuses the second attempt rather than
-this module having to be the only thing that remembers. That number is also the
-only link back from an invoice to the workspace it is about, since the invoice's
-own workspace is the management one, and it is what ``has_overdue_invoice`` reads
-— together with the management workspace itself, because a workspace can choose
-what its own invoices are numbered.
+the billed workspace and what the bill is for — which is what keeps the same
+thing from being billed twice. ``finance.Invoice`` is already unique on
+(workspace, number) within the management workspace, so the database refuses the
+second attempt rather than this module having to be the only thing that
+remembers. That number is also the only link back from an invoice to the
+workspace it is about, since the invoice's own workspace is the management one,
+and it is what ``has_overdue_invoice`` reads — together with the management
+workspace itself, because a workspace can choose what its own invoices are
+numbered.
+
+There are two shapes, and both start with the workspace's own prefix so that
+everything reading a workspace's bills by prefix reads all of them:
+
+``PLAT-<workspace>-<YYYYMM>``           a month of usage and renewals.
+``PLAT-<workspace>-ADD-<key>-<n>``      one acquisition of one add-on, ``<n>``
+                                        counting the workspace's acquisitions of
+                                        that add-on so that buying it again after
+                                        it lapsed is a new number.
+
+Each shape is read back by its own function and neither reads the other's: an
+acquisition number holds no month, and reading one as a month would renew the
+wrong thing. See ``bfg.platform.services.acquisitions`` for what the second is
+issued by.
 
 Everything here reads ``all_objects`` and filters by workspace itself: billing
 runs with no workspace bound to the thread, where the scoped manager is empty.
@@ -37,6 +52,7 @@ from bfg.common.constants import (
     get_default_country_for_workspace,
     get_default_currency_for_workspace,
 )
+from bfg.common.extensions.manifest import is_extension_key
 from bfg.core.exceptions import BFGException
 from bfg.platform.models.entitlement import WorkspaceEntitlement
 from bfg.platform.models.metering import UsageRecord
@@ -69,8 +85,13 @@ INVOICE_DECIMAL_PLACES = 2
 # invoice a workspace issued to its own customers.
 INVOICE_PREFIX = "PLAT-"
 
+# What stands where a month would in the number of a bill for an acquisition. It
+# cannot be read as a month by ``billed_workspace_and_period`` — it is neither six
+# characters nor digits — which is what keeps the two shapes apart.
+ACQUISITION_MARKER = "ADD"
+
 # The one country whose tax is worked out. Everywhere else is billed untaxed for
-# now — see ``_tax_percent``.
+# now — see ``tax_percent``.
 GST_COUNTRY = "NZ"
 
 # An invoice in any of these has not been paid. ``paid`` and ``cancelled`` are
@@ -118,13 +139,15 @@ def invoice_number_for(workspace_id: int, period_start: date) -> str:
 
 
 def billed_workspace_and_period(invoice_number: str) -> Optional[Tuple[int, date]]:
-    """The workspace and month one platform invoice number is about, or ``None``.
+    """The workspace and month one monthly platform bill is about, or ``None``.
 
     The inverse of ``invoice_number_for``, and the only way back: a platform
     invoice belongs to the management workspace, so its number is all that says
     which workspace it bills. ``None`` for anything that is not one of these
-    numbers — an invoice a workspace issued to its own customers, or one typed in
-    by hand — which is what keeps a reader from acting on someone else's bill.
+    numbers — an invoice a workspace issued to its own customers, one typed in by
+    hand, or a bill for an acquisition, whose marker is neither six characters nor
+    digits — which is what keeps a reader from acting on someone else's bill, or
+    on this one as though it billed a month.
     """
     if not (invoice_number or "").startswith(INVOICE_PREFIX):
         return None
@@ -136,6 +159,58 @@ def billed_workspace_and_period(invoice_number: str) -> Optional[Tuple[int, date
     except ValueError:
         # A month outside 1 to 12: a number shaped like ours that nothing issued.
         return None
+
+
+def acquisition_number_prefix(workspace_id: int, key: str) -> str:
+    """What every bill for one workspace acquiring one add-on starts with.
+
+    The trailing separator does the same work it does in ``invoice_number_prefix``:
+    an extension key can hold no ``-``, so without it one key's prefix would match
+    another whose key merely begins with it.
+    """
+    return f"{invoice_number_prefix(workspace_id)}{ACQUISITION_MARKER}-{key}-"
+
+
+def acquisition_number(workspace_id: int, key: str, sequence: int) -> str:
+    """The number of the ``sequence``-th bill for ``workspace_id`` acquiring ``key``."""
+    return f"{acquisition_number_prefix(workspace_id, key)}{sequence}"
+
+
+def acquired_workspace_and_key(invoice_number: str) -> Optional[Tuple[int, str]]:
+    """The workspace and add-on one acquisition bill is for, or ``None``.
+
+    The inverse of ``acquisition_number``, and the same "only way back" as its
+    monthly counterpart. The key is taken from what is left once the count is
+    removed, which is unambiguous because a key can hold no ``-``; it is then
+    checked against the shape a key has, so that a number somebody invented that
+    happens to carry the marker is refused rather than turned into an entitlement
+    to whatever it spelled.
+    """
+    if not (invoice_number or "").startswith(INVOICE_PREFIX):
+        return None
+    workspace, separator, rest = invoice_number[len(INVOICE_PREFIX):].partition("-")
+    if not separator or not workspace.isdigit():
+        return None
+    marker, separator, rest = rest.partition("-")
+    if marker != ACQUISITION_MARKER or not separator:
+        return None
+    key, separator, sequence = rest.rpartition("-")
+    if not separator or not sequence.isdigit() or not is_extension_key(key):
+        return None
+    return int(workspace), key
+
+
+def is_platform_bill(invoice_number: str) -> bool:
+    """Whether ``invoice_number`` is one this module issued, of either shape.
+
+    For a reader that only has to tell ours from everybody else's before doing
+    something more expensive. It is string work and no query, which is what lets
+    it sit on a path every invoice a deployment saves goes through.
+    """
+    return (
+        billed_workspace_and_period(invoice_number) is not None
+        or acquired_workspace_and_key(invoice_number) is not None
+    )
 
 
 # ── Money ────────────────────────────────────────────────────────────
@@ -167,7 +242,13 @@ def _previous_month(today: date) -> date:
     return today.replace(day=1) - timedelta(days=1)
 
 
-def _midnight(day: date) -> datetime:
+def midnight(day: date) -> datetime:
+    """The start of ``day`` in UTC, as an aware datetime.
+
+    Public because a period bought by a bill is anchored to a date the invoice
+    carries, and everything that turns one of those dates into a moment has to do
+    it the same way.
+    """
     return datetime.combine(day, time.min, tzinfo=datetime_timezone.utc)
 
 
@@ -180,11 +261,15 @@ def renewal_period_bounds(period_start: date) -> Tuple[datetime, datetime]:
     being charged for something that is never renewed.
     """
     first, next_first = usage.month_bounds(period_start)
-    return _midnight(first), _midnight(next_first)
+    return midnight(first), midnight(next_first)
 
 
-def _tax_percent(country: str, platform_workspace) -> Decimal:
+def tax_percent(country: str, platform_workspace) -> Decimal:
     """The percentage to add to the whole bill of a workspace selling in ``country``.
+
+    Public because a monthly bill is not the only thing the deployment issues, and
+    two invoices to the same workspace in the same week must not be taxed by two
+    different rules.
 
     The country rather than the workspace, because the answer depends on nothing
     else: one rate over the invoice, the same for every workspace in that country.
@@ -219,7 +304,13 @@ def _tax_percent(country: str, platform_workspace) -> Decimal:
     return Decimal(rate)
 
 
-def _currency(code: str, *, create: bool):
+def currency_row(code: str, *, create: bool):
+    """The ``finance.Currency`` an invoice in ``code`` is written against.
+
+    ``create`` provisions one the deployment has never used; without it a currency
+    that is not on file answers ``None``, which is a bill that cannot be written
+    rather than one written against a currency nobody configured.
+    """
     from bfg.common.onboarding.provisioning import ensure_currency
     from bfg.finance.models import Currency
 
@@ -327,7 +418,7 @@ def issue_monthly_bills(month=None, *, dry_run: bool = False) -> list:
     dollar converted to the workspace's currency at today's rate; and, once in a
     workspace's life, the deployment's trial credit, never more than the rest of
     the bill comes to. New Zealand workspaces are taxed over the whole invoice; see
-    ``_tax_percent`` for what is still missing everywhere else.
+    ``tax_percent`` for what is still missing everywhere else.
 
     Bills are for what the month held, so an entitlement is billed for the month
     its period ended in whatever has become of it since — including one that has
@@ -433,12 +524,12 @@ def issue_monthly_bills(month=None, *, dry_run: bool = False) -> list:
 
     def currency_for(code: str):
         if code not in currencies:
-            currencies[code] = _currency(code, create=not dry_run)
+            currencies[code] = currency_row(code, create=not dry_run)
         return currencies[code]
 
     def percent_for(country: str):
         if country not in percentages:
-            percentages[country] = _tax_percent(country, platform_workspace)
+            percentages[country] = tax_percent(country, platform_workspace)
         return percentages[country]
 
     def rate_or_refuse(from_code: str, to_code: str) -> Decimal:

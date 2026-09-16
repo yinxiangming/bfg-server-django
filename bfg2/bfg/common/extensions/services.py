@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Callable, Dict, FrozenSet, Iterable, List
+from typing import Callable, Dict, FrozenSet, Iterable, List, Optional
 
 from django.conf import settings
 from django.core.cache import cache
@@ -78,8 +78,34 @@ def _entitled_or_unavailable(workspace, manifest: ExtensionManifest) -> bool:
         return False
 
 
-def compute_available_keys(workspace) -> FrozenSet[str]:
-    """Keys of the extensions available to ``workspace``, read from the database."""
+def compute_entitled_keys(workspace) -> FrozenSet[str]:
+    """Keys of the extensions ``workspace`` may use at all, read from the database.
+
+    Whether the workspace has switched one on is a different question, and the two
+    together are what tell an add-on nobody has obtained yet from one that was
+    obtained and then switched off. Extensions priced as part of the base plan are
+    entitled to everyone, so without a deployment's entitlement check this is every
+    deployed key.
+
+    Worked out for every deployed extension in one pass, so that a caller
+    describing a list of them asks each question once rather than once a row.
+    """
+    return frozenset(
+        manifest.key
+        for manifest in registry.all_manifests()
+        if _entitled_or_unavailable(workspace, manifest)
+    )
+
+
+def compute_available_keys(workspace, entitled: Optional[FrozenSet[str]] = None) -> FrozenSet[str]:
+    """Keys of the extensions available to ``workspace``, read from the database.
+
+    ``entitled`` is what ``compute_entitled_keys`` answered for the same workspace,
+    for a caller that has already asked: the entitlement check is the deployment's
+    own and may be a query apiece, so asking it twice for the same workspace in the
+    same breath is worth avoiding. Left out, each active extension is asked about
+    here as before.
+    """
     from bfg.common.models import WorkspaceExtension
 
     manifests = {manifest.key: manifest for manifest in registry.all_manifests()}
@@ -91,11 +117,14 @@ def compute_available_keys(workspace) -> FrozenSet[str]:
         ).values_list('key', flat=True)
         for key in active_keys:
             manifest = manifests.get(key)
-            if (
-                manifest is not None
-                and manifest.scope == SCOPE_WORKSPACE
-                and _entitled_or_unavailable(workspace, manifest)
-            ):
+            if manifest is None or manifest.scope != SCOPE_WORKSPACE:
+                continue
+            allowed = (
+                key in entitled
+                if entitled is not None
+                else _entitled_or_unavailable(workspace, manifest)
+            )
+            if allowed:
                 available.add(key)
 
     # An extension is only as available as what it requires, all the way down.

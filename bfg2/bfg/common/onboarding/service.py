@@ -10,6 +10,7 @@ twice. So the plan is filtered down to what is genuinely missing *before* it is
 handed over, and the filtering is what ``preview`` shows.
 """
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from django.db import transaction
@@ -28,6 +29,8 @@ DEFAULT_THEME_CODE = 'store'
 CREATE = 'create'
 UPDATE = 'update'
 KEEP = 'keep'
+
+logger = logging.getLogger(__name__)
 
 
 class OnboardingService(BaseService):
@@ -109,6 +112,11 @@ class OnboardingService(BaseService):
                 plan, before.default_language, before.default_currency,
             )
             self._record_state(plan)
+
+        # Outside the transaction above, on purpose: switching an extension on runs
+        # that extension's own activation hook, and one of them failing should cost
+        # the shop its pack, not the currency, tax and pages it has just been given.
+        changes += self._apply_plan_pack(plan)
 
         self._invalidate_caches()
         return {
@@ -371,6 +379,38 @@ class OnboardingService(BaseService):
         settings_obj.save(update_fields=['custom_settings', 'updated_at'])
         return [self._change(CREATE, 'shop_settings', 'shop', ', '.join(
             f'{k}={v}' for k, v in sorted(plan['shop_settings'].items())))]
+
+    def _apply_plan_pack(self, plan: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Switch on the extensions this industry's pack names, if there is one.
+
+        Only ever switches things on, and only what the pack names: an extension
+        the shop turned on for itself is none of the pack's business. A key the
+        workspace may not have — unentitled, or a prerequisite the deployment has
+        not met — is reported as kept, with the reason, rather than failing the
+        template that has already been written.
+        """
+        from bfg.common.extensions import packs
+
+        # The plan carries the industry as {key, name, name_zh}, not as its key.
+        pack = packs.pack_for_industry((plan.get('industry') or {}).get('key') or '')
+        if pack is None:
+            return []
+
+        try:
+            applied = packs.apply_pack(self.workspace, pack['key'], user=self.user)
+        except Exception:
+            logger.exception('Could not apply plan pack %s to workspace %s', pack['key'], getattr(self.workspace, 'pk', None))
+            return []
+
+        changes: List[Dict[str, str]] = []
+        for row in applied:
+            if row['outcome'] == packs.OUTCOME_ACTIVATED:
+                changes.append(self._change(CREATE, 'extension', row['key'], pack['name']))
+            elif row['outcome'] == packs.OUTCOME_ALREADY_ON:
+                changes.append(self._change(KEEP, 'extension', row['key'], 'already on'))
+            else:
+                changes.append(self._change(KEEP, 'extension', row['key'], row.get('detail') or row.get('code', '')))
+        return changes
 
     def _apply_extension_settings(self, plan: Dict[str, Any]) -> List[Dict[str, str]]:
         """Config the installed apps can derive from the country/industry pick.

@@ -812,3 +812,22 @@ def test_a_deployment_that_sells_nothing_entitles_every_extension(operator, shop
 
 def test_an_extension_included_in_the_base_plan_is_always_entitled(operator, shop):
     assert extensions_of(detail(operator, shop))["notes"]["entitled"] is True
+
+
+# ── The plan-pack hook ───────────────────────────────────────────────
+
+
+def test_pack_obtain_gets_a_free_add_on_and_switches_it_on(free_plan, shop):
+    """A pack should not stop at an add-on nobody is being sold."""
+    assert acquisitions.pack_obtain(shop, registry.get_manifest(KEY)) is True
+    assert entitlements.is_entitled(shop, KEY)
+
+
+def test_pack_obtain_refuses_an_add_on_with_a_price(plan, shop):
+    """A pack is not a purchase: nothing here may commit a workspace to a bill."""
+    assert acquisitions.pack_obtain(shop, registry.get_manifest(KEY)) is False
+    assert not entitlements.is_entitled(shop, KEY)
+
+
+def test_pack_obtain_refuses_an_add_on_nothing_prices(shop):
+    assert acquisitions.pack_obtain(shop, registry.get_manifest(KEY)) is False

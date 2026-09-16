@@ -355,3 +355,33 @@ def _next_number(platform_workspace, workspace_id: int, key: str) -> str:
             code=KEY_TOO_LONG,
         )
     return number
+
+
+# ── Plan packs ───────────────────────────────────────────────────────
+
+
+def pack_obtain(workspace, manifest) -> bool:
+    """``BFG_EXTENSION_PACK_OBTAIN`` for a deployment that sells extensions.
+
+    Applying a plan pack stops at an add-on the workspace is not entitled to. For
+    one that costs nothing that is a poor answer — nobody is being sold anything,
+    and the pack exists precisely to say which of these a shop like this one
+    should have — so it is obtained here and the pack carries on.
+
+    An add-on with a price is **not** obtained: a pack is not a purchase, and
+    nothing here may commit a workspace to a bill it has not been shown. Those stay
+    skipped, which is what puts them in front of somebody as a thing to buy.
+
+    Returns whether the workspace may now have it. ``acquire`` switches a free
+    add-on on as part of entitling it, so a true answer usually means the pack has
+    nothing left to do for that key.
+    """
+    plan = plan_for(manifest.key)
+    if plan is None or Decimal(plan.price) > ZERO:
+        return False
+    try:
+        acquire(workspace, manifest.key)
+    except (AcquisitionRefused, extension_services.ExtensionError):
+        # Refused for a reason the pack will report on its own next attempt.
+        return False
+    return True

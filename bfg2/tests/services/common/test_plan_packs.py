@@ -232,3 +232,104 @@ def test_a_pack_that_cannot_be_applied_does_not_fail_the_template(deployed, work
     # The shop still got its currency, tax and pages.
     assert result["changes"]
     assert not any(change["kind"] == "extension" for change in result["changes"])
+
+
+# ── Obtaining what the workspace has not got ─────────────────────────
+
+
+def test_nothing_is_obtained_unless_the_deployment_says_how(deployed, workspace, monkeypatch):
+    from bfg.common.extensions import packs as packs_module
+
+    def refuse(ws, key, **kwargs):
+        raise ExtensionError("not_entitled", "Not entitled.")
+
+    monkeypatch.setattr(packs_module, "activate", refuse)
+
+    applied = packs.apply_pack(workspace, "boutique")
+
+    assert [row["outcome"] for row in applied] == [packs.OUTCOME_SKIPPED] * 2
+
+
+def test_a_key_obtained_on_the_second_ask_counts_as_switched_on(
+    deployed, workspace, settings, monkeypatch
+):
+    from bfg.common.extensions import packs as packs_module
+
+    obtained = set()
+    real = packs_module.activate
+
+    def refuse_until_obtained(ws, key, **kwargs):
+        if key not in obtained:
+            raise ExtensionError("not_entitled", "Not entitled.")
+        return real(ws, key, **kwargs)
+
+    monkeypatch.setattr(packs_module, "activate", refuse_until_obtained)
+    monkeypatch.setattr(
+        packs_module, "import_string", lambda path: lambda ws, manifest: bool(obtained.add(manifest.key)) or True
+    )
+    settings.BFG_EXTENSION_PACK_OBTAIN = "deployment.obtain"
+
+    applied = packs.apply_pack(workspace, "boutique")
+
+    assert [row["outcome"] for row in applied] == [packs.OUTCOME_ACTIVATED] * 2
+    assert status_of(workspace, FIRST) == WorkspaceExtension.STATUS_ACTIVE
+
+
+def test_a_deployment_that_says_no_leaves_the_key_skipped(deployed, workspace, settings, monkeypatch):
+    from bfg.common.extensions import packs as packs_module
+
+    def refuse(ws, key, **kwargs):
+        raise ExtensionError("not_entitled", "Not entitled.")
+
+    monkeypatch.setattr(packs_module, "activate", refuse)
+    monkeypatch.setattr(packs_module, "import_string", lambda path: lambda ws, manifest: False)
+    settings.BFG_EXTENSION_PACK_OBTAIN = "deployment.obtain"
+
+    applied = packs.apply_pack(workspace, "boutique")
+
+    assert all(row["outcome"] == packs.OUTCOME_SKIPPED for row in applied)
+    assert all(row["code"] == "not_entitled" for row in applied)
+
+
+def test_an_obtain_hook_that_raises_skips_the_key_rather_than_the_pack(
+    deployed, workspace, settings, monkeypatch
+):
+    from bfg.common.extensions import packs as packs_module
+
+    real = packs_module.activate
+
+    def refuse_the_first(ws, key, **kwargs):
+        if key == FIRST:
+            raise ExtensionError("not_entitled", "Not entitled.")
+        return real(ws, key, **kwargs)
+
+    def explode(ws, manifest):
+        raise RuntimeError("the billing backend is down")
+
+    monkeypatch.setattr(packs_module, "activate", refuse_the_first)
+    monkeypatch.setattr(packs_module, "import_string", lambda path: explode)
+    settings.BFG_EXTENSION_PACK_OBTAIN = "deployment.obtain"
+
+    applied = packs.apply_pack(workspace, "boutique")
+
+    assert applied[0]["outcome"] == packs.OUTCOME_SKIPPED
+    assert applied[1]["outcome"] == packs.OUTCOME_ACTIVATED
+
+
+def test_a_key_the_activation_refuses_for_another_reason_is_not_offered_to_the_hook(
+    deployed, workspace, settings, monkeypatch
+):
+    from bfg.common.extensions import packs as packs_module
+
+    asked = []
+
+    def refuse(ws, key, **kwargs):
+        raise ExtensionError("prerequisite_failed", "A setting is missing.")
+
+    monkeypatch.setattr(packs_module, "activate", refuse)
+    monkeypatch.setattr(packs_module, "import_string", lambda path: lambda ws, manifest: asked.append(manifest.key))
+    settings.BFG_EXTENSION_PACK_OBTAIN = "deployment.obtain"
+
+    packs.apply_pack(workspace, "boutique")
+
+    assert asked == []

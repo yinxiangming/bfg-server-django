@@ -43,11 +43,6 @@ Two things pass without being marked at all:
 The marks, and why each one is there — the whole list, kept here so that it can
 be read in one place, with the reasoning repeated at each view:
 
-* ``platform.WorkspaceViewSet.checkout`` — paying for the plan. It is the way
-  out of read-only mode; refusing it would leave a lapsed workspace no way back.
-* ``platform.WebhookViewSet.stripe`` — the gateway confirming that payment
-  completed. The other half of ``checkout``: refuse it and a workspace that has
-  paid stays locked, out of step with the gateway for good.
 * ``platform.ConsoleWorkspaceViewSet.pay_invoice`` — settling a platform bill.
   It is the way out of read-only mode; refusing it would leave a lapsed
   workspace no way back. The console is served outside any workspace, so this

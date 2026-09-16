@@ -402,8 +402,6 @@ EXEMPT_WRITES = [
     # Settling a platform bill, and the gateway confirming the payment (the
     # callback below). Without both, a lapsed workspace has no way back.
     '/api/v1/platform/console/workspaces/1/invoices/PLAT-1-202608/pay/',
-    '/api/v1/platform/workspaces/1/checkout/',
-    '/api/v1/platform/webhooks/stripe/',
     # Account operations. Somebody has to be able to get in and pay.
     '/api/v1/me/change-password/',
     '/api/v1/me/reset-password/',

@@ -353,8 +353,6 @@ A workspace with a platform invoice that is past its due date and unpaid may not
   - **Endpoints outside any workspace are never refused**, which covers signing in, refreshing a token, registering, and the whole platform console (`/api/v1/platform/`).
   - **Still allowed, and marked as such on the views themselves** (`bfg.core.read_only.exempt_from_read_only`; the list with its reasoning is in `bfg.platform.middleware`):
     - `POST /api/v1/platform/console/workspaces/{id}/invoices/{number}/pay/` — settling a platform bill; the way out. Nothing else on the console is marked.
-    - `POST /api/v1/platform/workspaces/{id}/checkout/` — paying for the plan; the way out.
-    - `POST /api/v1/platform/webhooks/stripe/` — the gateway confirming the payment.
     - `POST /api/v1/me/change-password/` and `/api/v1/me/reset-password/` — account, not workspace.
     - `POST /api/v1/store/payments/callback/{gateway}/` — money already parted with, reported by the gateway: a shopper's order, and the card half of the bill above.
     - `POST /api/v1/shop/orders/{id}/update_status/`, **for an order already marked paid only**.

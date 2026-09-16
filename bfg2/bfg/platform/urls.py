@@ -11,7 +11,6 @@ from rest_framework.routers import DefaultRouter
 
 from bfg.platform.views.workspace_views import WorkspaceViewSet, PlanViewSet, SSOConfigViewSet
 from bfg.platform.views.auth_views import AuthViewSet, InternalAuthViewSet
-from bfg.platform.views.subscription_views import WebhookViewSet
 from bfg.platform.views.switch_workspace_view import switch_workspace
 from bfg.platform.views.console_views import ConsoleWorkspaceViewSet
 
@@ -21,7 +20,6 @@ router.register(r'plans',      PlanViewSet,      basename='platform-plan')
 router.register(r'sso',        SSOConfigViewSet, basename='platform-sso')
 router.register(r'auth',       AuthViewSet,      basename='platform-auth')
 router.register(r'internal',   InternalAuthViewSet, basename='platform-internal')
-router.register(r'webhooks',   WebhookViewSet,   basename='platform-webhook')
 router.register(r'console/workspaces', ConsoleWorkspaceViewSet, basename='platform-console-workspace')
 
 urlpatterns = [

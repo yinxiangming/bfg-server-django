@@ -114,7 +114,7 @@ def grant(
     """
     now = timezone.now()
     period_end = _add_months(now, months) if months else None
-    return WorkspaceEntitlement.all_objects.create(
+    row = WorkspaceEntitlement.all_objects.create(
         workspace=workspace,
         key=key,
         plan=plan,
@@ -124,6 +124,13 @@ def grant(
         status=WorkspaceEntitlement.STATUS_ACTIVE,
         reason=reason,
     )
+    # A workspace that was read only for want of a base plan is not, as of this
+    # row, and should not spend the rest of the cache window unable to trade.
+    # Imported here because ``read_only`` reads this module.
+    from bfg.platform.services.read_only import forget as forget_read_only
+
+    forget_read_only(workspace)
+    return row
 
 
 def entitlement_check(workspace, manifest: ExtensionManifest) -> bool:

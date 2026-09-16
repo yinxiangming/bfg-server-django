@@ -8,6 +8,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 import logging
 
+from bfg.core.read_only import exempt_from_read_only
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,6 +21,10 @@ class WebhookViewSet(viewsets.ViewSet):
     """
     permission_classes = [AllowAny]
 
+    # Read-only exemption: the gateway telling us a payment completed. It is the
+    # other half of ``checkout`` — refuse it and a workspace that has paid stays
+    # locked, with its subscription state permanently out of step with Stripe's.
+    @exempt_from_read_only
     @action(detail=False, methods=['post'], url_path='stripe')
     def stripe(self, request):
         """POST /api/v1/platform/webhooks/stripe/"""

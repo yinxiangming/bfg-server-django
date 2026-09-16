@@ -20,6 +20,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
 from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, IsOwnerOrStaff, StaffReadAdminWrite
+from bfg.core.read_only import exempt_from_read_only
 from bfg.common.models import Workspace, Customer, Address, CustomerSegment, CustomerTag, User, UserPreferences, StaffRole, EmailConfig, SocialAuthConfig
 from bfg.common.serializers import (
     WorkspaceSerializer,
@@ -755,7 +756,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
 
         cached = cache.get(cache_key)
         if cached is not None and not django_settings.DEBUG:
-            return Response(cached)
+            return Response(self._with_read_only(workspace, cached))
 
         service = SettingsService(workspace=workspace, user=request.user)
         settings_obj = service.get_or_create_settings(workspace)
@@ -1012,7 +1013,27 @@ class SettingsViewSet(viewsets.ModelViewSet):
 
         if not django_settings.DEBUG:
             cache.set(cache_key, payload, cache_ttl())
-        return Response(payload)
+        return Response(self._with_read_only(workspace, payload))
+
+    @staticmethod
+    def _with_read_only(workspace, payload):
+        """``payload`` plus ``read_only``, the flag a visitor is allowed to see.
+
+        True when the workspace's plan has lapsed far enough that the server is
+        refusing writes: the storefront reads it to say the shop is not taking
+        orders at the moment, on the product page and at checkout, rather than
+        letting a shopper fill a basket and meet a 403 at the end of it. Visible
+        to anonymous callers because that is who is shopping; it says only that
+        the shop is closed for orders, never why, and nothing about what is owed.
+
+        Added outside the cached payload, and the payload is copied rather than
+        written into, because the config is cached for minutes and this is not:
+        a shop that has just renewed would otherwise keep telling visitors it was
+        closed until the config cache happened to expire.
+        """
+        from bfg.platform.services.read_only import is_read_only
+
+        return {**payload, 'read_only': is_read_only(workspace)}
 
     @action(detail=False, methods=['get'])
     def options(self, request):
@@ -1356,6 +1377,10 @@ class MeViewSet(viewsets.GenericViewSet):
         serializer = self.get_serializer(user)
         return Response(serializer.data)
 
+    # Read-only exemption: signing in, signing out and changing your own password
+    # are account operations, not workspace data. A person locked out of their own
+    # account by their employer's unpaid bill would have no way to pay it.
+    @exempt_from_read_only
     @action(detail=False, methods=['post'])
     def change_password(self, request):
         """Change password
@@ -1380,6 +1405,10 @@ class MeViewSet(viewsets.GenericViewSet):
         
         return Response({'detail': 'Password changed successfully'})
     
+    # Read-only exemption: the same reason as ``change_password``. Signing in and
+    # refreshing a token need no mark — they are served outside any workspace
+    # (``/api/v1/auth/``), where this middleware has no tenant to speak for.
+    @exempt_from_read_only
     @action(detail=False, methods=['post'])
     def reset_password(self, request):
         """Request password reset (sends email)

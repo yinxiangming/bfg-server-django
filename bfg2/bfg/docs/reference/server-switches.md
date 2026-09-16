@@ -328,7 +328,32 @@ Three things about a bill are worth knowing before switching this on:
 
 ### What an unpaid bill stops
 
-A workspace with a platform invoice that is past its due date and unpaid may not make another metered call: `bfg.platform.services.usage.may_meter` refuses it, and so `metering.allowed` does too. Nothing else stops — the shop, its orders and its data all keep working, and only what costs the deployment money on the workspace's behalf is withheld. An invoice that came to nothing (a month covered entirely by the trial credit) is not a debt and stops nothing, and only the platform workspace's own invoices count, since a workspace chooses what its own invoices are numbered. The answer is cached for a minute, so a workspace that has just paid is unblocked within one.
+A workspace with a platform invoice that is past its due date and unpaid may not make another metered call: `bfg.platform.services.usage.may_meter` refuses it, and so `metering.allowed` does too. Nothing else stops — the shop, its orders and its data all keep working, and only what costs the deployment money on the workspace's behalf is withheld. An invoice that came to nothing (a month covered entirely by the trial credit) is not a debt and stops nothing, and only the platform workspace's own invoices count, since a workspace chooses what its own invoices are numbered. The answer is cached for a minute, so a workspace that has just paid is unblocked within one. An unpaid *bill* and a lapsed *plan* are separate questions with separate answers: this one withholds metered calls, and the switch below is what stops a lapsed plan being written to at all.
+
+### `BFG_READ_ONLY_WHEN_UNENTITLED`
+- Default: `false`
+- Purpose:
+  - Puts a workspace whose base plan has lapsed past its grace period into **read only**: writes are refused with `403` and `{"code": "workspace_read_only"}`, apart from an explicit list below. Nothing is deleted, nothing is hidden, and paying restores it.
+- **Do not switch this on until every workspace that should have a base plan has a `platform.WorkspaceEntitlement` row for it.** The check asks that table, and a workspace with no rows answers "no plan" — so switching this on first makes *every* workspace on the deployment read-only at the same moment. This is the same trap as `BFG_EXTENSION_ENTITLEMENT_CHECK`, and the reason this is a settings switch rather than a default.
+- Wiring:
+  - `bfg.platform.middleware.ReadOnlyWorkspaceMiddleware`, installed after `bfg.common.middleware.WorkspaceMiddleware`. Installing it does nothing on its own; with the switch off it costs one attribute lookup per request and asks the database nothing.
+- Behavior:
+  - **Reads are never refused.** GET, HEAD and OPTIONS always pass, so the shop can be browsed, the back office read, and every export used — all of the exports in this library are GETs.
+  - **Endpoints outside any workspace are never refused**, which covers signing in, refreshing a token, registering, and the whole platform console (`/api/v1/platform/`).
+  - **Still allowed, and marked as such on the views themselves** (`bfg.core.read_only.exempt_from_read_only`; the list with its reasoning is in `bfg.platform.middleware`):
+    - `POST /api/v1/platform/workspaces/{id}/checkout/` — paying for the plan; the way out.
+    - `POST /api/v1/platform/webhooks/stripe/` — the gateway confirming the payment.
+    - `POST /api/v1/me/change-password/` and `/api/v1/me/reset-password/` — account, not workspace.
+    - `POST /api/v1/store/payments/callback/{gateway}/` — money a shopper has already parted with.
+    - `POST /api/v1/shop/orders/{id}/update_status/`, **for an order already marked paid only**.
+    - `POST /api/v1/delivery/carriers/{id}/ship_order/`, and a consignment's `update_status`, `add_tracking_event` and `generate_label` — getting goods to shoppers who have already paid.
+  - **Refused**, among everything else: customer registration, cart and checkout, creating or editing orders, `mark-paid`, refunds, cancellations, all catalogue/settings/marketing writes, storefront analytics collection, and the assistant endpoints. API-key writes are refused the same way — the key is resolved in the middleware, because the workspace middleware leaves an API-key request tenant-less for the view layer to bind.
+  - **Failing to decide means writable.** If the question cannot be answered — database unreachable, anything at all — the workspace is treated as writable and the failure is logged at ERROR. Closing a trading shop because of the fault that also stops anyone diagnosing it is the worse outcome.
+  - The answer is cached for a minute (`bfg.platform.services.read_only.CACHE_SECONDS`), like the overdue-invoice answer. Whatever settles a payment should call `read_only.forget(workspace)` so the shop is trading on the next request rather than in a minute's time; `entitlements.grant` already does.
+- What the clients are told:
+  - `GET /api/v1/me/` carries `workspace_read_only` (boolean), so the admin can explain itself before the first refusal rather than after.
+  - `GET /api/v1/settings/storefront/` carries `read_only` (boolean), visible to anonymous visitors, so the storefront can say the shop is not taking orders on the product page and at checkout. It says only that; never why, and nothing about what is owed. It is added outside the cached config payload, so a shop that has just renewed is not told it is closed until that cache expires.
+  - Both fields are additions; no existing field changed.
 
 ---
 

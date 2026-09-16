@@ -67,6 +67,16 @@ BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS = _env_bool(
     default=not IS_PROD,
 )
 
+# If True, a workspace whose base plan has lapsed past its grace period may only be
+# read: writes are refused with 403 workspace_read_only, apart from the ones views
+# mark with bfg.core.read_only.exempt_from_read_only (renewing, signing in,
+# fulfilling orders already paid for). Reads are never refused, so browsing the shop
+# and exporting still work. Nothing is deleted or hidden, and paying restores it.
+# LEAVE THIS OFF until every existing workspace has a platform.WorkspaceEntitlement
+# row for its base plan: the check answers "no plan" for a workspace with no rows,
+# so switching it on first would make every workspace read-only at once.
+BFG_READ_ONLY_WHEN_UNENTITLED = _env_bool('BFG_READ_ONLY_WHEN_UNENTITLED', default=False)
+
 ALLOWED_HOSTS = ['*']
 
 # ─── Error monitoring (Sentry) ────────────────────────────────────────
@@ -164,6 +174,9 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'allauth.account.middleware.AccountMiddleware',
     'bfg.common.middleware.WorkspaceMiddleware',
+    # Needs request.workspace, so it follows the middleware that binds it.
+    # Does nothing unless BFG_READ_ONLY_WHEN_UNENTITLED is on.
+    'bfg.platform.middleware.ReadOnlyWorkspaceMiddleware',
     'bfg.common.middleware.AuditLogMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',

@@ -116,6 +116,43 @@ def test_a_currency_nobody_publishes_a_rate_for_does_not_cost_the_others_theirs(
     assert "XYZ" in caplog.text
 
 
+def test_a_rate_can_be_entered_by_hand_and_says_that_it_was(currencies, django_user_model):
+    operator = django_user_model.objects.create_user(username="operator", email="operator@example.test")
+
+    row = exchange_rates.set_rate("usd", "nzd", "1.6555555", on=date(2026, 9, 15), user=operator)
+
+    assert row.source == ExchangeRate.SOURCE_MANUAL
+    assert row.entered_by == operator
+    # Written to the six places the column holds, as a rate from the feed is.
+    assert row.rate == Decimal("1.655556")
+    assert exchange_rates.convert(1, "USD", "NZD", on=date(2026, 9, 16)) == Decimal("1.655556")
+
+
+@pytest.mark.parametrize("rate", ["0", "-1.5", "not a rate", "0.0000001", None])
+def test_a_rate_that_is_not_a_positive_number_is_not_stored(currencies, rate):
+    with pytest.raises(exchange_rates.InvalidExchangeRate):
+        exchange_rates.set_rate("USD", "NZD", rate)
+    assert not ExchangeRate.objects.exists()
+
+
+def test_a_pair_of_the_same_currency_is_refused(currencies):
+    with pytest.raises(exchange_rates.InvalidExchangeRate):
+        exchange_rates.set_rate("USD", "usd", "1")
+
+
+def test_the_published_rate_replaces_one_somebody_typed_for_the_same_day(currencies, served):
+    exchange_rates.set_rate("USD", "NZD", "1.500000", on=date(2026, 9, 15))
+    served({"base": "USD", "date": "2026-09-15", "rates": {"NZD": 1.6}})
+
+    assert exchange_rates.refresh_rates(symbols=["NZD"]) == 1
+
+    stored = ExchangeRate.objects.get(from_currency__code="USD", to_currency__code="NZD")
+    assert stored.rate == Decimal("1.600000")
+    # The bank's number has arrived; the stand-in no longer claims to be typed.
+    assert stored.source == ExchangeRate.SOURCE_FEED
+    assert stored.entered_by is None
+
+
 def test_a_day_already_stored_is_updated_rather_than_repeated(currencies, served):
     served({"base": "USD", "date": "2026-09-15", "rates": {"NZD": 1.6}})
     exchange_rates.refresh_rates(symbols=["NZD"])

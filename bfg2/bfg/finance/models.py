@@ -33,14 +33,43 @@ class Currency(models.Model):
 
 
 class ExchangeRate(models.Model):
-    """Exchange rate between currencies."""
+    """Exchange rate between currencies.
+
+    ``source`` says where the number came from. Rates are normally read from a
+    reference feed once a day, but a feed that is down leaves a day with no rate
+    and nothing billable in that currency, so an operator can enter one by hand.
+    A bill has to be explainable long after it was issued, and "the bank
+    published this" and "somebody typed this" are not the same answer — hence the
+    column, and ``entered_by`` for the person who typed it.
+    """
+
+    SOURCE_FEED = 'feed'
+    SOURCE_MANUAL = 'manual'
+    SOURCE_CHOICES = (
+        (SOURCE_FEED, _("Reference Feed")),
+        (SOURCE_MANUAL, _("Entered By Hand")),
+    )
+
     from_currency = models.ForeignKey(Currency, on_delete=models.CASCADE, related_name='rates_from')
     to_currency = models.ForeignKey(Currency, on_delete=models.CASCADE, related_name='rates_to')
-    
+
     rate = models.DecimalField(_("Rate"), max_digits=12, decimal_places=6)
-    
+
     effective_date = models.DateField(_("Effective Date"), default=timezone.now)
-    
+
+    source = models.CharField(
+        _("Source"), max_length=16, choices=SOURCE_CHOICES, default=SOURCE_FEED
+    )
+    entered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name=_("Entered By"),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+        help_text=_("Who entered the rate, for one that was not read from the feed."),
+    )
+
     class Meta:
         verbose_name = _("Exchange Rate")
         verbose_name_plural = _("Exchange Rates")

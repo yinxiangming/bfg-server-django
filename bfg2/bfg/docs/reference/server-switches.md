@@ -335,13 +335,14 @@ Only relevant to a deployment that charges workspaces for what they use. A deplo
 ### Platform variables
 - Margins, grace periods, retention windows and the default usage cap are rows in `platform.PlatformVariable`, not environment variables: they are policy an operator adjusts while the deployment runs, and each change is recorded in `platform.PlatformVariableChange` with who made it and why.
 - Read and write them through `bfg.platform.services.platform_variables` (`get_variable`, `set_variable`, `all_variables`). Every variable the deployment recognises is declared there with its default, so a deployment that has never set one still behaves sensibly, and an unrecognised key is refused rather than stored.
+- A running deployment changes them from the console rather than from a shell; see [The console, for whoever runs the deployment](#the-console-for-whoever-runs-the-deployment) below.
 
 ### Metered calls
 - A meter is a named unit worth counting, declared by the extension that spends it (`meters` on its manifest). Its price is a `platform.MeterPrice` row: a vendor cost, how many calls or tokens that cost buys, an optional margin, and the moment it takes effect. A new rate is a new row, so bills already calculated stay explicable.
 - One point is one US dollar. Usage is totalled per workspace, meter and UTC day in `platform.UsageRecord`.
 - A workspace may run up `WorkspacePlatformProfile.monthly_usage_cap_points` in a calendar month, or the `monthly_usage_cap_points` variable when it has no cap of its own.
 - Callers ask `bfg.platform.metering.allowed(workspace, meter)` before spending and `bfg.platform.metering.meter(workspace, meter, quantity)` after the call succeeded.
-- Prices are read and written with `python manage.py meter_prices list` and `python manage.py meter_prices set KEY --cost 0.15 --unit-size 1000000 [--margin 0.30] [--from 2026-10-01T00:00:00Z]`. `list` shows each meter's whole history with the row in force marked; `set` only ever adds a row.
+- Prices are read and written with `python manage.py meter_prices list` and `python manage.py meter_prices set KEY --cost 0.15 --unit-size 1000000 [--margin 0.30] [--from 2026-10-01T00:00:00Z]`, or from the console. `list` shows each meter's whole history with the row in force marked; `set` only ever adds a row, and neither the command nor the console can edit or delete one.
 - The assistant (`POST /api/v1/agent/chat/`) meters its own model calls as `ai.<model>.input`, `ai.<model>.input_cached` and `ai.<model>.output`, `<model>` being the lowercased id of the model actually asked — the model that answers and the cheaper one that picks its tools fill separate meters. Price every meter a deployment's `OPENAI_MODEL` and `OPENAI_TOOL_SELECTOR_MODEL` will fill; an unpriced meter is logged and goes uncounted rather than billed as free.
 - A workspace over its cap gets `402` with `{"code": "usage_cap_reached"}` from that endpoint, asked once per request before anything is sent.
 - A meter nothing has priced yet is logged as a warning once an hour per meter, not as an error with a stack trace on every call: wiring a meter up before pricing it is what every rollout looks like for a while. Nothing is billed for it until a `MeterPrice` row exists, so watch for that warning after switching a new meter on.
@@ -351,7 +352,7 @@ Only relevant to a deployment that charges workspaces for what they use. A deplo
 There is no scheduler in this library, and the deployments it was written for run no Celery beat. The three steps below are management commands, to be run from cron or by hand. All three are safe to run twice.
 
 - `python manage.py close_entitlement_periods [--dry-run]` — moves an entitlement past its period into `grace` (for `grace_days`, counted from the period's own end), and one past its grace into `ended`. Ending one pauses the extension it paid for: `WorkspaceExtension` goes to `paused`, keeping the workspace's data and configuration, so paying again restores it. Run daily. Running it late delays the pause, not the expiry — an entitlement stops counting on time either way.
-- `python manage.py refresh_exchange_rates [--base USD] [--symbols NZD,CNY]` — stores the ECB's daily reference rates (through Frankfurter; free, no key) in `finance.ExchangeRate`, under the day the bank published them. Run daily, and in any case before issuing bills. Every published rate is read and the ones the deployment has currencies for are kept, so a currency the bank does not publish is logged and skipped rather than costing the refresh every other currency. A refresh that fails writes nothing and leaves the rates already on file, which is what conversions then use.
+- `python manage.py refresh_exchange_rates [--base USD] [--symbols NZD,CNY]` — stores the ECB's daily reference rates (through Frankfurter; free, no key) in `finance.ExchangeRate`, under the day the bank published them. Run daily, and in any case before issuing bills. Every published rate is read and the ones the deployment has currencies for are kept, so a currency the bank does not publish is logged and skipped rather than costing the refresh every other currency. A refresh that fails writes nothing and leaves the rates already on file, which is what conversions then use. A day the feed could not be read for at all leaves that currency unbillable until somebody enters the rate by hand from the console, which records that it was typed rather than published; a later refresh that does reach the feed replaces it with the published number.
 - `python manage.py issue_monthly_bills [--month YYYY-MM] [--dry-run]` — issues one invoice per workspace for a month of metered usage and the entitlements whose period ended in it, defaulting to last month. The invoice is issued by the platform workspace (`PLATFORM_WORKSPACE_SLUG`) and made out to the workspace's owner, in the workspace's own currency at the day's rate; it falls due after `invoice_due_days`. Its number is `PLAT-<workspace id>-<YYYYMM>`, which is what stops a month being billed twice — the unique index on (workspace, invoice number) refuses the second attempt — and is, with the platform workspace itself, how an invoice is tied back to the workspace it is about.
 
 A platform invoice number has two shapes, and both start `PLAT-<workspace id>-` so that everything reading a workspace's bills by prefix — what it owes, what the console lists — reads all of them:
@@ -399,6 +400,28 @@ A workspace with a platform invoice that is past its due date and unpaid may not
   - `GET /api/v1/me/` carries `workspace_read_only` (boolean), so the admin can explain itself before the first refusal rather than after.
   - `GET /api/v1/settings/storefront/` carries `read_only` (boolean), visible to anonymous visitors, so the storefront can say the shop is not taking orders on the product page and at checkout. It says only that; never why, and nothing about what is owed. It is added outside the cached config payload, so a shop that has just renewed is not told it is closed until that cache expires.
   - Both fields are additions; no existing field changed.
+
+### The console, for whoever runs the deployment
+
+Everything above is stored in the database rather than in the environment, so it can be changed while the deployment runs. The management commands are one way in; `/api/v1/platform/console/` is the other, and the only one a deployment without a shell has.
+
+Most of the console is shared with **workspace owners**, who reach the workspaces they own: the workspace list, one workspace with its extensions, its metered usage and its platform bills. The endpoints below are **not**: they set what every workspace is billed by, or give one workspace something it has not paid for, so anyone who does not administer the platform is refused all of them with `403 platform_admin_required` — the same answer for a workspace they own, one they do not and one that does not exist, which is what keeps the refusal from saying which. A platform administrator naming a workspace that is not one gets `404 workspace_not_found`, as the rest of the console does.
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/console/variables/` | Every variable, its default, what it is worth now, and the last change with the reason given for it |
+| PATCH | `/console/variables/{key}/` | `{"value": ..., "reason": "..."}` — a reason is required and is kept in `PlatformVariableChange`; an undeclared key is `404`, a value the variable cannot hold `400` |
+| GET | `/console/meter-prices/` | Every meter's whole price history, newest first, with the row in force marked (`?meter=` narrows it) |
+| POST | `/console/meter-prices/` | `{"meter", "vendor_cost", "unit_size", "margin"?, "effective_from"?}` — adds a row and changes none. There is no detail route at all, so no request can edit or delete a price |
+| GET | `/console/exchange-rates/` | The rates most recently stored, newest day first (`?base=`, `?currency=`, `?limit=`); `source` is `feed` or `manual` |
+| POST | `/console/exchange-rates/` | `{"from", "to", "rate", "effective_date"?}` — a rate entered by hand for a day the feed could not be read for, recorded as typed and by whom |
+| GET/PATCH | `/console/workspaces/{id}/usage-cap/` | One workspace's monthly cap. `{"cap_points": null}` puts it back on the deployment's default, which is **not** the same as `{"cap_points": "0"}` — a cap of zero stops it metering anything |
+| POST | `/console/workspaces/{id}/grants/` | `{"key", "months" \| "never_expires", "reason"}` — an entitlement given rather than sold. `key` is an add-on's extension key, or `""` for the base plan, and is required even when empty |
+
+Two things about a grant are worth knowing:
+
+- **A workspace that already holds a live entitlement to the key is refused** with `409 already_entitled`, carrying the entitlement it already has, rather than given a second row. Two live rows for one key are two things to renew and two to explain, and a second grant is almost always the same grant made twice. One that has ended can be granted again.
+- **The extension is not switched on.** What a workspace is entitled to and what it has switched on are separate, and switching one on changes what that workspace's staff and customers see, runs its activation hooks and can be refused by its prerequisites — the workspace's decision, not a side effect of being given something. The one exception is an extension **the platform itself paused** when an entitlement ran out: pausing kept its data and configuration so that being entitled again would restore it, so a grant resumes it. `extension` in the answer says which happened, and carries the refusal when the resume was declined; the grant stands either way.
 
 ---
 

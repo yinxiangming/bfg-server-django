@@ -326,6 +326,14 @@ class PaymentService(BaseService):
             payment.invoice.paid_date = timezone.now().date()
             payment.invoice.save(update_fields=['status', 'paid_date', 'updated_at'])
             self._update_consignment_status(payment.invoice, FreightState.PAID.value)
+            # The same event ``InvoiceService.mark_as_paid`` emits, so that
+            # ``invoice.paid`` means an invoice was settled however the money
+            # arrived. A listener that only cares about the invoice can then
+            # listen for one thing rather than knowing which of the two paths a
+            # deployment happens to take.
+            transaction.on_commit(
+                lambda: self.emit_event('invoice.paid', {'invoice': payment.invoice})
+            )
 
         audit = AuditService(workspace=self.workspace, user=self.user)
         description = f"Payment {payment.payment_number} completed - {payment.amount} {payment.currency.code}"

@@ -4,6 +4,8 @@ The console: workspaces and the extensions each one uses, for the people who run
 
 GET   /api/v1/platform/console/workspaces/                                  ?search= matches name or slug
 GET   /api/v1/platform/console/workspaces/{id}/                             also every extension, with its config
+GET   /api/v1/platform/console/workspaces/{id}/usage/                       ?month=YYYY-MM, this month by default
+GET   /api/v1/platform/console/workspaces/{id}/invoices/                    the platform bills, newest first
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/activate/   optional body: {"config": {...}}
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/deactivate/
 PATCH /api/v1/platform/console/workspaces/{id}/extensions/{key}/config/     body: {"config": {...}}
@@ -15,6 +17,12 @@ refused. A workspace the caller does not reach is answered with 404
 ``owned_by_viewer`` says whether the caller owns it. An owner only reads a workspace
 that is suspended or inactive: changing its extensions is refused with 403
 ``workspace_suspended`` or ``workspace_inactive``.
+
+What a workspace has spent and what it has been billed are read by whoever reaches
+the workspace at all, suspended and inactive ones included: a suspended workspace is
+one whose owner most needs to see the bill. Money and points are strings rather than
+JSON numbers, so that nothing is rounded on the way to the console; see
+``console_billing``.
 
 A change records the caller as the one who switched the extension on or off. Only a
 platform administrator is told that person's email: an owner is told the id and
@@ -29,22 +37,44 @@ entitlement check) may still read tenant-scoped models through ``objects``, so t
 workspace is bound while it runs and the previous binding is put back afterwards.
 """
 from contextlib import contextmanager
+from datetime import date, datetime
 
 from django.http import Http404
 from django.utils.functional import cached_property
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import NotFound, PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
 from bfg.common.extensions import endpoints
 from bfg.common.middleware import get_current_workspace, set_current_workspace
+from bfg.platform.services import console_billing
 from bfg.platform.services.console_service import ConsoleViewer, console_workspaces, workspace_entries
 
 WORKSPACE_NOT_FOUND = 'workspace_not_found'
+INVALID_MONTH = 'invalid_month'
 
 _EXTENSION_PATH = r'extensions/(?P<key>[a-z][a-z0-9_]*)'
+
+
+def _month(request):
+    """The month ``?month=YYYY-MM`` asks for, or ``None`` for the current one.
+
+    Refused rather than guessed at: a console heading says which month it is
+    showing, and reading an unparseable one as this month would put the wrong
+    numbers under it.
+    """
+    wanted = (request.query_params.get('month') or '').strip()
+    if not wanted:
+        return None
+    try:
+        parsed = datetime.strptime(wanted, '%Y-%m')
+    except ValueError:
+        raise ValidationError(
+            {'code': INVALID_MONTH, 'detail': 'month must be written as YYYY-MM.'}
+        ) from None
+    return date(parsed.year, parsed.month, 1)
 
 
 @contextmanager
@@ -102,6 +132,34 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
                 workspace, viewer_is_platform_admin=self.viewer.is_platform_admin
             )
         return Response(entry)
+
+    @action(detail=True, methods=['get'])
+    def usage(self, request, pk=None):
+        """A month of metered usage, against what the workspace may spend.
+
+        ``?month=YYYY-MM`` picks the month, the current UTC one by default. Read by
+        anyone who reaches the workspace, whether or not they may change it: a
+        suspended workspace is one whose owner most needs to see what it has run up.
+
+        Each entry under ``meters`` and under ``days[].meters`` names the extension
+        that declares the meter — ``extension`` is its key and ``extension_name``
+        the name on its manifest — and both are ``null`` for a meter that belongs to
+        the base platform rather than to any extension.
+        """
+        workspace = self.get_object()
+        return Response(console_billing.usage_report(workspace, month=_month(request)))
+
+    @action(detail=True, methods=['get'])
+    def invoices(self, request, pk=None):
+        """The workspace's platform bills, newest first and bounded.
+
+        ``status`` is one of ``draft``, ``sent``, ``paid``, ``overdue`` and
+        ``cancelled``, and is not what says whether a bill is late: the ``overdue``
+        field is, and nothing on the platform billing path writes the status of the
+        same name. See ``console_billing.invoice_history`` for what each status
+        means and for the rule the flag is worked out by.
+        """
+        return Response(console_billing.invoice_history(self.get_object()))
 
     @action(detail=True, methods=['post'], url_path=f'{_EXTENSION_PATH}/activate')
     def activate_extension(self, request, pk=None, key=None):

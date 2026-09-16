@@ -299,6 +299,19 @@ Only relevant to a deployment that charges workspaces for what they use. A deplo
   - **Setting this without entitlement rows switches every add-on off at once.** Point it at the table only once the rows a deployment's workspaces should hold have been written, which is why it defaults to empty and is only ever read from the environment.
   - `python manage.py grant_entitlements --all-workspaces --switched-on --months 3 [--dry-run]` writes those rows: the base plan for every active workspace, plus every add-on each one currently has switched on, granted rather than sold. Run it before setting this, and a deployment that has been running without billing keeps everything it was using. It is safe to run twice — a workspace already entitled to a key is left alone — and `--dry-run` reports what it would grant without writing.
 
+### `BFG_EXTENSION_PLAN_PACKS`
+- Default: empty
+- Purpose:
+  - The set of extensions a kind of shop starts with, so the same question does not have to be answered for every new workspace.
+- Shape:
+  - A mapping of pack key to `{name, name_zh, description, description_zh, industries, extensions}`, or the dotted path of one (or of a callable returning one). `industries` names the setup wizard's industry keys the pack suits; `extensions` names extension keys.
+- Behavior:
+  - The setup wizard applies the pack matching the industry a new shop picks, after the template has been written and outside its transaction — an extension's activation hook failing costs the shop its pack, not its currency, tax and pages.
+  - `python manage.py plan_packs list` shows what is configured; `python manage.py plan_packs apply <pack> --workspace <id|slug> [--dry-run]` applies one to a workspace that already exists.
+  - **Applying only ever switches things on.** It never deactivates anything, including extensions the pack does not mention, and it never grants an entitlement: a key the workspace is not entitled to is reported and skipped, so a pack can be offered to somebody who has not bought everything in it.
+  - A pack naming an extension the deployment does not ship drops that key and logs it once, next to the pack that named it.
+  - Two packs claiming one industry is a configuration mistake; the first wins, so the answer at least stays the same between calls.
+
 ### Platform variables
 - Margins, grace periods, retention windows and the default usage cap are rows in `platform.PlatformVariable`, not environment variables: they are policy an operator adjusts while the deployment runs, and each change is recorded in `platform.PlatformVariableChange` with who made it and why.
 - Read and write them through `bfg.platform.services.platform_variables` (`get_variable`, `set_variable`, `all_variables`). Every variable the deployment recognises is declared there with its default, so a deployment that has never set one still behaves sensibly, and an unrecognised key is refused rather than stored.

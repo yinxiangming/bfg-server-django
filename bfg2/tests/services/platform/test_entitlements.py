@@ -209,7 +209,7 @@ def test_a_grant_of_so_many_months_ends_on_the_same_day_of_a_later_month(workspa
     granted = entitlements.grant(workspace, "reviews", months=3)
 
     assert granted.current_period_end is not None
-    expected = entitlements._add_months(granted.starts_at, 3)
+    expected = entitlements.add_months(granted.starts_at, 3)
     assert granted.current_period_end == expected
 
 

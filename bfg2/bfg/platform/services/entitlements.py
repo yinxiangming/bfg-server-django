@@ -35,11 +35,15 @@ ENDED_REASON = "grace period ended without a renewal"
 PAUSED_REASON = "entitlement_ended"
 
 
-def _add_months(moment, months: int):
+def add_months(moment, months: int):
     """``moment`` moved on by whole calendar months, clamped to the month's length.
 
     A period that starts on the 31st ends on the 30th of a month that has thirty
     days, rather than spilling into the next one.
+
+    How long a period is, in one place: granting one and renewing one both count
+    the same way, so a workspace's periods stay on the day of the month it started
+    on however many times it renews.
     """
     index = moment.month - 1 + months
     year = moment.year + index // 12
@@ -113,7 +117,7 @@ def grant(
     for, when it stands for one.
     """
     now = timezone.now()
-    period_end = _add_months(now, months) if months else None
+    period_end = add_months(now, months) if months else None
     return WorkspaceEntitlement.all_objects.create(
         workspace=workspace,
         key=key,

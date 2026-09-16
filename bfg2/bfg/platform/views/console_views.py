@@ -257,11 +257,18 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
         already holding unpaid. ``extension`` is the extension as it now stands,
         which for a priced add-on is as it stood before.
 
+        A priced add-on is entitled without a bill in two cases, and then
+        ``entitled`` is true, ``invoice`` is null and one of two fields says why:
+        ``trial_days`` is how long a trial runs when the plan carries one this
+        workspace has not had, and ``billed_later`` is true when there was no rate
+        to write today's bill at. Both are periods the monthly run bills for in the
+        month they end, so neither is an add-on given away.
+
         Refused with 400 and a ``code`` when the workspace already has the add-on,
         when the extension is part of the base plan rather than something sold
         separately, when the deployment has never priced it, and when a bill cannot
-        be written for want of an owner, a currency or an exchange rate; with 404
-        for a key no app declares. See ``services.acquisitions``.
+        be written for want of an owner or a currency; with 404 for a key no app
+        declares. See ``services.acquisitions``.
         """
         workspace = self._workspace_to_change()
         try:
@@ -277,6 +284,11 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
             )
         return Response({
             'entitled': acquired.entitlement is not None,
+            'trial_days': acquired.trial_days,
+            'billed_later': acquired.billed_later,
+            'entitled_until': (
+                acquired.entitlement.current_period_end if acquired.entitlement is not None else None
+            ),
             'invoice': (
                 {**console_billing.invoice_entry(acquired.invoice), 'issued': acquired.invoice_is_new}
                 if acquired.invoice is not None

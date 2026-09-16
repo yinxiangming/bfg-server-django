@@ -29,6 +29,24 @@ written when the bill is settled, by ``renewals``. A bill that has not been paid
 a debt like any other and stops metered calls once it falls due, which is
 ``has_overdue_invoice``'s doing and needs nothing here.
 
+*Priced, but not billed yet* — the workspace is entitled for one period straight
+away and no bill is written now. Two things lead here, and both are a bill that
+cannot or should not be written today rather than a different price:
+
+  A *trial*, when the plan carries ``trial_period_days`` and this workspace has
+  never held the add-on. The period is the trial's length and it costs nothing,
+  which is what a trial is.
+
+  *No exchange rate*, when the plan's currency cannot be turned into the
+  workspace's today. A rate that has not been read yet is the deployment's
+  problem and it is not worth an hour of it to the workspace asking, so the add-on
+  is switched on for a month and the month is charged for where every other month
+  is — ``issue_monthly_bills``, which prices the period in the month it ends.
+
+Either way the entitlement is a bought one with a plan and an end, so it is billed
+and renewed by the same two functions every other purchased period is. What moves
+is when the first bill is written, not whether one is.
+
 Like the rest of the platform services this runs with no workspace bound to the
 thread — the console's paths are public — so tenant-scoped models are read through
 ``all_objects`` and filtered by workspace by hand.
@@ -72,8 +90,11 @@ NOT_AN_ADDON = "not_an_addon"
 NO_PLAN = "no_plan"
 NO_OWNER = "no_owner"
 UNKNOWN_CURRENCY = "unknown_currency"
-NO_EXCHANGE_RATE = "no_exchange_rate"
 KEY_TOO_LONG = "key_too_long"
+
+# How long the first period runs when there was no rate to bill at. A month,
+# because a month is what the plan's price buys and what renewing one buys again.
+DEFERRED_MONTHS = 1
 
 # How many numbers are tried before giving up. Only a second acquisition of the
 # same add-on starting at the same moment can take the one this worked out, and
@@ -93,15 +114,24 @@ class AcquisitionRefused(BFGException):
 class Acquisition:
     """What came of asking for an add-on.
 
-    Exactly one of the two is filled in: ``entitlement`` for a free add-on, which
-    the workspace now has, and ``invoice`` for a priced one, which it has yet to
-    pay for. ``invoice_is_new`` is false when the workspace was already holding an
-    unpaid bill for this add-on and was handed that one again rather than a second.
+    Exactly one of the two is filled in: ``entitlement`` for one the workspace now
+    has, and ``invoice`` for a priced one it has yet to pay for. ``invoice_is_new``
+    is false when the workspace was already holding an unpaid bill for this add-on
+    and was handed that one again rather than a second.
+
+    An entitlement comes with a reason it was written before any money arrived, so
+    that a console can say which it is. ``trial_days`` is how long a trial runs, and
+    zero when this is not one; ``billed_later`` is true when there was no rate to
+    write today's bill at and the period will be charged for by the monthly run.
+    Neither is set for an add-on the deployment prices at nothing, which is not
+    billed at all.
     """
 
     entitlement: Optional[WorkspaceEntitlement] = None
     invoice: object = None
     invoice_is_new: bool = True
+    trial_days: int = 0
+    billed_later: bool = False
 
 
 def plan_for(key: str = PLAN_CODE_BASE_PLAN):
@@ -128,19 +158,21 @@ def plan_for(key: str = PLAN_CODE_BASE_PLAN):
 def acquire(workspace, key: str, *, user=None) -> Acquisition:
     """Get ``workspace`` the add-on ``key``, or bill it for one.
 
-    A free add-on is entitled and switched on; a priced one is invoiced and left to
-    be paid for. Either way the answer says which happened, and the caller renders
-    it — nothing here knows what a console shows.
+    A free add-on is entitled and switched on. A priced one is invoiced and left to
+    be paid for — unless it comes with a trial the workspace has not had, or there
+    is no rate to write today's bill at, in which cases it is entitled for a period
+    and billed by the monthly run instead. Either way the answer says which
+    happened, and the caller renders it — nothing here knows what a console shows.
 
     Raises ``AcquisitionRefused`` with a ``code`` for everything this can say no
     to: the extension is part of the base plan rather than something sold
     separately (``not_an_addon``), the workspace already has it
     (``already_entitled``), or the deployment has never priced it (``no_plan``). A
     priced one can also be refused for want of something a bill needs — an owner to
-    make it out to (``no_owner``), a currency (``unknown_currency``), a rate to
-    write it at (``no_exchange_rate``) — and those are the deployment's to fix
-    rather than the workspace's. ``extensions.ExtensionError`` comes back from a
-    key no app declares and from an activation the extension itself refused.
+    make it out to (``no_owner``), a currency (``unknown_currency``) — and those are
+    the deployment's to fix rather than the workspace's. ``extensions.ExtensionError``
+    comes back from a key no app declares and from an activation the extension itself
+    refused.
     """
     manifest = registry.get_manifest(key)
     if manifest is None:
@@ -168,33 +200,174 @@ def acquire(workspace, key: str, *, user=None) -> Acquisition:
     outstanding = _outstanding_invoice(workspace, key)
     if outstanding is not None:
         return Acquisition(invoice=outstanding, invoice_is_new=False)
-    return Acquisition(invoice=_issue_bill(workspace, key, plan))
+
+    trial_days = _trial_days(plan, _has_held(workspace, key))
+    if trial_days:
+        now = timezone.now()
+        return Acquisition(
+            entitlement=_entitle(
+                workspace,
+                key,
+                plan,
+                user,
+                starts_at=now,
+                period_end=now + timedelta(days=trial_days),
+            ),
+            trial_days=trial_days,
+        )
+
+    try:
+        return Acquisition(invoice=_issue_bill(workspace, key, plan))
+    except exchange_rates.ExchangeRateNotFound as missing:
+        # Not the workspace's fault and not worth its wait. The period is written
+        # now and ``issue_monthly_bills`` charges for it in the month it ends, by
+        # which time a refresh will almost certainly have run. A rate that stays
+        # missing shows up there instead, as a workspace skipped by the run.
+        logger.warning(
+            "Workspace %s acquired %r without a bill: %s Its first month will be "
+            "billed by the monthly run.",
+            workspace.pk, key, missing.message,
+        )
+        now = timezone.now()
+        return Acquisition(
+            entitlement=_entitle(
+                workspace,
+                key,
+                plan,
+                user,
+                starts_at=now,
+                period_end=entitlements.add_months(now, DEFERRED_MONTHS),
+            ),
+            billed_later=True,
+        )
+
+
+def _trial_days(plan, already_held: bool) -> int:
+    """How long a trial of ``plan`` runs, or zero when there is not one to have.
+
+    Zero for a plan with no trial on it, and zero for a workspace that has held the
+    add-on before: a trial is an introduction to something, and one that came round
+    again every time an entitlement lapsed would be a way of never paying for it.
+
+    One rule, two readers — acquiring writes the period from it, and ``price_list``
+    tells a console what it would get — so what a workspace is shown and what it is
+    given cannot drift apart.
+    """
+    days = int(plan.trial_period_days or 0)
+    return 0 if already_held or days <= 0 else days
+
+
+def _has_held(workspace, key: str) -> bool:
+    """Whether ``workspace`` has ever held an entitlement to ``key``.
+
+    Every row counts, whatever became of it — ended, granted, or paid for — since
+    each of them is a time the workspace has had the add-on.
+    """
+    return WorkspaceEntitlement.all_objects.filter(workspace=workspace, key=key).exists()
+
+
+def price_list(workspace) -> dict:
+    """What each add-on this deployment sells would cost ``workspace``, by key.
+
+    For a console listing extensions: one entry per plan of the management
+    workspace that names an add-on, so a key nothing prices is simply absent and a
+    deployment that sells nothing gets an empty answer. The base plan is left out —
+    it is not an add-on anyone acquires here — as is every plan of a workspace's own.
+
+    ``amount`` is the plan's price in the currency it is written in, and
+    ``workspace_amount`` the same month converted into the workspace's own at
+    today's rate — ``None`` when no rate has been stored for the pair, which is a
+    price that can still be shown in the deployment's currency rather than one that
+    cannot be shown at all. ``trial_days`` is what this workspace would actually
+    get, so an add-on it has held before offers no second trial.
+
+    Three queries however many add-ons there are: the plans, the keys the workspace
+    has held, and one rate.
+    """
+    from bfg.shop.models import SubscriptionPlan
+
+    platform_workspace = get_platform_workspace()
+    if platform_workspace is None:
+        return {}
+    plans = list(
+        SubscriptionPlan.objects.filter(workspace=platform_workspace, is_active=True)
+        .exclude(code=PLAN_CODE_BASE_PLAN)
+        .order_by("id")
+    )
+    if not plans:
+        return {}
+
+    held = set(
+        WorkspaceEntitlement.all_objects.filter(workspace=workspace).values_list("key", flat=True)
+    )
+    plan_currency = (
+        get_default_currency_for_workspace(platform_workspace) or billing.POINT_CURRENCY
+    ).upper()
+    currency_code = (get_default_currency_for_workspace(workspace) or billing.POINT_CURRENCY).upper()
+    # Never created here: showing a page must not write a currency row the
+    # deployment has not used, and a currency with no row is shown at the places
+    # every invoice is written to anyway.
+    currency = billing.currency_row(currency_code, create=False)
+    places = min(
+        currency.decimal_places if currency is not None else billing.ASSUMED_DECIMAL_PLACES,
+        billing.INVOICE_DECIMAL_PLACES,
+    )
+    try:
+        rate = exchange_rates.convert(ONE, plan_currency, currency_code, on=timezone.now().date())
+    except exchange_rates.ExchangeRateNotFound:
+        rate = None
+
+    entries = {}
+    for plan in plans:
+        price = Decimal(plan.price)
+        entries.setdefault(plan.code, {
+            "plan": plan.name,
+            "amount": f"{price}",
+            "currency": plan_currency,
+            "interval": plan.interval,
+            "interval_count": plan.interval_count,
+            "trial_days": _trial_days(plan, plan.code in held),
+            "workspace_amount": (
+                f"{billing.round_to(price * rate, places)}" if rate is not None else None
+            ),
+            "workspace_currency": currency_code,
+        })
+    return entries
 
 
 # ── Free ─────────────────────────────────────────────────────────────
 
 
 @transaction.atomic
-def _entitle(workspace, key: str, plan, user) -> WorkspaceEntitlement:
-    """Entitle ``workspace`` to ``key`` for good, and switch the extension on.
+def _entitle(
+    workspace, key: str, plan, user, *, starts_at=None, period_end=None
+) -> WorkspaceEntitlement:
+    """Entitle ``workspace`` to ``key`` and switch the extension on.
 
     One transaction for both: an add-on that cannot be switched on — a prerequisite
     the workspace has not met, another extension it needs first — must not leave
     behind an entitlement to something it cannot use, and a workspace that has been
     told it has the add-on must not find the entitlement missing.
 
-    No period end, because there is nothing to renew: a free add-on never falls due,
-    is never billed for, and so has no payment to wait for. It is still recorded as
-    purchased, with the plan it came from, since it is something the workspace asked
-    for at the price the deployment set — which happened to be nothing.
+    ``period_end`` left out is an entitlement that does not expire, which is what a
+    free add-on gets: there is nothing to renew, because it never falls due, is
+    never billed for, and so has no payment to wait for. A trial and a period
+    written ahead of its bill both pass one, along with the ``starts_at`` it was
+    measured from, so that the row says a whole month rather than a month less the
+    microseconds between working the end out and writing the row.
+
+    Recorded as purchased either way, with the plan it came from, since it is
+    something the workspace asked for at the price the deployment set — which for a
+    free add-on happened to be nothing. Granting is the other source and means
+    something else: an entitlement nobody asked for, which is never billed.
     """
     entitlement = WorkspaceEntitlement.all_objects.create(
         workspace=workspace,
         key=key,
         plan=plan,
         source=WorkspaceEntitlement.SOURCE_PURCHASED,
-        starts_at=timezone.now(),
-        current_period_end=None,
+        starts_at=starts_at or timezone.now(),
+        current_period_end=period_end,
         status=WorkspaceEntitlement.STATUS_ACTIVE,
     )
     extension_services.activate(workspace, key, user=user)
@@ -240,6 +413,9 @@ def _issue_bill(workspace, key: str, plan):
     today's rate, taxed by the rule every other platform bill is taxed by. It falls
     due after the deployment's ``invoice_due_days``, which is what eventually stops
     the workspace's metered calls if it is never paid.
+
+    Raises ``exchange_rates.ExchangeRateNotFound`` when there is no rate to convert
+    at, and ``AcquisitionRefused`` for the rest of what a bill needs and has not got.
     """
     from bfg.common.models import Customer
     from bfg.finance.models import Invoice, InvoiceItem
@@ -263,10 +439,10 @@ def _issue_bill(workspace, key: str, plan):
     plan_currency = (
         get_default_currency_for_workspace(plan.workspace) or billing.POINT_CURRENCY
     ).upper()
-    try:
-        rate = exchange_rates.convert(ONE, plan_currency, currency_code, on=today)
-    except exchange_rates.ExchangeRateNotFound as missing:
-        raise AcquisitionRefused(missing.message, code=NO_EXCHANGE_RATE) from None
+    # ``ExchangeRateNotFound`` is deliberately let out: it is the one thing missing
+    # here that the caller answers by writing the period anyway rather than by
+    # refusing, so it must stay telling apart from the refusals around it.
+    rate = exchange_rates.convert(ONE, plan_currency, currency_code, on=today)
 
     price = billing.round_to(Decimal(plan.price) * rate, places)
     percent = billing.tax_percent(

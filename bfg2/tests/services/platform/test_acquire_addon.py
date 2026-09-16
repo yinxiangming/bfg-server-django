@@ -5,6 +5,10 @@ write nothing until the bill is paid. These cover both, what each is refused for
 and the bill's own life: its number, what it stops while it is unpaid, and the
 first period paying it buys.
 
+They also cover the two priced add-ons that are switched on before any bill — one
+on trial, one there was no exchange rate to bill at — and what a console is told
+an add-on would cost this workspace.
+
 Manifests are faked, as in ``test_console_workspaces``.
 """
 
@@ -49,6 +53,8 @@ GST_ON_IT = Decimal("11.76")
 # Forty characters, which leaves a bill for it no room inside the fifty an invoice
 # number holds.
 LONG_KEY = "a" * 40
+# What a plan that opens with a free month carries.
+TRIAL_DAYS = 30
 
 MANIFESTS = {
     # Two add-ons, so that one workspace's bills for each can be told apart.
@@ -160,6 +166,12 @@ def free_plan(platform):
     return _plan(platform, KEY, Decimal("0"))
 
 
+@pytest.fixture
+def trial_plan(platform):
+    """The same price, after a month of it for nothing."""
+    return _plan(platform, KEY, PLAN_PRICE, trial_period_days=TRIAL_DAYS)
+
+
 def _plan(workspace, code, price, **fields):
     return SubscriptionPlan.objects.create(
         workspace=workspace, name=f"{code or 'Base'} plan", code=code, price=price, **fields
@@ -224,6 +236,30 @@ def _entitle(workspace, key=KEY, **fields):
     fields.setdefault("status", WorkspaceEntitlement.STATUS_ACTIVE)
     fields.setdefault("source", WorkspaceEntitlement.SOURCE_PURCHASED)
     return WorkspaceEntitlement.all_objects.create(workspace=workspace, key=key, **fields)
+
+
+def _held_before(workspace, key=KEY):
+    """A row saying the workspace has had this add-on, and has it no longer."""
+    return _entitle(
+        workspace,
+        key,
+        status=WorkspaceEntitlement.STATUS_ENDED,
+        current_period_end=timezone.now() - timedelta(days=90),
+    )
+
+
+def _publish_rate():
+    """Today's rate arriving, as the daily refresh brings it."""
+    return ExchangeRate.objects.create(
+        from_currency=Currency.objects.get(code="USD"),
+        to_currency=Currency.objects.get(code="NZD"),
+        effective_date=timezone.now().date(),
+        rate=Decimal("1.60"),
+    )
+
+
+def _price_of(user, workspace, key=KEY):
+    return extensions_of(detail(user, workspace))[key]["price"]
 
 
 # ── What it says no to ───────────────────────────────────────────────
@@ -301,12 +337,150 @@ def test_a_workspace_with_no_owner_cannot_be_billed(operator, shop, plan, rate):
     assert not Invoice.all_objects.exists()
 
 
-def test_a_bill_is_not_written_at_a_rate_nobody_published(operator, shop, owner, plan, currencies):
+# ── A bill that could not be written today ───────────────────────────
+
+
+def test_an_add_on_is_switched_on_when_there_is_no_rate_to_bill_it_at(
+    operator, shop, owner, plan, currencies
+):
+    """A rate the deployment has not read yet is not the workspace's to wait for."""
     response = acquire(operator, shop)
 
-    assert response.status_code == 400
-    assert response.data["code"] == acquisitions.NO_EXCHANGE_RATE
+    assert response.status_code == 200
+    assert response.data["entitled"] is True
+    assert response.data["billed_later"] is True
+    assert response.data["invoice"] is None
     assert not Invoice.all_objects.exists()
+    assert response.data["extension"]["status"] == WorkspaceExtension.STATUS_ACTIVE
+    assert response.data["extension"]["available"] is True
+
+
+def test_the_period_written_without_a_bill_is_a_bought_month(
+    operator, shop, owner, plan, currencies
+):
+    """So that the run that bills every other month prices this one the same way."""
+    acquire(operator, shop)
+
+    row, = _entitlements(shop)
+    assert row.source == WorkspaceEntitlement.SOURCE_PURCHASED
+    assert row.plan_id == plan.pk
+    assert row.status == WorkspaceEntitlement.STATUS_ACTIVE
+    assert row.current_period_end == entitlements.add_months(row.starts_at, 1)
+
+
+def test_the_month_nobody_could_bill_for_is_charged_by_the_monthly_run(
+    operator, shop, owner, plan, currencies
+):
+    """What "billed later" comes to: the line a renewal of it would have made."""
+    acquire(operator, shop)
+    row, = _entitlements(shop)
+    _publish_rate()
+
+    entry, = billing.issue_monthly_bills(month=row.current_period_end.date())
+
+    assert entry["issued"] is True
+    charged = entry["lines"][0]
+    assert charged["subtotal"] == BILLED
+    assert KEY in charged["description"]
+
+
+# ── An add-on with a trial ───────────────────────────────────────────
+
+
+def test_a_plan_with_a_trial_is_switched_on_without_a_bill(
+    operator, shop, owner, trial_plan, rate
+):
+    response = acquire(operator, shop)
+
+    assert response.status_code == 200
+    assert response.data["entitled"] is True
+    assert response.data["trial_days"] == TRIAL_DAYS
+    assert response.data["invoice"] is None
+    assert not Invoice.all_objects.exists()
+    assert response.data["extension"]["available"] is True
+
+
+def test_the_trial_runs_for_the_days_the_plan_names(operator, shop, owner, trial_plan, rate):
+    """And is a bought period, so it falls due and is billed like any other."""
+    acquire(operator, shop)
+
+    row, = _entitlements(shop)
+    assert row.source == WorkspaceEntitlement.SOURCE_PURCHASED
+    assert row.plan_id == trial_plan.pk
+    assert row.current_period_end == row.starts_at + timedelta(days=TRIAL_DAYS)
+
+
+def test_a_trial_is_had_once_however_often_the_add_on_lapses(
+    operator, shop, owner, trial_plan, rate
+):
+    """One that came round with every lapse would be a way of never paying at all."""
+    _held_before(shop)
+
+    response = acquire(operator, shop)
+
+    assert response.data["trial_days"] == 0
+    assert response.data["invoice"]["subtotal"] == str(BILLED)
+
+
+def test_a_trial_is_no_reason_to_give_away_an_add_on_the_deployment_prices(
+    operator, shop, owner, trial_plan, rate
+):
+    """The trial ends where any other period does, and the month after it is billed."""
+    acquire(operator, shop)
+    row, = _entitlements(shop)
+
+    entry, = billing.issue_monthly_bills(month=row.current_period_end.date())
+
+    assert entry["lines"][0]["subtotal"] == BILLED
+
+
+# ── What a console is told an add-on costs ───────────────────────────
+
+
+def test_the_console_says_what_an_add_on_costs_in_the_workspace_s_own_currency(
+    operator, shop, plan, rate
+):
+    price = _price_of(operator, shop)
+
+    assert price["plan"] == plan.name
+    assert price["amount"] == "49.00"
+    assert price["currency"] == "USD"
+    assert price["workspace_amount"] == str(BILLED)
+    assert price["workspace_currency"] == "NZD"
+    assert price["interval"] == "month"
+    assert price["trial_days"] == 0
+
+
+def test_a_price_is_still_shown_when_no_rate_has_been_stored(operator, shop, plan, currencies):
+    """The deployment's own price is a better answer than no price at all."""
+    price = _price_of(operator, shop)
+
+    assert price["amount"] == "49.00"
+    assert price["currency"] == "USD"
+    assert price["workspace_amount"] is None
+
+
+def test_an_extension_that_comes_with_the_base_plan_is_not_priced_on_its_own(
+    operator, shop, platform, rate
+):
+    _plan(platform, acquisitions.PLAN_CODE_BASE_PLAN, PLAN_PRICE)
+
+    assert _price_of(operator, shop, "notes") is None
+
+
+def test_an_add_on_nobody_has_priced_carries_no_price(operator, shop, rate):
+    assert _price_of(operator, shop) is None
+
+
+def test_the_trial_a_console_shows_is_the_one_this_workspace_would_get(
+    operator, shop, trial_plan, rate
+):
+    """Showing a trial to somebody who has already had it would be an offer we refuse."""
+    assert _price_of(operator, shop)["trial_days"] == TRIAL_DAYS
+
+    _held_before(shop)
+
+    assert _price_of(operator, shop)["trial_days"] == 0
 
 
 # ── An add-on that costs nothing ─────────────────────────────────────

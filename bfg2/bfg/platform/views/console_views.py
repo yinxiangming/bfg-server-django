@@ -9,6 +9,7 @@ GET   /api/v1/platform/console/workspaces/{id}/invoices/                    the 
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/acquire/    obtain an add-on, or be billed for it
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/activate/   optional body: {"config": {...}}
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/deactivate/
+POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/restore/     archived data back
 PATCH /api/v1/platform/console/workspaces/{id}/extensions/{key}/config/     body: {"config": {...}}
 
 Shared by platform administrators, who reach every workspace, and workspace owners,
@@ -224,6 +225,27 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
         workspace = self._workspace_to_change()
         with _bound(workspace):
             return endpoints.deactivate(
+                workspace, key, user=request.user, viewer_is_platform_admin=self.viewer.is_platform_admin
+            )
+
+    @action(detail=True, methods=['post'], url_path=f'{_EXTENSION_PATH}/restore')
+    def restore_extension(self, request, pk=None, key=None):
+        """Bring back the data of an extension that was archived, and switch it on.
+
+        The way back for an extension whose rows were exported and deleted after long
+        enough switched off: activating one is refused, because the rows are not there to
+        activate. Answered with the extension's state, which is ``active`` once the rows
+        are back, or ``restoring`` while a worker is still loading them on a deployment
+        that restores in the background. A restore that fails leaves it ``archived`` with
+        the reason on it, and asking again runs it again — loading an archive twice writes
+        the same rows rather than a second copy.
+
+        409 ``archive_not_configured`` when the deployment has given archiving nowhere to
+        write, in which case nothing was ever archived either.
+        """
+        workspace = self._workspace_to_change()
+        with _bound(workspace):
+            return endpoints.restore(
                 workspace, key, user=request.user, viewer_is_platform_admin=self.viewer.is_platform_admin
             )
 

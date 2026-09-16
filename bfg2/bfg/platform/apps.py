@@ -8,8 +8,14 @@ class PlatformConfig(AppConfig):
     verbose_name = "BFG Platform"
 
     def ready(self):
-        """Import signals when app is ready."""
+        """Import signals and event handlers when app is ready."""
         try:
             import bfg.platform.signals  # noqa
+        except ImportError:
+            pass
+
+        # Renewing what a paid bill bought; see bfg.platform.handlers.
+        try:
+            import bfg.platform.handlers  # noqa
         except ImportError:
             pass

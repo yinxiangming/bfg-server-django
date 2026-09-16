@@ -9,6 +9,7 @@ from decimal import Decimal
 from datetime import date, timedelta
 from django.db import transaction
 from django.utils import timezone
+from bfg.core.events import after_commit
 from bfg.core.services import BaseService
 from bfg.finance.models import (
     Invoice, InvoiceItem, TaxRate, Currency
@@ -197,19 +198,34 @@ class InvoiceService(BaseService):
     def mark_as_paid(self, invoice: Invoice) -> Invoice:
         """
         Mark invoice as paid
-        
+
+        For money that arrived outside a gateway: a bank transfer somebody
+        reconciled, a cheque, a balance agreed as settled. There is no ``Payment``
+        row behind any of those, so ``payment.completed`` does not fire and
+        anything waiting on the invoice being settled would never hear of it.
+        ``invoice.paid`` is emitted for that — the same shape as ``invoice.sent``
+        above, carrying the invoice rather than a payment, because a payment is
+        the one thing this path does not have.
+
+        Emitted after the commit, as the rest of the library's events that
+        something acts on are: a listener that reloads the invoice would otherwise
+        read the status it had before this, and one that queues work would have it
+        picked up before the row was there to find.
+
         Args:
             invoice: Invoice instance
-            
+
         Returns:
             Invoice: Updated invoice instance
         """
         self.validate_workspace_access(invoice)
-        
+
         invoice.status = 'paid'
         invoice.paid_date = timezone.now().date()
         invoice.save()
-        
+
+        after_commit(self.emit_event, 'invoice.paid', {'invoice': invoice})
+
         return invoice
     
     def cancel_invoice(self, invoice: Invoice, reason: str = '') -> Invoice:

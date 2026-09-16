@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, time, timedelta, timezone as datetime_timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
@@ -117,6 +117,27 @@ def invoice_number_for(workspace_id: int, period_start: date) -> str:
     return f"{invoice_number_prefix(workspace_id)}{period_start:%Y%m}"
 
 
+def billed_workspace_and_period(invoice_number: str) -> Optional[Tuple[int, date]]:
+    """The workspace and month one platform invoice number is about, or ``None``.
+
+    The inverse of ``invoice_number_for``, and the only way back: a platform
+    invoice belongs to the management workspace, so its number is all that says
+    which workspace it bills. ``None`` for anything that is not one of these
+    numbers — an invoice a workspace issued to its own customers, or one typed in
+    by hand — which is what keeps a reader from acting on someone else's bill.
+    """
+    if not (invoice_number or "").startswith(INVOICE_PREFIX):
+        return None
+    workspace, separator, period = invoice_number[len(INVOICE_PREFIX):].partition("-")
+    if not separator or not workspace.isdigit() or len(period) != 6 or not period.isdigit():
+        return None
+    try:
+        return int(workspace), date(int(period[:4]), int(period[4:]), 1)
+    except ValueError:
+        # A month outside 1 to 12: a number shaped like ours that nothing issued.
+        return None
+
+
 # ── Money ────────────────────────────────────────────────────────────
 
 
@@ -124,7 +145,12 @@ def _step(decimal_places: int) -> Decimal:
     return Decimal(1).scaleb(-decimal_places)
 
 
-def _round(amount: Decimal, decimal_places: int) -> Decimal:
+def round_to(amount: Decimal, decimal_places: int) -> Decimal:
+    """``amount`` written to ``decimal_places``, rounding halves up.
+
+    Public because the console estimates what a bill will come to and has to round
+    it the way the bill itself will be rounded, rather than a way of its own.
+    """
     return Decimal(amount).quantize(_step(decimal_places), rounding=ROUND_HALF_UP)
 
 
@@ -143,6 +169,18 @@ def _previous_month(today: date) -> date:
 
 def _midnight(day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=datetime_timezone.utc)
+
+
+def renewal_period_bounds(period_start: date) -> Tuple[datetime, datetime]:
+    """The half-open range of period ends a bill for ``period_start``'s month covers.
+
+    Which entitlements one month's bill charged for, written once: billing reads
+    it to build the renewal lines, and renewing reads it to know which periods the
+    payment bought another month of. The two cannot drift apart into a workspace
+    being charged for something that is never renewed.
+    """
+    first, next_first = usage.month_bounds(period_start)
+    return _midnight(first), _midnight(next_first)
 
 
 def _tax_percent(country: str, platform_workspace) -> Decimal:
@@ -214,7 +252,7 @@ def _renewal_lines(entitlements, rate_for, currency_code: str, decimal_places: i
             )
             continue
         plan_currency = get_default_currency_for_workspace(row.plan.workspace)
-        price = _round(
+        price = round_to(
             Decimal(row.plan.price) * rate_for(plan_currency, currency_code), decimal_places
         )
         what = row.key or "base plan"
@@ -256,8 +294,8 @@ def _usage_lines(meters, rate: Decimal, decimal_places: int) -> List[dict]:
             {
                 "description": f"{meter} — {_units(totals['quantity'])} metered units"[:255],
                 "quantity": points,
-                "unit_price": _round(rate, decimal_places),
-                "subtotal": _round(points * rate, decimal_places),
+                "unit_price": round_to(rate, decimal_places),
+                "subtotal": round_to(points * rate, decimal_places),
             }
         )
     return lines
@@ -265,7 +303,7 @@ def _usage_lines(meters, rate: Decimal, decimal_places: int) -> List[dict]:
 
 def _trial_line(points: Decimal, rate: Decimal, chargeable: Decimal, decimal_places: int) -> Optional[dict]:
     """The credit a workspace's first bill gets, never more than the bill itself."""
-    credit = min(_round(points * rate, decimal_places), chargeable)
+    credit = min(round_to(points * rate, decimal_places), chargeable)
     if credit <= ZERO:
         return None
     return {
@@ -343,11 +381,12 @@ def issue_monthly_bills(month=None, *, dry_run: bool = False) -> list:
             "points": Decimal(row["points"] or 0),
         }
 
+    renewal_since, renewal_until = renewal_period_bounds(period_start)
     renewals = {}
     for row in (
         WorkspaceEntitlement.all_objects.filter(
-            current_period_end__gte=_midnight(period_start),
-            current_period_end__lt=_midnight(period_next),
+            current_period_end__gte=renewal_since,
+            current_period_end__lt=renewal_until,
         )
         .select_related("plan", "plan__workspace", "plan__workspace__workspace_settings")
         .order_by("workspace_id", "key", "id")
@@ -494,7 +533,7 @@ def issue_monthly_bills(month=None, *, dry_run: bool = False) -> list:
         for line in lines:
             # Per line rather than over the invoice, so that the tax column and the
             # lines under it add up to the same number by construction.
-            line["tax"] = _round(line["subtotal"] * percent / Decimal(100), decimal_places)
+            line["tax"] = round_to(line["subtotal"] * percent / Decimal(100), decimal_places)
             line["tax_type"] = "default" if percent else "no_tax"
 
         entry["lines"] = lines
@@ -575,14 +614,37 @@ def issue_monthly_bills(month=None, *, dry_run: bool = False) -> list:
 # ── What an unpaid bill stops ────────────────────────────────────────
 
 
+def overdue_cache_key(workspace_id) -> str:
+    """Where the answer to "does this workspace owe anything" is kept.
+
+    One function rather than the string in both places that touch it: the reader
+    and whatever has just made the answer wrong have to agree on it, and a key
+    spelled twice is a key that eventually differs by a colon.
+    """
+    return f"platform:overdue:{workspace_id}"
+
+
+def forget_overdue(workspace_id) -> None:
+    """Throw away the cached answer for one workspace.
+
+    Called by whatever has just changed it — a bill being paid — so that the next
+    metered call asks the database instead of being refused for up to
+    ``OVERDUE_CACHE_SECONDS`` on an answer from before the money arrived. The
+    cache is there to keep a query off the path of every paid call, not to make a
+    workspace wait a minute after it has settled up.
+    """
+    cache.delete(overdue_cache_key(workspace_id))
+
+
 def has_overdue_invoice(workspace) -> bool:
     """Whether ``workspace`` has a platform invoice that is past due and unpaid.
 
     Asked before every metered call, through ``usage.may_meter``, so it is one
     indexed query and the answer is then reused for ``OVERDUE_CACHE_SECONDS``. A
-    workspace that has just paid keeps being refused for up to that long, and one
-    that has just fallen overdue keeps spending for up to that long; both are worth
-    it against a query on the path every paid call takes.
+    workspace that has just fallen overdue keeps spending for up to that long,
+    which is worth it against a query on the path every paid call takes. The other
+    direction is not left to expire: paying a bill drops the key through
+    ``forget_overdue``, so a workspace is working again as soon as the money is.
 
     The invoice numbers are read by prefix because the number is the only thing
     tying a platform invoice to the workspace it is about — the invoice's own
@@ -607,7 +669,7 @@ def has_overdue_invoice(workspace) -> bool:
         # Nothing issues platform invoices, so there are none to be behind on.
         return False
 
-    cache_key = f"platform:overdue:{workspace.pk}"
+    cache_key = overdue_cache_key(workspace.pk)
     cached = cache.get(cache_key)
     if cached is not None:
         return bool(cached)

@@ -751,6 +751,17 @@ class MeSerializer(serializers.ModelSerializer):
             public_only = data['staff_member'] is None and not instance.is_superuser
             data['extensions'] = availability(request.workspace, public_only=public_only)
 
+            # ``workspace_read_only``: True when the workspace's plan has lapsed far
+            # enough that the server is refusing writes (403 ``workspace_read_only``).
+            # The admin reads it to explain itself before the first refusal rather than
+            # after — showing the renewal notice, and disabling the controls it knows
+            # would come back refused. Always present, always False unless the
+            # deployment has switched read-only mode on, and free to ask when it has
+            # not (no query).
+            from bfg.platform.services.read_only import is_read_only
+
+            data['workspace_read_only'] = is_read_only(request.workspace)
+
         return data
 
 

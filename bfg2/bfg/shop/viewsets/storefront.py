@@ -23,6 +23,7 @@ import uuid
 import hashlib
 import secrets
 
+from bfg.core.read_only import exempt_from_read_only
 from bfg.common.models import Customer, Address, Media, MediaLink
 from bfg.common.serializers import signed_media_url
 from bfg.common.storage import store_sensitive_file
@@ -1669,6 +1670,14 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
+    # Read-only exemption: the payment gateway reporting money that has already
+    # left a shopper's account, with a signature proving it did. Checkout is
+    # refused while a workspace is read only, so the only callbacks that can
+    # arrive are for orders placed before it was — and refusing those would take
+    # a shopper's payment and leave the order unpaid. Note that this is the
+    # gateway speaking, not the shop: ``mark-paid``, where the shop asserts a
+    # payment itself, stays refused.
+    @exempt_from_read_only
     def callback(self, request, gateway=None):
         """Handle payment gateway callback (webhook)"""
         # This endpoint should be accessible without authentication

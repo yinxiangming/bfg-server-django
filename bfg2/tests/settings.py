@@ -80,6 +80,9 @@ MIDDLEWARE = [
     # (legacy 11-line shim); swap in the real strict-mode middleware so
     # tests exercise the production behaviour.
     'bfg.common.middleware.WorkspaceMiddleware',
+    # Off unless a test switches BFG_READ_ONLY_WHEN_UNENTITLED on, but installed
+    # here so that the tests that do run against the real middleware chain.
+    'bfg.platform.middleware.ReadOnlyWorkspaceMiddleware',
 ]
 
 ROOT_URLCONF = 'tests.urls'

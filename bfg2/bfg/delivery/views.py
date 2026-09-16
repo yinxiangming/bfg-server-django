@@ -12,6 +12,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
 from bfg.core.permissions import IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite
+from bfg.core.read_only import exempt_from_read_only
 from bfg.common.constants import get_default_country_for_workspace
 from bfg.delivery.models import (
     Warehouse, PickupPoint, Carrier, FreightService, Manifest, Consignment,
@@ -370,6 +371,11 @@ class CarrierViewSet(viewsets.ModelViewSet):
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
+    # Read-only exemption: handing goods to a carrier. A workspace that has
+    # stopped paying still owes delivery to shoppers who have already paid it, and
+    # a parcel that cannot be booked is a parcel that never arrives. Nothing else
+    # on this ViewSet is exempt: carriers and their credentials are configuration.
+    @exempt_from_read_only
     @action(detail=True, methods=['post'])
     def ship_order(self, request, pk=None):
         """
@@ -1045,6 +1051,9 @@ class ConsignmentViewSet(viewsets.ModelViewSet):
         
         return Response(status=status.HTTP_204_NO_CONTENT)
     
+    # Read-only exemption: where a parcel has got to. Recorded from what the
+    # carrier reports, about a shipment that already exists.
+    @exempt_from_read_only
     @action(detail=True, methods=['post'])
     def add_tracking_event(self, request, consignment_number=None):
         """
@@ -1088,6 +1097,10 @@ class ConsignmentViewSet(viewsets.ModelViewSet):
         serializer = TrackingEventSerializer(tracking_event)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
+    # Read-only exemption: moving an existing shipment through its states, which
+    # is the same delivery promise as ``ship_order``. Creating and deleting
+    # consignments is not exempt — read-only mode deletes nothing.
+    @exempt_from_read_only
     @action(detail=True, methods=['post'])
     def update_status(self, request, consignment_number=None):
         """
@@ -1128,6 +1141,9 @@ class ConsignmentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
     
+    # Read-only exemption: printing the label for a shipment that already exists.
+    # A write only because the carrier hands back a document to store.
+    @exempt_from_read_only
     @action(detail=True, methods=['post'])
     def generate_label(self, request, consignment_number=None):
         """

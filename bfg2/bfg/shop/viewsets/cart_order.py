@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
 from bfg.core.permissions import IsWorkspaceStaff, CanManagePayments
+from bfg.core.read_only import exempt_from_read_only
 from rest_framework.exceptions import PermissionDenied, ValidationError as APIValidationError
 from decimal import Decimal
 
@@ -360,6 +361,26 @@ class CartViewSet(viewsets.ModelViewSet):
             )
 
 
+def order_in_url_is_paid(request, view_kwargs) -> bool:
+    """Whether the order named in the URL has already been paid for.
+
+    The condition on the read-only exemption below. A workspace that has stopped
+    paying for the platform must still be able to get goods to the shoppers who
+    have already paid it — but only those: an order that is not paid for may not
+    be touched, so that read-only mode cannot be worked around by moving unpaid
+    orders along and settling up later.
+
+    Read unscoped and without a workspace filter on purpose. This decides only
+    whether the request may reach the view; the view's own permissions and tenant
+    scoping still apply, and an order belonging to another workspace simply is
+    not found there. Adding the workspace here would mean resolving it twice.
+    """
+    order_id = view_kwargs.get("pk")
+    if not order_id:
+        return False
+    return Order.all_objects.filter(pk=order_id, payment_status="paid").exists()
+
+
 class OrderViewSet(viewsets.ModelViewSet):
     """
     Admin order management ViewSet — staff only.
@@ -670,6 +691,14 @@ class OrderViewSet(viewsets.ModelViewSet):
             user_agent=self.request.META.get('HTTP_USER_AGENT', '')
         )
     
+    # Read-only exemption, for an order that is already paid for only: moving a
+    # paid order through packing, shipping and delivery is the shop keeping a
+    # promise a shopper has already paid for, and stopping that would punish the
+    # shopper for the shop's unpaid bill. Every other write here stays refused —
+    # creating orders, editing their lines, marking one paid, refunding,
+    # cancelling — because each of them either takes on new business or changes
+    # what is owed.
+    @exempt_from_read_only(when=order_in_url_is_paid)
     @action(detail=True, methods=['post'])
     def update_status(self, request, pk=None):
         """Update order status (staff only)"""

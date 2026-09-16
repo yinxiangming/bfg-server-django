@@ -11,6 +11,7 @@ from django.apps import apps
 from django.db.models import Q
 
 from bfg.common.exceptions import WorkspaceAlreadyExists
+from bfg.core.read_only import exempt_from_read_only
 from bfg.platform.services.ownership import owned_workspace_ids
 from bfg.platform.services.workspace_creation import (
     WorkspaceCreateForbidden,
@@ -185,6 +186,9 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             return Response({'subscription': None})
         return Response({'subscription': SubscriptionSerializer(sub).data})
 
+    # Read-only exemption: this is how a workspace pays, and paying is what ends
+    # read-only mode. Refusing it would leave a lapsed workspace with no way out.
+    @exempt_from_read_only
     @action(detail=True, methods=['post'])
     def checkout(self, request, pk=None):
         """POST /api/v1/platform/workspaces/{id}/checkout/"""

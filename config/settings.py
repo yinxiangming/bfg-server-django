@@ -371,6 +371,15 @@ GROUPBUY_MAX_SHOPS_PER_USER = int(os.environ.get('GROUPBUY_MAX_SHOPS_PER_USER', 
 # country each is restricted to, is a per-workspace setting, not an env var.
 GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '').strip()
 
+# Whether a workspace has to be entitled to an extension before it may use one, named
+# as the dotted path of a ``(workspace, manifest) -> bool`` callable. Empty — the
+# default — entitles every workspace to everything, which is what a deployment that
+# does not sell extensions wants. A deployment that does sell them points this at
+# 'bfg.platform.services.entitlements.entitlement_check'. Turning it on before every
+# workspace holds an entitlement for what it already uses takes those extensions away
+# from it, so grant first (manage.py grant_entitlements) and set this afterwards.
+BFG_EXTENSION_ENTITLEMENT_CHECK = os.environ.get('BFG_EXTENSION_ENTITLEMENT_CHECK', '').strip()
+
 # JWT
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),

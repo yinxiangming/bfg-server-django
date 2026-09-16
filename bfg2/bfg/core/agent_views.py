@@ -2,11 +2,17 @@
 """
 Agent API views: GET capabilities (permission-filtered), POST execute (permission-checked), POST chat (OpenAI + tools).
 API tools (from OpenAPI allowlist) are primary; manual capability wrappers are fallback for high-risk/multi-step ops.
+
+Chat spends a vendor's money, so it is metered: the workspace is asked once,
+before anything is sent, whether it may spend at all, and every model call that
+comes back is counted in ``ai.<model>.input``, ``ai.<model>.input_cached`` and
+``ai.<model>.output``. See "What the assistant spends" below.
 """
 import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -21,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 # OpenAI API allows max 128 tools per request
 OPENAI_MAX_TOOLS = 128
+
+# Returned with 402 once a workspace has run up its month's points. A code as well
+# as a message so that a client can recognise this case and offer to raise the cap,
+# rather than having to match on wording it did not choose.
+USAGE_CAP_REACHED = "usage_cap_reached"
 
 # Category keywords for filtering API tools by name/description (lowercase)
 TOOL_CATEGORY_KEYWORDS = {
@@ -37,10 +48,165 @@ TOOL_CATEGORY_KEYWORDS = {
 ALLOWED_CATEGORIES = list(TOOL_CATEGORY_KEYWORDS.keys())
 
 
-def _infer_tool_categories_with_llm(messages, client, selector_model: str):
+# ── What the assistant spends ────────────────────────────────────────────────
+#
+# Every model call is billed, so every model call is counted. Tokens are metered
+# per model and per kind, because that is how they are priced — an output token
+# costs several times an input one, and an input token the vendor served from its
+# prompt cache costs a fraction of a fresh one. One call therefore records up to
+# three meters, named for the model that was asked:
+#
+#     ai.<model>.input          tokens sent, less any the vendor served from cache
+#     ai.<model>.input_cached   tokens the vendor served from its prompt cache
+#     ai.<model>.output         tokens generated
+#
+# ``<model>`` is the model id actually requested, lowercased: a deployment that
+# moves to another model starts filling another set of meters, and the old prices
+# stay attached to the calls that were made at them.
+
+
+def _token_meters(model: str):
+    """The input, cached-input and output meter names for ``model``."""
+    name = (model or "").strip().lower()
+    return f"ai.{name}.input", f"ai.{name}.input_cached", f"ai.{name}.output"
+
+
+def _metering():
+    """The metering client, or ``None`` where this deployment has no billing.
+
+    Imported here rather than at the top of the module. ``bfg.core`` is installed
+    by every deployment; ``bfg.platform``, which owns what a workspace may spend,
+    is not, and importing its models on a deployment that leaves that app out
+    would take the whole assistant API down with it. A deployment without it
+    bills nobody, so the assistant runs unmetered rather than not at all.
+    """
+    try:
+        from bfg.platform import metering
+    except Exception:  # pragma: no cover - only a deployment without the app hits this
+        return None
+    return metering
+
+
+def _may_spend_on_model(workspace, model: str) -> bool:
+    """Whether ``workspace`` may make a paid call to ``model`` right now.
+
+    Asked once per request, before anything is sent. The cap is on the workspace
+    rather than on any one meter, so asking again for the cached-input meter, for
+    the selector model, or between the rounds of a single answer would only get
+    the same answer at the price of another query — and stopping halfway through
+    an answer would leave the assistant having run tools it never reports on.
+
+    A request with no workspace bound is not refused: there is nobody to bill, so
+    there is no cap to have reached, and an assistant that stopped working
+    wherever billing does not apply would be worse than an unbilled call.
+    """
+    if workspace is None:
+        return True
+    metering = _metering()
+    if metering is None:
+        return True
+    return metering.allowed(workspace, _token_meters(model)[0])
+
+
+def _usage_cap_response():
+    """The 402 a caller gets once its workspace has spent the month's points."""
+    return Response(
+        {
+            "code": USAGE_CAP_REACHED,
+            "detail": (
+                "This workspace has used all of this month's AI allowance. The assistant "
+                "works again when the allowance resets at the start of next month, or as "
+                "soon as the monthly usage cap is raised."
+            ),
+        },
+        status=status.HTTP_402_PAYMENT_REQUIRED,
+    )
+
+
+def _field(obj, name):
+    """``name`` off ``obj``, whether it holds attributes or keys, or None.
+
+    Both, because what arrives here is whatever the installed client returns: a
+    model object from the OpenAI package, or a plain dict from a gateway that
+    hands the JSON straight back.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, Mapping):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _tokens(value) -> int:
+    """``value`` as a token count: whole, never negative, 0 when it is not a number."""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(count, 0)
+
+
+def _token_counts(response):
+    """Fresh input, cached input and output tokens ``response`` reports, or None.
+
+    None when the response carries no usage at all, which is what a stream asked
+    for without usage, an error object, or a gateway that drops the field looks
+    like. Nothing is billed for a call whose cost was never reported: a guess
+    would end up on somebody's invoice.
+
+    ``prompt_tokens`` counts cached and fresh input together, so the cached half
+    is taken out of it — a vendor that reports no ``prompt_tokens_details`` leaves
+    every input token counted as fresh, which is the more expensive reading and
+    the only one its response supports. More cached than sent is nonsense from the
+    vendor, and capped rather than trusted: a negative count would not be an
+    overcharge but a refund, taking usage off somebody's bill.
+    """
+    usage = _field(response, "usage")
+    if usage is None:
+        return None
+    prompt = _tokens(_field(usage, "prompt_tokens"))
+    cached = min(_tokens(_field(_field(usage, "prompt_tokens_details"), "cached_tokens")), prompt)
+    return prompt - cached, cached, _tokens(_field(usage, "completion_tokens"))
+
+
+def _meter_tokens(workspace, model: str, response) -> None:
+    """Record what a finished call to ``model`` used against ``workspace``.
+
+    Called once the vendor has answered, so what is billed is what was delivered,
+    and never before, so a call that failed is not charged for. Nothing here may
+    raise: the money is already spent, and failing the request now would lose the
+    answer as well as the money. ``metering.meter`` swallows its own failures;
+    reading the usage off an object of a shape this code did not choose is guarded
+    here for the same reason.
+    """
+    if workspace is None:
+        return
+    metering = _metering()
+    if metering is None:
+        return
+    try:
+        counts = _token_counts(response)
+    except Exception:
+        logger.exception("Could not read the token usage of a %s call", model)
+        return
+    if counts is None:
+        return
+    for meter_name, tokens in zip(_token_meters(model), counts):
+        # A meter with nothing to count is left alone rather than recorded as
+        # zero: a call with no cached input should not put a row on the bill.
+        if tokens:
+            metering.meter(workspace, meter_name, tokens)
+
+
+def _infer_tool_categories_with_llm(messages, client, selector_model: str, workspace=None):
     """
     Use a cheap model to infer which resource categories are relevant to the conversation.
     Returns a list of category names (e.g. ["order", "customer"]) or empty on failure.
+
+    The selector is a paid call of its own and is metered as one, under its own
+    model's meters — it is usually a cheaper model than the one that answers, and
+    a deployment reading its bill should see the two apart. ``workspace`` is who
+    pays; without one the call is still made and simply not counted.
     """
     if not messages:
         return []
@@ -65,6 +231,9 @@ def _infer_tool_categories_with_llm(messages, client, selector_model: str):
             messages=[{"role": "user", "content": prompt}],
             max_tokens=150,
         )
+        # Before the reply is read, not after: the tokens were spent whether or
+        # not what came back is the JSON array this asked for.
+        _meter_tokens(workspace, selector_model, resp)
         content = (resp.choices[0].message.content or "").strip()
         # Extract JSON array (handle markdown code blocks)
         if "```" in content:
@@ -299,6 +468,9 @@ class AgentChatView(APIView):
         request.workspace = workspace
 
     def post(self, request):
+        # After _ensure_workspace, never before: a staff member may answer for
+        # another of their workspaces, and the one that pays for the call has to
+        # be the one the call is made for.
         self._ensure_workspace(request)
         workspace = getattr(request, "workspace", None)
         if not workspace:
@@ -322,6 +494,11 @@ class AgentChatView(APIView):
         model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
         selector_model = os.environ.get("OPENAI_TOOL_SELECTOR_MODEL", "gpt-4o-mini")
 
+        # Before the client exists, so that a workspace over its cap costs nothing
+        # at all: no selector call, no answer, nothing to meter afterwards.
+        if not _may_spend_on_model(workspace, model):
+            return _usage_cap_response()
+
         try:
             from openai import OpenAI
             client = OpenAI(api_key=api_key)
@@ -332,7 +509,7 @@ class AgentChatView(APIView):
             )
 
         tools, tool_name_to_capability_id, api_tool_specs = _merged_tools_and_mappings(request)
-        categories = _infer_tool_categories_with_llm(messages, client, selector_model)
+        categories = _infer_tool_categories_with_llm(messages, client, selector_model, workspace)
         tools = _filter_tools_by_categories(
             tools, tool_name_to_capability_id, categories, OPENAI_MAX_TOOLS
         )
@@ -370,7 +547,7 @@ class AgentChatView(APIView):
         if stream_requested:
             return self._stream_chat(
                 request, client, model, openai_messages, tools,
-                tool_name_to_capability_id, api_tool_specs, cap_by_id,
+                tool_name_to_capability_id, api_tool_specs, cap_by_id, workspace,
             )
 
         tool_calls_made = []
@@ -383,6 +560,11 @@ class AgentChatView(APIView):
                 kwargs["tools"] = tools
                 kwargs["tool_choice"] = "auto"
             response = client.chat.completions.create(**kwargs)
+            # Every round is a call of its own and costs its own tokens, so each
+            # is metered as it comes back rather than the answer being counted
+            # once at the end — a round that raises has still been paid for by
+            # the rounds before it.
+            _meter_tokens(workspace, model, response)
             choice = response.choices[0] if response.choices else None
             if not choice:
                 break
@@ -449,9 +631,16 @@ class AgentChatView(APIView):
 
     def _stream_chat(
         self, request, client, model, openai_messages, tools,
-        tool_name_to_capability_id, api_tool_specs, cap_by_id,
+        tool_name_to_capability_id, api_tool_specs, cap_by_id, workspace=None,
     ):
-        """Return StreamingHttpResponse with SSE: content deltas, tool_names, done."""
+        """Return StreamingHttpResponse with SSE: content deltas, tool_names, done.
+
+        A streamed answer costs the same as one returned in a single response and
+        is metered the same way, which is why it asks for ``stream_options``: a
+        stream reports its tokens only in a final chunk, and only when asked. A
+        vendor that ignores the option leaves the usage unreported, and an
+        unreported call is not billed rather than guessed at.
+        """
 
         def sse(data):
             return ("data: " + json.dumps(data, ensure_ascii=False) + "\n\n").encode("utf-8")
@@ -462,7 +651,12 @@ class AgentChatView(APIView):
             tool_results_all = []  # list of {"name", "success", "error"} for frontend to show errors
             round_count = 0
             while round_count < self.max_tool_rounds:
-                kwargs = {"model": model, "messages": openai_messages, "stream": True}
+                kwargs = {
+                    "model": model,
+                    "messages": openai_messages,
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                }
                 if tools:
                     kwargs["tools"] = tools
                     kwargs["tool_choice"] = "auto"
@@ -470,6 +664,10 @@ class AgentChatView(APIView):
                 content_parts = []
                 tool_calls_accum = {}
                 for chunk in stream:
+                    # The usage chunk is the last one and carries no choices, so
+                    # it has to be read before the loop skips it.
+                    if _field(chunk, "usage") is not None:
+                        _meter_tokens(workspace, model, chunk)
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta

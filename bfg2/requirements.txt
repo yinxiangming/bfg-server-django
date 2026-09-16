@@ -1,6 +1,7 @@
 Django>=5.0,<6.0
 djangorestframework>=3.14
-openai>=1.0
+# >=1.26 for stream_options: a streamed answer reports its tokens only when asked.
+openai>=1.26
 django-allauth>=0.57
 Pillow>=10.0
 django-cors-headers>=4.3

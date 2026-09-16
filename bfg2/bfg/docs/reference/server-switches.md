@@ -231,6 +231,20 @@ These values together determine whether password reset and email confirmation ma
 - Purpose:
   - Absolute base URL for media when storage returns relative paths.
 
+### `BFG_EXTENSION_ARCHIVE_BUCKET` / `BFG_EXTENSION_ARCHIVE_DIR`
+- Default: empty
+- Purpose:
+  - Where the data of an extension a workspace stopped using is exported before the
+    rows are deleted. **Leave both empty and nothing is ever archived or deleted.**
+  - Must be storage nothing serves: the media bucket, anything behind a CDN and any
+    directory inside `MEDIA_ROOT` are refused.
+  - Companions: `BFG_EXTENSION_ARCHIVE_PREFIX` (default `extension-archives`),
+    `BFG_EXTENSION_ARCHIVE_REGION`, `BFG_EXTENSION_ARCHIVE_ACCESS_KEY_ID`,
+    `BFG_EXTENSION_ARCHIVE_SECRET_ACCESS_KEY`, `BFG_EXTENSION_ARCHIVE_ENDPOINT_URL`,
+    `BFG_EXTENSION_ARCHIVE_RESTORE_ASYNC`, `BFG_EXTENSION_ARCHIVE_STUCK_MINUTES`.
+  - Whoever runs the deployment has to put a retention rule on the prefix: nothing
+    deletes an archive. See `bfg/docs/deployment/extension-archives.md`.
+
 ---
 
 ## 9. Celery / Async Jobs

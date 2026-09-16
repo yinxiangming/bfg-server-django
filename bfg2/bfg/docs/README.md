@@ -5,6 +5,7 @@ English reference material for agents and developers working on the Django **BFG
 | Area | Path |
 |------|------|
 | Deployment (embedded platform env) | [deployment/embedded-platform-environment.md](./deployment/embedded-platform-environment.md) |
+| Extension archives (what deletes a workspace's data) | [deployment/extension-archives.md](./deployment/extension-archives.md) |
 | Nexus stack, extensions, local apps | [architecture/nexus-stack-and-extensions.md](./architecture/nexus-stack-and-extensions.md) |
 | Schema-driven UI (Admin / Account) | [reference/schema-driven-ui-admin.md](./reference/schema-driven-ui-admin.md) |
 | Models & HTTP API reference | [reference/models-and-api.md](./reference/models-and-api.md) |

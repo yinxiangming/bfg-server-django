@@ -56,9 +56,11 @@ def _manifests(**overrides):
 def fake_manifests(monkeypatch):
     monkeypatch.setattr(registry, '_discover', _manifests)
     registry.reset_cache()
+    services._load_entitlement_check.cache_clear()
     cache.clear()
     yield
     registry.reset_cache()
+    services._load_entitlement_check.cache_clear()
     cache.clear()
 
 
@@ -702,6 +704,55 @@ def test_an_archived_extension_is_not_activated_but_restored(workspace, store):
 
     assert refusal.value.code == 'archived'
     assert 'restore' in refusal.value.message
+
+
+def test_applying_a_plan_pack_leaves_an_archived_extension_alone(workspace, store, settings):
+    """A pack switches things on, and an archived extension is not something to switch on.
+
+    It is skipped with the reason, and the rest of the pack still applies — the alternative
+    would be a pack that half-activates an extension whose rows are not in the database.
+    """
+    from bfg.common.extensions import packs
+
+    settings.BFG_EXTENSION_PLAN_PACKS = {'shop': {'name': 'Shop', 'extensions': ('notes',)}}
+    _switched_off(workspace)
+    _fill(workspace)
+    archive.archive(workspace, 'notes')
+
+    applied = packs.apply_pack(workspace, 'shop')
+
+    assert applied == [
+        {'key': 'notes', 'outcome': packs.OUTCOME_SKIPPED, 'code': 'archived',
+         'detail': "notes's data was archived; restore it before activating."}
+    ]
+    assert WorkspaceExtension.all_objects.get(workspace=workspace, key='notes').status == (
+        WorkspaceExtension.STATUS_ARCHIVED
+    )
+
+
+def entitled_to_nothing(workspace, manifest):
+    return False
+
+
+def test_a_workspace_gets_its_data_back_before_it_is_entitled_again(workspace, store, settings):
+    """Restoring is not a purchase, so it does not ask whether the workspace may buy.
+
+    An add-on that lapsed, was archived and is being bought again has to be restorable
+    first: activation is what an entitlement gates, and activating an archived extension is
+    refused, so requiring one here would leave the workspace unable to do either. The
+    extension comes back active and unavailable, which is what availability is for.
+    """
+    settings.BFG_EXTENSION_ENTITLEMENT_CHECK = f'{__name__}.entitled_to_nothing'
+    services._load_entitlement_check.cache_clear()
+    _switched_off(workspace)
+    _fill(workspace)
+    archive.archive(workspace, 'notes')
+
+    restored = archive.restore(workspace, 'notes')
+
+    assert restored.status == WorkspaceExtension.STATUS_ACTIVE
+    assert _rows(workspace) == (1, 2, 2)
+    assert 'notes' not in services.compute_available_keys(workspace)
 
 
 def _rewrite_manifest(store, location, **changes):

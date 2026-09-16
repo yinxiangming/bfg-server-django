@@ -29,7 +29,7 @@ from typing import List
 from django.db import transaction
 
 from bfg.platform.models.entitlement import WorkspaceEntitlement
-from bfg.platform.services import billing
+from bfg.platform.services import billing, read_only
 from bfg.platform.services.entitlements import add_months
 from bfg.platform.utils import get_platform_workspace
 
@@ -79,6 +79,11 @@ def renew_for_invoice(invoice_id: int) -> List[WorkspaceEntitlement]:
     whenever the money arrived, since that would make paying late cheaper than
     paying on time.
 
+    What paying is supposed to undo is undone here too: both of the cached answers
+    that stop a workspace — whether it owes anything, and whether it may be written
+    to at all — are dropped once the periods are committed, so a workspace is
+    trading again on its next request rather than a minute later.
+
     An entitlement the bill charged for that can no longer be found is logged and
     skipped: a bill raised by hand has no renewal lines behind it, and neither does
     one whose entitlements were removed afterwards. Nothing here raises. It runs
@@ -123,12 +128,17 @@ def renew_for_invoice(invoice_id: int) -> List[WorkspaceEntitlement]:
         if status != PAID_STATUS:
             return []
         written = _write_next_periods(workspace_id, period_start, number)
-        # After the commit, and after the periods above are part of it: metered
-        # calls are refused on a cached answer, and a workspace that has just
-        # settled up must not go on being told it owes money for the rest of that
-        # minute. Dropped whether or not anything was renewed, since what made the
-        # answer wrong was the bill being paid rather than the rows written.
+        # After the commit, and after the periods above are part of it: both
+        # answers are cached for a minute and both have just been made wrong by
+        # the money arriving. Metered calls are refused on the first, and every
+        # write the workspace makes on the second, so a workspace that has just
+        # settled up would otherwise go on being told it owes money and go on
+        # being read only for the rest of that minute — having done the one thing
+        # that was supposed to end it. Dropped whether or not anything was
+        # renewed, since what made them wrong was the bill being paid rather than
+        # the rows written.
         transaction.on_commit(lambda: billing.forget_overdue(workspace_id))
+        transaction.on_commit(lambda: read_only.forget(workspace_id))
         return written
 
 

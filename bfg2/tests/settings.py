@@ -55,12 +55,16 @@ INSTALLED_APPS = [
     # Test-only app (Phase-0 PR-01): provides a synthetic model the
     # tenant_isolation suite uses to exercise TenantScopedModel.
     'tests.tenant_isolation.apps.TenantIsolationTestsConfig',
+    # Test-only app: tables shaped like the ones an extension owns, which the
+    # extension archive suite exports, deletes and loads back.
+    'tests.extension_data.apps.ExtensionDataTestsConfig',
 ]
 
 # Test-only app has no migrations directory; let Django create its
 # table via syncdb during test DB setup.
 MIGRATION_MODULES = {
     'tenant_isolation_tests': None,
+    'extension_data_tests': None,
 }
 
 MIDDLEWARE = [

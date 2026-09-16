@@ -16,6 +16,14 @@ without the first field a console could not tell "buy this" from "switch this ba
 Deployments that sell nothing (no ``BFG_EXTENSION_ENTITLEMENT_CHECK``) have every
 extension entitled, which is the same answer they have always given.
 
+``status`` also covers an extension whose data has been archived after long enough
+switched off, and the way back from it: ``archiving`` and ``restoring`` while one is
+running, ``archived`` once the rows are only in storage. ``status_reason`` says which of
+those it is and, after a failed run, that it failed; ``archive`` carries the detail — how
+much was archived and when, and the sentence explaining a failure. An archived extension
+is not activated but restored, which is a route of its own; see
+``bfg.common.extensions.archive``.
+
 ``status_changed_by`` is whoever last switched an extension on or off, and what it says
 depends on who is asking. A platform administrator is told ``{'id', 'username', 'email'}``.
 Anyone else, a workspace owner, is told ``{'id', 'username'}`` when the changer is active
@@ -29,6 +37,8 @@ console requests sit on a public path, so none is bound to the workspace it acts
 
 import logging
 
+from django.conf import settings
+from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -63,7 +73,13 @@ def list_extensions(workspace, *, viewer_is_platform_admin=False):
     describe_changer = _changer_describer(workspace, records.values(), viewer_is_platform_admin)
     return [
         _serialize_extension(
-            manifest, records.get(manifest.key), available, entitled, workspace, describe_changer
+            manifest,
+            records.get(manifest.key),
+            available,
+            entitled,
+            workspace,
+            describe_changer,
+            viewer_is_platform_admin,
         )
         for manifest in registry.all_manifests()
         if manifest.is_activatable
@@ -90,7 +106,13 @@ def extension_state(workspace, key, record=None, *, viewer_is_platform_admin=Fal
     available = services.compute_available_keys(workspace, entitled=entitled)
     describe_changer = _changer_describer(workspace, [record], viewer_is_platform_admin)
     return _serialize_extension(
-        registry.get_manifest(key), record, available, entitled, workspace, describe_changer
+        registry.get_manifest(key),
+        record,
+        available,
+        entitled,
+        workspace,
+        describe_changer,
+        viewer_is_platform_admin,
     )
 
 
@@ -118,6 +140,35 @@ def deactivate(workspace, key, *, user, viewer_is_platform_admin=False):
     return _respond(
         workspace, key, lambda: services.deactivate(workspace, key, user=user), viewer_is_platform_admin
     )
+
+
+def restore(workspace, key, *, user, viewer_is_platform_admin=False):
+    """Bring ``key``'s archived data back for ``workspace`` and switch it on.
+
+    Loading runs here unless ``BFG_EXTENSION_ARCHIVE_RESTORE_ASYNC`` is on, in which case
+    the answer comes back ``restoring`` and a worker finishes it. Either way the state and
+    the reason say where it has got to, so a console shows the same fields for both.
+    """
+    from bfg.common.extensions import archive
+
+    def begin_and_load():
+        record = archive.begin_restore(workspace, key, user=user)
+        if getattr(settings, 'BFG_EXTENSION_ARCHIVE_RESTORE_ASYNC', False):
+            from bfg.common.tasks import finish_extension_restore
+
+            transaction.on_commit(
+                lambda: finish_extension_restore.delay(workspace.pk, key)
+            )
+            return record
+        return archive.finish_restore(workspace, key)
+
+    try:
+        return _respond(workspace, key, begin_and_load, viewer_is_platform_admin)
+    except archive.ArchiveNotConfigured as unconfigured:
+        return Response(
+            {'code': 'archive_not_configured', 'detail': unconfigured.reason},
+            status=status.HTTP_409_CONFLICT,
+        )
 
 
 def update_config(workspace, key, *, data, viewer_is_platform_admin=False):
@@ -181,7 +232,9 @@ def _insiders(workspace, user_ids):
     return insiders
 
 
-def _serialize_extension(manifest, record, available, entitled, workspace, describe_changer):
+def _serialize_extension(
+    manifest, record, available, entitled, workspace, describe_changer, viewer_is_platform_admin=False
+):
     # ``record`` is the workspace's WorkspaceExtension for the extension, None when the
     # workspace never used it; ``available`` and ``entitled`` are what
     # services.compute_available_keys and services.compute_entitled_keys returned for the
@@ -210,7 +263,35 @@ def _serialize_extension(manifest, record, available, entitled, workspace, descr
         'entitled': manifest.key in entitled,
         'unmet_prerequisites': _unmet_prerequisites(manifest, workspace),
         'config': record.config if record else {},
+        'archive': _archive_summary(record, viewer_is_platform_admin),
     }
+
+
+def _archive_summary(record, viewer_is_platform_admin):
+    """What has become of the extension's archived data, for a console to show.
+
+    ``status`` and ``status_reason`` already say whether an archive or a restore is
+    running and whether the last one failed; this is the detail behind them — how much was
+    archived, when, and the sentence explaining a failure, which is longer than
+    ``status_reason`` has room for. ``location`` is a key in the deployment's private
+    storage and is told to platform administrators only: an owner is being shown what
+    happened to their data, not where the deployment keeps it.
+    """
+    if record is None:
+        return None
+    state = record.archive_state or {}
+    summary = {
+        'archived_at': state.get('finished_at') or '',
+        'rows': state.get('rows') or 0,
+        'tables': state.get('tables') or 0,
+        'restored_at': state.get('restored_at') or '',
+        'error': state.get('error') or '',
+        'error_code': state.get('error_code') or '',
+        'failed_at': state.get('failed_at') or '',
+    }
+    if viewer_is_platform_admin:
+        summary['location'] = record.archive_location
+    return summary
 
 
 def _unmet_prerequisites(manifest, workspace):

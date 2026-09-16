@@ -53,6 +53,11 @@ class WorkspaceExtension(TenantScopedModel):
     )
     activated_at = models.DateTimeField(_('Last activated at'), null=True, blank=True)
     archive_location = models.CharField(_('Archive location'), max_length=512, blank=True)
+    #: Bookkeeping for the last archive or restore: the status to go back to while one is
+    #: running, what the finished archive holds, and why the last attempt failed. Written
+    #: only by ``bfg.common.extensions.archive``; ``status`` and ``status_reason`` remain
+    #: what anything else reads.
+    archive_state = models.JSONField(_('Archive state'), default=dict, blank=True)
 
     created_at = models.DateTimeField(_('Created at'), default=timezone.now)
     updated_at = models.DateTimeField(_('Updated at'), auto_now=True)

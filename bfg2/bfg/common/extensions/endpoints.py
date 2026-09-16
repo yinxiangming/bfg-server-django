@@ -24,6 +24,13 @@ much was archived and when, and the sentence explaining a failure. An archived e
 is not activated but restored, which is a route of its own; see
 ``bfg.common.extensions.archive``.
 
+``price`` is what the workspace would pay for an add-on the deployment sells: the
+plan's own price and currency, the same month converted into the workspace's
+currency where a rate has been stored, and how long a trial *this* workspace would
+get, which is nothing once it has held the add-on before. It is null for an
+extension that comes with the base plan and for one nothing prices, so a console
+reads the absence as "not sold separately" rather than as free.
+
 ``status_changed_by`` is whoever last switched an extension on or off, and what it says
 depends on who is asking. A platform administrator is told ``{'id', 'username', 'email'}``.
 Anyone else, a workspace owner, is told ``{'id', 'username'}`` when the changer is active
@@ -71,6 +78,7 @@ def list_extensions(workspace, *, viewer_is_platform_admin=False):
     entitled = services.compute_entitled_keys(workspace)
     available = services.compute_available_keys(workspace, entitled=entitled)
     describe_changer = _changer_describer(workspace, records.values(), viewer_is_platform_admin)
+    prices = _price_list(workspace)
     return [
         _serialize_extension(
             manifest,
@@ -80,6 +88,7 @@ def list_extensions(workspace, *, viewer_is_platform_admin=False):
             workspace,
             describe_changer,
             viewer_is_platform_admin,
+            prices,
         )
         for manifest in registry.all_manifests()
         if manifest.is_activatable
@@ -113,6 +122,7 @@ def extension_state(workspace, key, record=None, *, viewer_is_platform_admin=Fal
         workspace,
         describe_changer,
         viewer_is_platform_admin,
+        _price_list(workspace),
     )
 
 
@@ -232,13 +242,32 @@ def _insiders(workspace, user_ids):
     return insiders
 
 
+def _price_list(workspace):
+    # What each add-on the deployment sells would cost this workspace, by key, worked
+    # out once for the whole list. Empty for a deployment that prices nothing, and for
+    # one built without bfg.platform, where there is nowhere for a price to be recorded.
+    try:
+        from bfg.platform.services.acquisitions import price_list
+    except ImportError:
+        return {}
+    try:
+        return price_list(workspace)
+    except Exception:
+        # A price is not worth the page. Whatever went wrong reading one — a currency
+        # row that is not there, a plan with something odd in it — the reader still
+        # wants to see which extensions are on.
+        logger.exception('Could not price the add-ons for workspace %s', workspace.pk)
+        return {}
+
+
 def _serialize_extension(
-    manifest, record, available, entitled, workspace, describe_changer, viewer_is_platform_admin=False
+    manifest, record, available, entitled, workspace, describe_changer,
+    viewer_is_platform_admin=False, prices=None,
 ):
     # ``record`` is the workspace's WorkspaceExtension for the extension, None when the
     # workspace never used it; ``available`` and ``entitled`` are what
     # services.compute_available_keys and services.compute_entitled_keys returned for the
-    # workspace.
+    # workspace; ``prices`` is what _price_list worked out for the whole list.
     from bfg.common.models import WorkspaceExtension
 
     return {
@@ -250,6 +279,7 @@ def _serialize_extension(
         'icon': manifest.icon,
         'admin_url': manifest.admin_url,
         'pricing': manifest.pricing,
+        'price': (prices or {}).get(manifest.key),
         'surfaces': list(manifest.surfaces),
         'requires': list(manifest.requires),
         'meters': list(manifest.meters),

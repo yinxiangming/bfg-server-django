@@ -463,6 +463,11 @@ GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '').strip()
 # from it, so grant first (manage.py grant_entitlements) and set this afterwards.
 BFG_EXTENSION_ENTITLEMENT_CHECK = os.environ.get('BFG_EXTENSION_ENTITLEMENT_CHECK', '').strip()
 
+# Which extensions a kind of shop starts with, as a JSON file written next to the
+# rest of what this deployment ships. Unset, there are no packs and the setup
+# wizard switches nothing on. See bfg.common.extensions.packs for the shape.
+BFG_EXTENSION_PLAN_PACKS_FILE = os.environ.get('BFG_EXTENSION_PLAN_PACKS_FILE', '').strip()
+
 # JWT
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),

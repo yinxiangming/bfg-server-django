@@ -43,19 +43,25 @@ Two things pass without being marked at all:
 The marks, and why each one is there — the whole list, kept here so that it can
 be read in one place, with the reasoning repeated at each view:
 
-* ``platform.WorkspaceViewSet.checkout`` — paying for the plan. It is the way
-  out of read-only mode; refusing it would leave a lapsed workspace no way back.
-* ``platform.WebhookViewSet.stripe`` — the gateway confirming that payment
-  completed. The other half of ``checkout``: refuse it and a workspace that has
-  paid stays locked, out of step with the gateway for good.
+* ``platform.ConsoleWorkspaceViewSet.pay_invoice`` — settling a platform bill.
+  It is the way out of read-only mode; refusing it would leave a lapsed
+  workspace no way back. The console is served outside any workspace, so this
+  middleware does not ordinarily reach it — but an API-key caller *is* resolved
+  to a workspace below, and the one write that must never be refused should say
+  so on itself rather than depend on the path it is mounted at. The gateway's
+  half of the same payment is ``shop.StorefrontPaymentViewSet.callback``, marked
+  below: refuse that and a workspace that has paid stays locked, out of step
+  with the gateway for good.
 * ``common.MeViewSet.change_password`` and ``.reset_password`` — account
   operations, not workspace data. Somebody has to be able to sign in and pay.
 * ``shop.StorefrontPaymentViewSet.callback`` — a payment gateway reporting money
-  that has already left a shopper's account, signature and all. Checkout is
-  refused, so the only callbacks that can arrive are for orders placed before
-  the workspace lapsed; refusing them would take a shopper's money and leave the
-  order unpaid. This is the gateway speaking, not the shop — ``mark-paid``,
-  where the shop asserts a payment itself, stays refused.
+  that has already left an account, signature and all. Checkout is refused, so
+  the only order callbacks that can arrive are for orders placed before the
+  workspace lapsed; refusing them would take a shopper's money and leave the
+  order unpaid. It is also where a card payment for a *platform bill* is
+  confirmed, which is the half of ``pay_invoice`` that ends read-only mode. This
+  is the gateway speaking, not the shop — ``mark-paid``, where the shop asserts
+  a payment itself, stays refused.
 * ``shop.OrderViewSet.update_status`` — **only for an order already paid for**
   (``order_in_url_is_paid``). Getting goods to shoppers who have already paid is
   a promise the shop must keep whatever it owes the deployment. An unpaid order

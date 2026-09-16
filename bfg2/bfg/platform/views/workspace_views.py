@@ -11,7 +11,6 @@ from django.apps import apps
 from django.db.models import Q
 
 from bfg.common.exceptions import WorkspaceAlreadyExists
-from bfg.core.read_only import exempt_from_read_only
 from bfg.platform.services.ownership import owned_workspace_ids
 from bfg.platform.services.workspace_creation import (
     WorkspaceCreateForbidden,
@@ -23,7 +22,6 @@ from bfg.platform.services.workspace_creation import (
 )
 from bfg.platform.services.workspace_service import get_user_workspace, get_user_workspaces, is_platform_admin
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
-from bfg.platform.services.subscription_service import SubscriptionService
 from bfg.platform.permissions import IsWorkspaceOwner, IsPlatformAdmin
 from bfg.platform.utils import get_platform_workspace, is_embedded_mode
 from bfg.platform.serializers.workspace import (
@@ -31,7 +29,6 @@ from bfg.platform.serializers.workspace import (
     WorkspaceCreateSerializer,
     WorkspaceDetailSerializer,
 )
-from bfg.platform.serializers.subscription import SubscriptionSerializer
 from bfg.platform.serializers.subscription_plan import SubscriptionPlanSerializer
 
 
@@ -63,9 +60,10 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     @actions:
       POST /api/v1/platform/workspaces/{id}/suspend/   — platform admins only
       POST /api/v1/platform/workspaces/{id}/resume/    — platform admins only
-      GET  /api/v1/platform/workspaces/{id}/subscription/
-      POST /api/v1/platform/workspaces/{id}/checkout/
       GET  /api/v1/platform/workspaces/me/             — my workspaces, platform admin flag, whether I may create one
+
+    What a workspace owes, and paying it, live on the console instead; see
+    ``console_views`` and ``bfg.platform.services.bill_payment``.
     """
     permission_classes = [IsAuthenticated]
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
@@ -173,47 +171,6 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         workspace = self.get_object()
         resume_workspace(workspace, initiated_by=request.user)
         return Response({'status': 'active'})
-
-    @action(detail=True, methods=['get'])
-    def subscription(self, request, pk=None):
-        """GET /api/v1/platform/workspaces/{id}/subscription/"""
-        workspace = self.get_object()
-        Subscription = apps.get_model('shop', 'Subscription')
-        sub = Subscription.objects.filter(
-            workspace=workspace
-        ).select_related('plan', 'customer').order_by('-created_at').first()
-        if not sub:
-            return Response({'subscription': None})
-        return Response({'subscription': SubscriptionSerializer(sub).data})
-
-    # Read-only exemption: this is how a workspace pays, and paying is what ends
-    # read-only mode. Refusing it would leave a lapsed workspace with no way out.
-    @exempt_from_read_only
-    @action(detail=True, methods=['post'])
-    def checkout(self, request, pk=None):
-        """POST /api/v1/platform/workspaces/{id}/checkout/"""
-        workspace = self.get_object()
-        SubscriptionPlan = apps.get_model('shop', 'SubscriptionPlan')
-
-        plan_id = request.data.get('plan_id')
-        billing_interval = request.data.get('billing_interval', 'monthly')
-
-        try:
-            plan = SubscriptionPlan.objects.get(id=plan_id, is_active=True)
-        except SubscriptionPlan.DoesNotExist:
-            return Response({'error': 'Plan not found'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            url = SubscriptionService().create_checkout(
-                workspace=workspace,
-                plan=plan,
-                billing_interval=billing_interval,
-                user=request.user,
-            )
-        except ValueError as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response({'checkout_url': url})
 
 
 class PlanViewSet(viewsets.ReadOnlyModelViewSet):

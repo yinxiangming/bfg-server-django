@@ -5,6 +5,7 @@ Platform mode utilities.
 Detects whether the platform extension is running in embedded mode
 (same process/DB as workspaces) or standalone mode (dedicated instance).
 """
+
 from django.conf import settings
 from django.apps import apps
 
@@ -30,3 +31,5 @@ def is_platform_workspace(workspace) -> bool:
     """Check whether *workspace* is the management Workspace."""
     slug = getattr(settings, "PLATFORM_WORKSPACE_SLUG", "")
     return bool(slug) and workspace.slug == slug
+
+

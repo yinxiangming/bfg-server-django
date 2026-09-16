@@ -319,8 +319,18 @@ Only relevant to a deployment that charges workspaces for what they use. A deplo
   - The setup wizard applies the pack matching the industry a new shop picks, after the template has been written and outside its transaction — an extension's activation hook failing costs the shop its pack, not its currency, tax and pages.
   - `python manage.py plan_packs list` shows what is configured; `python manage.py plan_packs apply <pack> --workspace <id|slug> [--dry-run]` applies one to a workspace that already exists.
   - **Applying only ever switches things on.** It never deactivates anything, including extensions the pack does not mention, and it never grants an entitlement: a key the workspace is not entitled to is reported and skipped, so a pack can be offered to somebody who has not bought everything in it.
+  - A key the workspace is not entitled to is reported and skipped unless `BFG_EXTENSION_PACK_OBTAIN` names a way to obtain it (below).
   - A pack naming an extension the deployment does not ship drops that key and logs it once, next to the pack that named it.
   - Two packs claiming one industry is a configuration mistake; the first wins, so the answer at least stays the same between calls.
+
+### `BFG_EXTENSION_PACK_OBTAIN`
+- Default: empty
+- Purpose:
+  - Names a callable `(workspace, manifest) -> bool` asked whether a workspace may now have an add-on a plan pack named and the workspace is not entitled to. Returning true means the pack asks again.
+- Behavior:
+  - Empty (the default): nothing is obtained and every unentitled key a pack names is skipped with its reason.
+  - `bfg.platform.services.acquisitions.pack_obtain` obtains an add-on **priced at nothing** and refuses one with a price: a pack is not a purchase, and nothing may commit a workspace to a bill it has not been shown. A priced add-on stays skipped, which is what puts it in front of somebody as a thing to buy.
+  - Asked once per refused key, and only for keys a pack named. A hook that raises skips that key and is logged; the rest of the pack still applies.
 
 ### Platform variables
 - Margins, grace periods, retention windows and the default usage cap are rows in `platform.PlatformVariable`, not environment variables: they are policy an operator adjusts while the deployment runs, and each change is recorded in `platform.PlatformVariableChange` with who made it and why.

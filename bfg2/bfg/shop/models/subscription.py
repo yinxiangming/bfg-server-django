@@ -4,7 +4,18 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 
 class SubscriptionPlan(models.Model):
-    """Subscription plan for recurring products."""
+    """Subscription plan for recurring products.
+
+    A workspace's own plans are what it sells its customers. A deployment that
+    sells to its *workspaces* uses the management workspace's plans for that, one
+    plan per thing it offers, and ``code`` says which thing: the key of the add-on
+    extension the plan prices, or the empty string for the base plan itself — the
+    same code ``platform.WorkspaceEntitlement.KEY_BASE_PLAN`` uses for an
+    entitlement to it. An add-on no plan of the management workspace names has not
+    been priced on that deployment and cannot be bought there; see
+    ``bfg.platform.services.acquisitions``.
+    """
+
     INTERVAL_CHOICES = (
         ('day', _('Daily')),
         ('week', _('Weekly')),
@@ -16,6 +27,13 @@ class SubscriptionPlan(models.Model):
     
     name = models.CharField(_("Name"), max_length=100)
     description = models.TextField(_("Description"), blank=True)
+
+    # Indexed because a deployment that sells add-ons looks a plan up by it on
+    # every acquisition, and left blank by every plan that is not sold that way.
+    code = models.CharField(
+        _("Code"), max_length=64, blank=True, db_index=True,
+        help_text=_("What this plan sells, for a deployment selling to its workspaces: the extension's key, or empty for the base plan."),
+    )
     
     # Pricing
     price = models.DecimalField(_("Price"), max_digits=10, decimal_places=2)

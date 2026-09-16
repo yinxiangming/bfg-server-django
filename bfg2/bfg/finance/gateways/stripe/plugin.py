@@ -8,7 +8,7 @@ import os
 import logging
 import stripe
 from typing import Dict, Any, Optional
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from django.utils import timezone
 from django.conf import settings
 from bfg.finance.gateways.base import BasePaymentGateway
@@ -17,6 +17,25 @@ from bfg.finance.exceptions import PaymentMethodInvalid
 from bfg.common.models import Customer
 
 logger = logging.getLogger(__name__)
+
+
+def to_minor_units(amount: Decimal, currency: Currency) -> int:
+    """Convert a major-unit amount using the configured ISO currency precision."""
+    try:
+        value = Decimal(str(amount))
+        places = int(currency.decimal_places)
+        quantum = Decimal(1).scaleb(-places)
+        quantized = value.quantize(quantum)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError('Invalid payment amount or currency precision') from exc
+    if value != quantized:
+        raise ValueError(
+            f'{currency.code} supports at most {places} decimal places'
+        )
+    minor = quantized * (Decimal(10) ** places)
+    if minor != minor.to_integral_value() or minor <= 0:
+        raise ValueError('Payment amount must convert to a positive integer minor unit')
+    return int(minor)
 
 
 class StripeGateway(BasePaymentGateway):
@@ -315,7 +334,8 @@ class StripeGateway(BasePaymentGateway):
         payment_method_id: Optional[str] = None,
         order_id: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        save_card: bool = False
+        save_card: bool = False,
+        idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create Stripe PaymentIntent"""
         stripe_customer_id = self._get_or_create_stripe_customer(customer)
@@ -329,7 +349,7 @@ class StripeGateway(BasePaymentGateway):
         
         # Create PaymentIntent
         intent_params = {
-            'amount': int(amount * 100),  # Convert to cents
+            'amount': to_minor_units(amount, currency),
             'currency': currency.code.lower(),
             'customer': stripe_customer_id,
             'metadata': intent_metadata,
@@ -360,6 +380,8 @@ class StripeGateway(BasePaymentGateway):
             except stripe.error.InvalidRequestError:
                 raise PaymentMethodInvalid()
         
+        if idempotency_key:
+            intent_params['idempotency_key'] = idempotency_key
         payment_intent = stripe.PaymentIntent.create(**intent_params)
         
         return {
@@ -414,7 +436,7 @@ class StripeGateway(BasePaymentGateway):
                 payment_method_id = payment.payment_method.gateway_token
             
             payment_intent = stripe.PaymentIntent.create(
-                amount=int(payment.amount * 100),
+                amount=to_minor_units(payment.amount, payment.currency),
                 currency=payment.currency.code.lower(),
                 customer=stripe_customer_id,
                 payment_method=payment_method_id,
@@ -456,7 +478,8 @@ class StripeGateway(BasePaymentGateway):
         self,
         payment: Payment,
         amount: Decimal,
-        reason: Optional[str] = None
+        reason: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create Stripe refund"""
         self._ensure_ssl_config()
@@ -467,14 +490,19 @@ class StripeGateway(BasePaymentGateway):
             }
         
         try:
-            refund = stripe.Refund.create(
-                payment_intent=payment.gateway_transaction_id,
-                amount=int(amount * 100),  # Convert to cents
-                metadata={
+            refund_params = {
+                'payment_intent': payment.gateway_transaction_id,
+                'amount': to_minor_units(amount, payment.currency),
+                'metadata': {
                     'payment_id': str(payment.id),
                     'payment_number': payment.payment_number,
                     'reason': reason or '',
-                }
+                },
+            }
+            if idempotency_key:
+                refund_params['idempotency_key'] = idempotency_key
+            refund = stripe.Refund.create(
+                **refund_params,
             )
             
             return {
@@ -482,6 +510,14 @@ class StripeGateway(BasePaymentGateway):
                 'refund_id': refund.id,
                 'status': refund.status,
             }
+        except (
+            stripe.error.APIConnectionError,
+            stripe.error.APIError,
+            stripe.error.RateLimitError,
+        ):
+            # The gateway may have accepted the request. Let the service keep
+            # this idempotent attempt in processing state and safely retry it.
+            raise
         except stripe.error.StripeError as e:
             return {
                 'success': False,
@@ -523,12 +559,16 @@ class StripeGateway(BasePaymentGateway):
                 'success': True,
                 'message': 'Payment succeeded event processed',
                 'payment_intent_id': event_data.get('id'),
+                'amount_minor': event_data.get('amount_received'),
+                'currency': event_data.get('currency'),
             }
         elif event_type == 'payment_intent.payment_failed':
             return {
                 'success': True,
                 'message': 'Payment failed event processed',
                 'payment_intent_id': event_data.get('id'),
+                'amount_minor': event_data.get('amount'),
+                'currency': event_data.get('currency'),
             }
         elif event_type == 'payment_method.attached':
             return {

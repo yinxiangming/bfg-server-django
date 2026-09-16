@@ -15,10 +15,13 @@ from django.db import transaction, IntegrityError
 from django.db.models import IntegerField, OuterRef, Q, Subquery, Sum
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email
+from django.core import signing
 from django.utils import timezone
 from decimal import Decimal
 from django.contrib.auth import get_user_model
 import uuid
+import hashlib
+import secrets
 
 from bfg.common.models import Customer, Address, Media, MediaLink
 from bfg.common.serializers import signed_media_url
@@ -45,6 +48,7 @@ from bfg.shop.services import CartService, OrderService
 from bfg.shop.services.storefront_display_service import get_storefront_display_settings
 from bfg.shop.exceptions import InsufficientStock
 from bfg.finance.models import Payment, PaymentGateway, Currency
+from bfg.finance.exceptions import PaymentFailed
 from bfg.finance.services import PaymentService
 
 User = get_user_model()
@@ -503,32 +507,35 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
     authentication_classes = [OptionalBearerTokenAuthentication]
     
     def _get_workspace(self, request):
-        """
-        Get workspace from request, with fallback to Site domain lookup.
-        This ensures workspace is available even for guest users.
-        
-        Returns:
-            Workspace instance or None
-        """
-        workspace = getattr(request, 'workspace', None)
-        
-        # If workspace not set by middleware, try to get from Site by domain
-        if not workspace:
-            hostname = request.get_host().split(':')[0]  # Remove port if present
-            try:
-                from bfg.web.models import Site
-                site = Site.objects.filter(domain=hostname, is_active=True).first()
-                if site:
-                    workspace = site.workspace
-            except (ImportError, AttributeError):
-                pass
-        
-        # Last resort: get first active workspace
-        if not workspace:
-            from bfg.common.models import Workspace
-            workspace = Workspace.objects.filter(is_active=True).first()
-        
-        return workspace
+        """Use only the tenant selected by strict middleware/domain verification."""
+        return getattr(request, 'workspace', None)
+
+    @staticmethod
+    def _cart_session_key(workspace, secret):
+        value = f'{workspace.pk}:{secret}'.encode('utf-8')
+        return hashlib.sha256(value).hexdigest()
+
+    @classmethod
+    def _decode_guest_cart_token(cls, workspace, token):
+        try:
+            payload = signing.loads(
+                token,
+                salt='bfg.storefront.guest-cart',
+                max_age=60 * 60 * 24 * 30,
+            )
+        except signing.BadSignature as exc:
+            raise ValidationError({'cart_token': 'Invalid or expired cart token.'}) from exc
+        if payload.get('workspace_id') != workspace.pk or not payload.get('secret'):
+            raise ValidationError({'cart_token': 'Cart token does not belong to this workspace.'})
+        return cls._cart_session_key(workspace, payload['secret'])
+
+    @staticmethod
+    def _encode_guest_cart_token(workspace, secret):
+        return signing.dumps(
+            {'workspace_id': workspace.pk, 'secret': secret},
+            salt='bfg.storefront.guest-cart',
+            compress=True,
+        )
     
     @action(detail=False, methods=['get'])
     def default_store(self, request):
@@ -600,23 +607,19 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                 user=self.request.user,
                 defaults={'is_active': True}
             )
-            # Prefer X-Cart-ID when present (e.g. mini-program without shared session)
+            # A numeric cart id is accepted only for a cart already owned by this
+            # customer. Anonymous carts require the signed bearer token below.
             cart_id_header = self.request.headers.get('X-Cart-ID')
             if cart_id_header:
                 try:
                     cart_id = int(cart_id_header.strip())
                     cart = Cart.objects.filter(
                         id=cart_id,
-                        workspace=workspace
+                        workspace=workspace,
+                        customer=customer,
                     ).first()
                     if cart:
-                        if cart.customer is None:
-                            cart.customer = customer
-                            cart.save(update_fields=['customer'])
-                        elif cart.customer != customer:
-                            cart = None
-                        if cart:
-                            return cart
+                        return cart
                 except (ValueError, TypeError):
                     pass
             # Same opaque key the guest branch below uses. Without this, everything a
@@ -625,36 +628,34 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             # merge_guest_cart_to_customer deletes the guest cart, so re-sending the key
             # on later requests is a no-op rather than a double-count.
             bfg_cart_session = (self.request.headers.get('X-Bfg-Cart-Session') or '').strip()
-            session_key = self.request.session.session_key
+            cart_secret = self.request.session.get('bfg_cart_secret')
             if bfg_cart_session:
-                cart = service.merge_guest_cart_to_customer(bfg_cart_session[:255], customer)
-            elif session_key:
-                cart = service.merge_guest_cart_to_customer(session_key, customer)
+                guest_key = self._decode_guest_cart_token(workspace, bfg_cart_session)
+                cart = service.merge_guest_cart_to_customer(guest_key, customer)
+            elif cart_secret:
+                guest_key = self._cart_session_key(workspace, cart_secret)
+                cart = service.merge_guest_cart_to_customer(guest_key, customer)
             else:
                 cart = service.get_or_create_cart(customer)
         else:
-            # Anonymous: prefer X-Cart-ID header when session is not shared (e.g. mini-program)
-            cart_id_header = self.request.headers.get('X-Cart-ID')
-            if cart_id_header:
-                try:
-                    cart_id = int(cart_id_header.strip())
-                    cart = Cart.objects.filter(
-                        id=cart_id,
-                        workspace=workspace,
-                        customer__isnull=True
-                    ).first()
-                    if cart:
-                        return cart
-                except (ValueError, TypeError):
-                    pass
-            # Explicit guest cart key (e2e / .NET parity); avoids sharing one cart per workspace
+            # Anonymous carts use a signed high-entropy bearer token. The database
+            # stores only a workspace-bound hash, so leaked row ids/session keys do
+            # not grant access to another shopper's cart.
             bfg_cart_session = (self.request.headers.get('X-Bfg-Cart-Session') or '').strip()
             if bfg_cart_session:
-                return service.get_or_create_guest_cart(bfg_cart_session[:255])
-            if not self.request.session.session_key:
-                self.request.session.create()
-            session_key = self.request.session.session_key
+                session_key = self._decode_guest_cart_token(workspace, bfg_cart_session)
+                token = bfg_cart_session
+            else:
+                if not self.request.session.session_key:
+                    self.request.session.create()
+                secret = self.request.session.get('bfg_cart_secret')
+                if not secret:
+                    secret = secrets.token_urlsafe(32)
+                    self.request.session['bfg_cart_secret'] = secret
+                session_key = self._cart_session_key(workspace, secret)
+                token = self._encode_guest_cart_token(workspace, secret)
             cart = service.get_or_create_guest_cart(session_key)
+            cart._guest_cart_token = token
         return cart
     
     @action(detail=False, methods=['get'])
@@ -791,7 +792,7 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         
         try:
             product = Product.objects.get(id=product_id, workspace=workspace, is_active=True)
-            variant = ProductVariant.objects.get(id=variant_id) if variant_id else None
+            variant = ProductVariant.objects.get(id=variant_id, product=product) if variant_id else None
             
             service.add_to_cart(cart, product, quantity, variant)
             
@@ -966,8 +967,6 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         customer_note = request.data.get('customer_note', '')
         freight_service_id = request.data.get('freight_service_id')  # Preferred
         shipping_method = request.data.get('shipping_method')  # Backward compatibility: 'standard' or 'express'
-        shipping_cost = request.data.get('shipping_cost')  # Backward compatibility
-        tax = request.data.get('tax')  # Backward compatibility
         
         # An order the customer collects has no delivery address to ask for.
         if not store_id or (fulfillment_method != 'pickup' and not shipping_address_id):
@@ -987,22 +986,21 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             
             shipping_address = None
             if shipping_address_id:
-                shipping_address = Address.objects.get(id=shipping_address_id)
-                # Check if address belongs to customer (simplified check)
-                if shipping_address.content_object != customer:
-                    return Response(
-                        {'detail': 'Shipping address not found or does not belong to you'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
+                shipping_address = Address.objects.get(
+                    id=shipping_address_id,
+                    workspace=workspace,
+                    object_id=customer.id,
+                    content_type=ContentType.objects.get_for_model(Customer),
+                )
             
             billing_address = None
             if billing_address_id:
-                billing_address = Address.objects.get(id=billing_address_id)
-                if billing_address.content_object != customer:
-                    return Response(
-                        {'detail': 'Billing address not found or does not belong to you'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
+                billing_address = Address.objects.get(
+                    id=billing_address_id,
+                    workspace=workspace,
+                    object_id=customer.id,
+                    content_type=ContentType.objects.get_for_model(Customer),
+                )
             
             order_service = OrderService(
                 workspace=workspace,
@@ -1027,20 +1025,6 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                     pass
             elif shipping_method:
                 order_kwargs['shipping_method'] = shipping_method
-            else:
-                # Backward compatibility: convert shipping_cost and tax to Decimal if provided
-                from decimal import Decimal
-                if shipping_cost is not None:
-                    try:
-                        order_kwargs['shipping_cost'] = Decimal(str(shipping_cost))
-                    except (ValueError, TypeError):
-                        pass
-                
-                if tax is not None:
-                    try:
-                        order_kwargs['tax'] = Decimal(str(tax))
-                    except (ValueError, TypeError):
-                        pass
             
             order = order_service.create_order_from_cart(
                 cart=cart,
@@ -1075,6 +1059,7 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         authentication_classes=[],
         permission_classes=[AllowAny]
     )
+    @transaction.atomic
     def guest_checkout(self, request):
         """
         Guest checkout - allows anonymous users to place orders using session cart.
@@ -1113,8 +1098,6 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
         customer_note = request.data.get('customer_note', '')
         freight_service_id = request.data.get('freight_service_id')  # Preferred
         shipping_method = request.data.get('shipping_method')  # Backward compatibility: 'standard' or 'express'
-        shipping_cost = request.data.get('shipping_cost')  # Backward compatibility
-        tax = request.data.get('tax')  # Backward compatibility
 
         email = request.data.get('email') or shipping_data.get('email')
         full_name = request.data.get('full_name') or shipping_data.get('full_name')
@@ -1138,19 +1121,6 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                 if not shipping_data.get(field):
                     return Response({'detail': f'Shipping address missing field: {field}'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Create or get user by email
-        user = User.objects.filter(email=email).first()
-        if not user:
-            username = email if email else f'guest_{uuid.uuid4().hex[:12]}'
-            user = User.objects.create(username=username, email=email, first_name=full_name, is_active=True)
-            user.set_unusable_password()
-            user.save()
-        else:
-            # Update name if empty
-            if not user.first_name and full_name:
-                user.first_name = full_name
-                user.save(update_fields=['first_name'])
-
         # Get workspace (with fallback to Site domain lookup)
         workspace = self._get_workspace(request)
         if not workspace:
@@ -1159,17 +1129,42 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        try:
+            store = Store.objects.get(id=store_id, workspace=workspace)
+        except Store.DoesNotExist:
+            return Response({'detail': 'Store not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not billing_same_as_shipping and fulfillment_method != 'pickup':
+            for field in required_fields:
+                if not billing_data.get(field):
+                    return Response(
+                        {'detail': f'Billing address missing field: {field}'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+        # Never attach an anonymous checkout to an existing account. Email ownership
+        # must be established by authentication, not by possession of an address string.
+        if User.objects.filter(email__iexact=email).exists():
+            return Response(
+                {'detail': 'An account already uses this email. Please sign in to continue.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        user = User.objects.create(
+            username=f'guest_{uuid.uuid4().hex}',
+            email=email,
+            first_name=full_name,
+            is_active=True,
+        )
+        user.set_unusable_password()
+        user.save(update_fields=['password'])
+
         # Get or create customer for workspace
         customer, _ = Customer.objects.get_or_create(
             user=user,
             workspace=workspace,
             defaults={'is_active': True}
         )
-
-        try:
-            store = Store.objects.get(id=store_id, workspace=workspace)
-        except Store.DoesNotExist:
-            return Response({'detail': 'Store not found'}, status=status.HTTP_404_NOT_FOUND)
 
         # Create shipping address
         shipping_address = None if fulfillment_method == 'pickup' else Address.objects.create(
@@ -1188,9 +1183,6 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
 
         billing_address = shipping_address
         if not billing_same_as_shipping and fulfillment_method != 'pickup':
-            for field in required_fields:
-                if not billing_data.get(field):
-                    return Response({'detail': f'Billing address missing field: {field}'}, status=status.HTTP_400_BAD_REQUEST)
             billing_address = Address.objects.create(
                 workspace=workspace,
                 content_object=customer,
@@ -1231,20 +1223,6 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
                 pass
         elif shipping_method:
             order_kwargs['shipping_method'] = shipping_method
-        else:
-            # Backward compatibility: convert shipping_cost and tax to Decimal if provided
-            from decimal import Decimal
-            if shipping_cost is not None:
-                try:
-                    order_kwargs['shipping_cost'] = Decimal(str(shipping_cost))
-                except (ValueError, TypeError):
-                    pass
-            
-            if tax is not None:
-                try:
-                    order_kwargs['tax'] = Decimal(str(tax))
-                except (ValueError, TypeError):
-                    pass
 
         try:
             order = order_service.create_order_from_cart(
@@ -1257,11 +1235,13 @@ class StorefrontCartViewSet(viewsets.GenericViewSet):
             serializer = StorefrontOrderSerializer(order, context={'request': request})
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except ValidationError as exc:
+            transaction.set_rollback(True)
             return Response(
                 exc.detail if isinstance(exc.detail, dict) else {'detail': exc.detail},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except Exception as e:
+            transaction.set_rollback(True)
             return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -1464,7 +1444,11 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
         
         # Get gateway (use default if not specified)
         if gateway_id:
-            gateway = PaymentGateway.objects.get(id=gateway_id, workspace=request.workspace)
+            gateway = PaymentGateway.objects.get(
+                id=gateway_id,
+                workspace=request.workspace,
+                is_active=True,
+            )
         else:
             gateway = PaymentGateway.objects.filter(
                 workspace=request.workspace,
@@ -1515,7 +1499,10 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
             try:
                 payment_method = PaymentMethod.objects.get(
                     id=payment_method_id,
-                    customer=customer
+                    workspace=request.workspace,
+                    customer=customer,
+                    gateway=gateway,
+                    is_active=True,
                 )
             except PaymentMethod.DoesNotExist:
                 return Response(
@@ -1523,36 +1510,53 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
                     status=status.HTTP_404_NOT_FOUND
                 )
         
-        # Check for existing pending payment for this order (avoid duplicate payment records)
-        existing_payment = Payment.objects.filter(
-            order=order,
-            customer=customer,
-            status='pending'
-        ).first()
-        
-        if existing_payment:
-            # Reuse existing pending payment, update gateway if different
-            payment = existing_payment
-            if payment.gateway != gateway:
-                payment.gateway = gateway
-            if payment_method and payment.payment_method != payment_method:
-                payment.payment_method = payment_method
-            payment.save()
-        else:
-            # Create new payment using service
-            payment_service = PaymentService(
+        with transaction.atomic():
+            order = Order.all_objects.select_for_update().get(
+                pk=order.pk,
                 workspace=request.workspace,
-                user=request.user
             )
-            
-            payment = payment_service.create_payment(
+            if order.payment_status == 'paid' or order.status in {'cancelled', 'refunded'}:
+                raise ValidationError({
+                    'order_id': 'This order is already paid or cannot accept payment.'
+                })
+            payment = Payment.all_objects.filter(
+                order=order,
                 customer=customer,
+                workspace=request.workspace,
                 amount=order.total,
                 currency=currency,
                 gateway=gateway,
+                payment_method=payment_method,
+                status='pending',
+            ).first()
+            conflicting_payment = Payment.all_objects.filter(
                 order=order,
-                payment_method=payment_method
-            )
+                customer=customer,
+                workspace=request.workspace,
+                status__in=['pending', 'processing'],
+            ).exclude(pk=getattr(payment, 'pk', None)).exists()
+            if conflicting_payment:
+                raise ValidationError({
+                    'order_id': 'This order already has a payment attempt with different payment details.'
+                })
+            if not payment:
+                try:
+                    payment = PaymentService(
+                        workspace=request.workspace,
+                        user=request.user,
+                    ).create_payment(
+                        customer=customer,
+                        amount=order.total,
+                        currency=currency,
+                        gateway=gateway,
+                        order=order,
+                        payment_method=payment_method,
+                    )
+                except PaymentFailed as exc:
+                    raise ValidationError({
+                        'detail': exc.message,
+                        'code': exc.code,
+                    }) from exc
         
         # Generate gateway payload (simplified - integrate with actual gateway)
         try:
@@ -1618,7 +1622,8 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
                     'payment_id': str(payment.id),
                     'payment_number': payment.payment_number,
                 },
-                save_card=save_card
+                save_card=save_card,
+                idempotency_key=f'bfg-payment-intent-{payment.pk}',
             )
             
             # Store PaymentIntent ID in payment for later confirmation
@@ -1629,11 +1634,7 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
             
             return payment_intent
         
-        # Default implementation for gateways without plugin
-        return {
-            'client_secret': f'client_secret_{payment.payment_number}',
-            'payment_intent_id': payment.payment_number
-        }
+        raise ValueError('Payment gateway is not available')
     
     @action(detail=True, methods=['post'])
     def process(self, request, pk=None):
@@ -1775,4 +1776,3 @@ class StorefrontPaymentViewSet(viewsets.GenericViewSet):
             return Response({'status': 'success', 'result': result}, status=status.HTTP_200_OK)
         else:
             return Response({'status': 'received'}, status=status.HTTP_200_OK)
-

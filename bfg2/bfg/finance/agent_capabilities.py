@@ -6,7 +6,7 @@ Handlers delegate to InvoiceService / PaymentService; required_permission = IsWo
 from decimal import Decimal
 
 from bfg.core.agent import AgentCapability, registry as agent_registry
-from bfg.core.permissions import IsWorkspaceStaff
+from bfg.core.permissions import CanProcessRefunds, IsWorkspaceStaff
 from bfg.finance.models import Payment
 from bfg.finance.services import InvoiceService, PaymentService
 from bfg.shop.models import Order
@@ -34,13 +34,26 @@ def _create_invoice_handler(request, *, order_id: int, **kwargs):
     }
 
 
-def _process_refund_handler(request, *, payment_id: int, amount: float, reason: str = "", **kwargs):
+def _process_refund_handler(
+    request,
+    *,
+    payment_id: int,
+    amount: float,
+    idempotency_key: str,
+    reason: str = "",
+    **kwargs,
+):
     workspace = getattr(request, "workspace", None)
     if not workspace:
         raise ValueError("Workspace is required")
     payment = Payment.objects.get(id=payment_id, workspace=workspace)
     service = PaymentService(workspace=workspace, user=request.user)
-    refund = service.create_refund(payment, amount=Decimal(str(amount)), reason=reason)
+    refund = service.create_refund(
+        payment,
+        amount=Decimal(str(amount)),
+        reason=reason,
+        idempotency_key=idempotency_key,
+    )
     return {
         "refund_id": refund.id,
         "payment_id": payment_id,
@@ -73,15 +86,16 @@ CAPABILITIES = [
         app_label="finance",
         input_schema={
             "type": "object",
-            "required": ["payment_id", "amount"],
+            "required": ["payment_id", "amount", "idempotency_key"],
             "properties": {
                 "payment_id": {"type": "integer", "description": "Payment ID"},
                 "amount": {"type": "number", "description": "Refund amount"},
+                "idempotency_key": {"type": "string", "description": "Stable caller retry key"},
                 "reason": {"type": "string", "description": "Refund reason"},
             },
         },
         handler=_process_refund_handler,
-        required_permission=(IsWorkspaceStaff,),
+        required_permission=(CanProcessRefunds,),
     ),
 ]
 

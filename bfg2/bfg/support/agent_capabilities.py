@@ -59,10 +59,15 @@ def _reply_ticket_handler(
 
 
 def _assign_ticket_handler(request, *, ticket_id: int, assigned_to_id: int, **kwargs):
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
     ticket = _get_ticket(request, ticket_id)
-    user = User.objects.get(id=assigned_to_id)
+    from bfg.common.models import StaffMember
+
+    membership = StaffMember.all_objects.select_related('user').get(
+        workspace=ticket.workspace,
+        user_id=assigned_to_id,
+        is_active=True,
+    )
+    user = membership.user
     old_id = ticket.assigned_to_id
     with transaction.atomic():
         ticket.assigned_to = user

@@ -213,6 +213,15 @@ class TestDecodeJwtWorkspaceId:
 
 
 class TestMiddlewareJwtResolution:
+    def test_workspace_collection_supports_first_tenant_bootstrap(self, user):
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.get('/api/v1/workspaces/')
+
+        assert response.status_code == 200
+        assert response.json() == []
+
     def test_jwt_claim_resolves_workspace(self, staff_user, ws):
         token = _mint_token(staff_user, workspace_id=ws.id)
         response = Client().get(

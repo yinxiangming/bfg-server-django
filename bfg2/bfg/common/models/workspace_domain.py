@@ -211,12 +211,6 @@ def upsert_custom_workspace_domain(workspace, hostname, *, is_primary=False, ver
     normalized = normalize_hostname(hostname)
     if not normalized:
         return None
-    if is_primary:
-        WorkspaceDomain.objects.filter(
-            workspace=workspace,
-            kind=WorkspaceDomain.KIND_CUSTOM,
-            is_primary=True,
-        ).exclude(hostname=normalized).update(is_primary=False)
     defaults = {
         "kind": WorkspaceDomain.KIND_CUSTOM,
         "is_primary": bool(is_primary),
@@ -229,8 +223,30 @@ def upsert_custom_workspace_domain(workspace, hostname, *, is_primary=False, ver
     if ssl_status is not None:
         defaults["ssl_status"] = ssl_status
 
-    domain, _ = WorkspaceDomain.objects.update_or_create(
-        hostname=normalized,
-        defaults={"workspace": workspace, **defaults},
-    )
-    return domain
+    with transaction.atomic():
+        existing = WorkspaceDomain.objects.select_for_update().filter(
+            hostname=normalized,
+        ).first()
+        if existing is not None and existing.workspace_id != workspace.id:
+            raise ValidationError({
+                "hostname": _("This hostname is already assigned to another workspace."),
+            })
+
+        if is_primary:
+            WorkspaceDomain.objects.filter(
+                workspace=workspace,
+                kind=WorkspaceDomain.KIND_CUSTOM,
+                is_primary=True,
+            ).exclude(hostname=normalized).update(is_primary=False)
+
+        if existing is None:
+            return WorkspaceDomain.objects.create(
+                workspace=workspace,
+                hostname=normalized,
+                **defaults,
+            )
+
+        for field, value in defaults.items():
+            setattr(existing, field, value)
+        existing.save(update_fields=[*defaults.keys(), "updated_at"])
+        return existing

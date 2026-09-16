@@ -332,15 +332,20 @@ class StorefrontCartSerializer(serializers.ModelSerializer):
     """Storefront cart serializer"""
     items = StorefrontCartItemSerializer(many=True, read_only=True)
     total = serializers.SerializerMethodField()
+    cart_token = serializers.SerializerMethodField()
     
     class Meta:
         model = Cart
-        fields = ['id', 'items', 'total']
+        fields = ['id', 'items', 'total', 'cart_token']
         read_only_fields = ['id']
     
     def get_total(self, obj):
         """Calculate cart total"""
         return sum(item.subtotal for item in obj.items.all())
+
+    def get_cart_token(self, obj):
+        """Return the signed bearer token for an anonymous cart, when applicable."""
+        return getattr(obj, '_guest_cart_token', None)
 
 
 class StorefrontAddressSerializer(serializers.ModelSerializer):
@@ -760,4 +765,3 @@ class StorefrontProductReviewSerializer(serializers.ModelSerializer):
         if value < 1 or value > 5:
             raise serializers.ValidationError('Rating must be between 1 and 5')
         return value
-

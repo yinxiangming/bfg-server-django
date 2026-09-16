@@ -5,6 +5,8 @@ ViewSets for promo module
 """
 
 from django.db.models import Q
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -151,7 +153,7 @@ class CouponViewSet(viewsets.ModelViewSet):
 class GiftCardViewSet(viewsets.ModelViewSet):
     """Gift card management ViewSet"""
     serializer_class = GiftCardSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
     
     def get_queryset(self):
         """Get gift cards for current workspace"""
@@ -176,14 +178,23 @@ class GiftCardViewSet(viewsets.ModelViewSet):
         serializer.save(workspace=self.request.workspace)
     
     @action(detail=True, methods=['post'])
+    @transaction.atomic
     def redeem(self, request, pk=None):
         """Redeem gift card"""
-        gift_card = self.get_object()
+        gift_card = GiftCard.all_objects.select_for_update().get(
+            pk=pk,
+            workspace=request.workspace,
+        )
         
         if not gift_card.is_active:
             return Response(
                 {'detail': 'Gift card is not active'},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        if gift_card.expires_at and gift_card.expires_at < timezone.localdate():
+            return Response(
+                {'detail': 'Gift card has expired'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         
         try:
@@ -208,7 +219,9 @@ class GiftCardViewSet(viewsets.ModelViewSet):
         
         # Redeem amount
         gift_card.balance -= amount
-        gift_card.save()
+        if gift_card.balance == 0:
+            gift_card.is_active = False
+        gift_card.save(update_fields=['balance', 'is_active', 'updated_at'])
         
         serializer = self.get_serializer(gift_card)
         return Response({
@@ -340,6 +353,13 @@ class CampaignDisplayViewSet(viewsets.ModelViewSet):
         else:
             serializer.validated_data['workspace'] = workspace
         serializer.save()
+
+    def perform_update(self, serializer):
+        workspace = get_workspace(self.request)
+        campaign = serializer.validated_data.get('campaign', serializer.instance.campaign)
+        if campaign is not None and campaign.workspace_id != workspace.id:
+            raise NotFound("Campaign not in workspace.")
+        serializer.save(workspace=workspace)
 
 
 class StampRecordViewSet(viewsets.ReadOnlyModelViewSet):

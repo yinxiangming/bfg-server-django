@@ -15,6 +15,35 @@ from bfg.finance.models import (
 )
 
 
+SECRET_MASK = '********'
+SENSITIVE_CONFIG_FRAGMENTS = ('secret', 'password', 'private', 'token', 'credential', 'api_key')
+
+
+def _masked_gateway_config(gateway_type, config):
+    """Mask plugin-declared and conventionally named credentials on every read."""
+    from bfg.finance.gateways.loader import GatewayLoader
+
+    schema = (GatewayLoader.get_plugin_info(gateway_type) or {}).get('config_schema') or {}
+    masked = dict(config or {})
+    for key, value in list(masked.items()):
+        declared_sensitive = bool((schema.get(key) or {}).get('sensitive'))
+        conventional_secret = any(fragment in key.lower() for fragment in SENSITIVE_CONFIG_FRAGMENTS)
+        if value not in (None, '') and (declared_sensitive or conventional_secret):
+            masked[key] = SECRET_MASK
+    return masked
+
+
+def _merge_masked_gateway_config(existing, incoming):
+    merged = dict(incoming or {})
+    for key, value in list(merged.items()):
+        if value == SECRET_MASK:
+            if key in (existing or {}):
+                merged[key] = existing[key]
+            else:
+                merged.pop(key)
+    return merged
+
+
 class CurrencySerializer(serializers.ModelSerializer):
     """Currency serializer"""
     
@@ -68,11 +97,10 @@ class PaymentGatewaySerializer(serializers.ModelSerializer):
         return (info or {}).get('supported_fulfillment_methods') or []
     
     def to_representation(self, instance):
-        """Return both config and test_config when reading"""
+        """Return editable configuration without ever returning stored credentials."""
         ret = super().to_representation(instance)
-        # Ensure both fields are returned
-        ret['config'] = instance.config or {}
-        ret['test_config'] = instance.test_config or {}
+        ret['config'] = _masked_gateway_config(instance.gateway_type, instance.config)
+        ret['test_config'] = _masked_gateway_config(instance.gateway_type, instance.test_config)
         return ret
     
     def to_internal_value(self, data):
@@ -102,9 +130,15 @@ class PaymentGatewaySerializer(serializers.ModelSerializer):
         
         # Save config and test_config if provided
         if 'config' in validated_data:
-            instance.config = validated_data['config'] or {}
+            instance.config = _merge_masked_gateway_config(
+                instance.config,
+                validated_data['config'],
+            )
         if 'test_config' in validated_data:
-            instance.test_config = validated_data['test_config'] or {}
+            instance.test_config = _merge_masked_gateway_config(
+                instance.test_config,
+                validated_data['test_config'],
+            )
         
         instance.save()
         return instance
@@ -211,6 +245,7 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
         }
     """
     gateway_name = serializers.CharField(source='gateway.name', read_only=True)
+    gateway_token = serializers.CharField(write_only=True, required=False, allow_blank=True)
     customer_id = serializers.IntegerField(write_only=True, required=False)
     billing_address_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     is_expired = serializers.BooleanField(read_only=True)
@@ -272,6 +307,13 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
             })
         
         return attrs
+
+    def validate_gateway(self, gateway):
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None) if request else None
+        if workspace is not None and gateway.workspace_id != workspace.id:
+            raise serializers.ValidationError("Gateway does not belong to this workspace")
+        return gateway
 
 
 class InvoiceItemSerializer(serializers.ModelSerializer):
@@ -603,8 +645,9 @@ class PaymentSerializer(serializers.ModelSerializer):
             'created_at', 'completed_at'
         ]
         read_only_fields = [
-            'id', 'payment_number', 'gateway_transaction_id',
-            'created_at', 'completed_at'
+            'id', 'payment_number', 'customer', 'invoice', 'order', 'gateway',
+            'payment_method', 'amount', 'currency', 'status', 'gateway_transaction_id',
+            'created_at', 'completed_at',
         ]
 
 
@@ -637,8 +680,9 @@ class PaymentCreateSerializer(serializers.ModelSerializer):
             'payment_method', 'payment_method_id',
             'amount', 'status', 'created_at'
         ]
-        read_only_fields = ['id', 'payment_number', 'customer', 'gateway', 
-                           'currency', 'created_at']
+        read_only_fields = [
+            'id', 'payment_number', 'customer', 'gateway', 'currency', 'status', 'created_at',
+        ]
     
     def validate(self, data):
         """Validate payment data and ensure amount matches order/invoice"""
@@ -659,17 +703,9 @@ class PaymentCreateSerializer(serializers.ModelSerializer):
                     data['amount'] = order.total
                     data['currency_id'] = order.store.currency.id if hasattr(order.store, 'currency') and order.store.currency else data.get('currency_id')
                 elif Decimal(str(amount)) != order.total:
-                    # Security: Warn if amount doesn't match, but allow staff to override
-                    from bfg.common.models import StaffMember
-                    is_staff = self.context['request'].user.is_superuser or StaffMember.objects.filter(
-                        workspace=self.context['request'].workspace,
-                        user=self.context['request'].user,
-                        is_active=True
-                    ).exists()
-                    if not is_staff:
-                        raise serializers.ValidationError({
-                            'amount': f'Amount must match order total: {order.total}'
-                        })
+                    raise serializers.ValidationError({
+                        'amount': f'Amount must match order total: {order.total}'
+                    })
             except Order.DoesNotExist:
                 raise serializers.ValidationError({'order_id': 'Order not found'})
         
@@ -682,17 +718,9 @@ class PaymentCreateSerializer(serializers.ModelSerializer):
                     data['amount'] = invoice.total
                     data['currency_id'] = invoice.currency.id if invoice.currency else data.get('currency_id')
                 elif Decimal(str(amount)) != invoice.total:
-                    # Security: Warn if amount doesn't match, but allow staff to override
-                    from bfg.common.models import StaffMember
-                    is_staff = self.context['request'].user.is_superuser or StaffMember.objects.filter(
-                        workspace=self.context['request'].workspace,
-                        user=self.context['request'].user,
-                        is_active=True
-                    ).exists()
-                    if not is_staff:
-                        raise serializers.ValidationError({
-                            'amount': f'Amount must match invoice total: {invoice.total}'
-                        })
+                    raise serializers.ValidationError({
+                        'amount': f'Amount must match invoice total: {invoice.total}'
+                    })
             except Invoice.DoesNotExist:
                 raise serializers.ValidationError({'invoice_id': 'Invoice not found'})
         
@@ -718,28 +746,14 @@ class RefundSerializer(serializers.ModelSerializer):
             'currency_code', 'reason', 'status',
             'gateway_refund_id', 'created_at', 'completed_at'
         ]
-        read_only_fields = ['id', 'gateway_refund_id', 'created_at', 'completed_at']
+        read_only_fields = ['id', 'status', 'gateway_refund_id', 'created_at', 'completed_at']
     
     def validate(self, data):
-        """Validate refund amount doesn't exceed payment amount"""
+        """Perform shape validation; locked balance checks live in PaymentService."""
         from decimal import Decimal
-        payment = data.get('payment')
         amount = data.get('amount')
-        
-        if payment and amount:
-            # Check total refunded amount (exclude current instance if updating)
-            existing_refunds = payment.refunds.all()
-            if self.instance:
-                existing_refunds = existing_refunds.exclude(id=self.instance.id)
-            total_refunded = sum(refund.amount for refund in existing_refunds)
-            
-            if total_refunded + Decimal(str(amount)) > payment.amount:
-                raise serializers.ValidationError({
-                    'amount': f'Refund amount exceeds available amount. '
-                             f'Payment: {payment.amount}, Already refunded: {total_refunded}, '
-                             f'Available: {payment.amount - total_refunded}'
-                })
-        
+        if amount is not None and Decimal(str(amount)) <= 0:
+            raise serializers.ValidationError({'amount': 'Refund amount must be greater than zero.'})
         return data
 
 

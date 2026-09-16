@@ -86,10 +86,23 @@ def intent_id(gateway, currency):
     return intent['payment_intent_id']
 
 
-def event_body(event_type, object_id, metadata_workspace):
+def event_body(
+    event_type,
+    object_id,
+    metadata_workspace,
+    *,
+    amount_received=9900,
+    currency='nzd',
+):
     return json.dumps({
         'id': 'evt_test', 'object': 'event', 'type': event_type,
-        'data': {'object': {'id': object_id, 'metadata': {'workspace_id': metadata_workspace.id}}},
+        'data': {'object': {
+            'id': object_id,
+            'amount': amount_received,
+            'amount_received': amount_received,
+            'currency': currency,
+            'metadata': {'workspace_id': metadata_workspace.id},
+        }},
     })
 
 
@@ -143,6 +156,21 @@ def test_a_genuine_event_completes_the_payment(workspace, currency):
     assert status_of(payment) == 'completed'
 
 
+def test_a_signed_event_with_the_wrong_amount_does_not_complete_payment(workspace, currency):
+    payment = make_payment(make_gateway(workspace, 'stripe', STRIPE_CONFIG), currency, 'pi_wrong_amount')
+    body = event_body(
+        'payment_intent.succeeded',
+        'pi_wrong_amount',
+        workspace,
+        amount_received=1,
+    )
+
+    res = post_callback('stripe', body, workspace, HTTP_STRIPE_SIGNATURE=stripe_signature(body))
+
+    assert res.status_code == 200, res.data
+    assert status_of(payment) == 'processing'
+
+
 def test_without_a_webhook_secret_a_signed_event_is_refused(workspace, currency):
     gateway = make_gateway(workspace, 'stripe', {'secret_key': 'sk_test_dummy'})
     payment = make_payment(gateway, currency, 'pi_nosecret')
@@ -162,6 +190,16 @@ def test_a_late_failure_does_not_undo_a_completed_payment(workspace, currency):
 
     assert res.status_code == 200, res.data
     assert status_of(payment) == 'completed'
+
+
+def test_a_genuine_failure_marks_an_unfinished_payment_failed(workspace, currency):
+    payment = make_payment(make_gateway(workspace, 'stripe', STRIPE_CONFIG), currency, 'pi_failed')
+    body = event_body('payment_intent.payment_failed', 'pi_failed', workspace)
+
+    res = post_callback('stripe', body, workspace, HTTP_STRIPE_SIGNATURE=stripe_signature(body))
+
+    assert res.status_code == 200, res.data
+    assert status_of(payment) == 'failed'
 
 
 # ------------------------------------------------ whose signature reaches which payment

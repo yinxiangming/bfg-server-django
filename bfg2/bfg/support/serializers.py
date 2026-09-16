@@ -10,6 +10,33 @@ from typing import Optional
 from .models import SupportTicket, SupportTicketMessage, TicketAssignment, TicketCategory, TicketPriority, TicketTag
 
 
+def _validate_ticket_workspace_relations(serializer, attrs):
+    request = serializer.context.get('request')
+    workspace = getattr(request, 'workspace', None) if request else None
+    if workspace is None:
+        return attrs
+
+    instance = serializer.instance
+    for field in ('customer', 'category', 'priority', 'team', 'related_order'):
+        value = attrs.get(field, getattr(instance, field, None) if instance else None)
+        if value is not None and getattr(value, 'workspace_id', None) != workspace.id:
+            raise serializers.ValidationError({field: 'Related object does not belong to this workspace.'})
+
+    assignee = attrs.get('assigned_to', getattr(instance, 'assigned_to', None) if instance else None)
+    if assignee is not None:
+        from bfg.common.models import StaffMember
+
+        if not StaffMember.all_objects.filter(
+            workspace=workspace,
+            user=assignee,
+            is_active=True,
+        ).exists():
+            raise serializers.ValidationError({
+                'assigned_to': 'Assignee must be an active staff member of this workspace.',
+            })
+    return attrs
+
+
 class TicketMessageSerializer(serializers.ModelSerializer):
     """Read-only serializer for ticket message (used in detail)."""
     sender_name = serializers.SerializerMethodField()
@@ -93,6 +120,9 @@ class TicketListSerializer(serializers.ModelSerializer):
             return obj.assigned_to.get_full_name() or obj.assigned_to.username
         return None
 
+    def validate(self, attrs):
+        return _validate_ticket_workspace_relations(self, super().validate(attrs))
+
 
 class TicketDetailSerializer(serializers.ModelSerializer):
     """Ticket detail serializer (full) with first page of messages and assignments."""
@@ -166,6 +196,9 @@ class TicketDetailSerializer(serializers.ModelSerializer):
                 'username': obj.assigned_to.username or '',
             }
         return None
+
+    def validate(self, attrs):
+        return _validate_ticket_workspace_relations(self, super().validate(attrs))
     
     @extend_schema_field(OpenApiTypes.STR)
     def get_category_name(self, obj) -> Optional[str]:
@@ -297,4 +330,3 @@ class MeTicketCreateSerializer(serializers.ModelSerializer):
         workspace = getattr(self.context.get('request'), 'workspace', None)
         for name, model in (('category', TicketCategory), ('priority', TicketPriority)):
             self.fields[name].queryset = model.objects.filter(workspace=workspace, is_active=True)
-

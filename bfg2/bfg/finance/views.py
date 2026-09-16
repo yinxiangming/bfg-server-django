@@ -9,10 +9,12 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.http import HttpResponse
+from django.db import transaction
 from django.utils import timezone
 
 from bfg.core.permissions import (
-    IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite, CanManagePayments, CanManageInvoices,
+    IsWorkspaceAdmin, IsWorkspaceStaff, StaffReadAdminWrite, CanManagePayments, CanProcessRefunds,
+    CanManageInvoices,
     ReadOnlyOrSuperuser,
 )
 from bfg.finance.models import (
@@ -27,7 +29,7 @@ from bfg.finance.serializers import (
     TransactionSerializer, WalletSerializer, WithdrawalRequestSerializer,
     WithdrawalRequestCreateSerializer,
 )
-from bfg.finance.exceptions import InsufficientFunds
+from bfg.finance.exceptions import InsufficientFunds, PaymentFailed
 from bfg.finance.services import PaymentService, InvoiceService, TaxService, WalletService
 from bfg.common.constants import get_default_currency_for_workspace
 from decimal import Decimal
@@ -251,7 +253,7 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
     their own saved cards.
     """
     serializer_class = PaymentMethodSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+    permission_classes = [IsAuthenticated, CanManagePayments]
     
     def get_queryset(self):
         """Get payment methods for current workspace"""
@@ -276,7 +278,7 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
         from bfg.common.models import Customer
         from bfg.common.models import Address
         
-        customer_id = serializer.validated_data.get('customer_id')
+        customer_id = serializer.validated_data.pop('customer_id', None)
         if not customer_id:
             raise serializers.ValidationError({'customer_id': 'This field is required.'})
         
@@ -289,9 +291,12 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
         billing_address = None
         billing_address_id = serializer.validated_data.pop('billing_address_id', None)
         if billing_address_id:
+            from django.contrib.contenttypes.models import ContentType
             billing_address = Address.objects.filter(
                 id=billing_address_id,
-                workspace=self.request.workspace
+                workspace=self.request.workspace,
+                object_id=customer.id,
+                content_type=ContentType.objects.get_for_model(Customer),
             ).first()
             if not billing_address:
                 raise serializers.ValidationError({
@@ -314,7 +319,10 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
     
     def perform_update(self, serializer):
         """Update payment method"""
-        from bfg.common.models import Address
+        from bfg.common.models import Address, Customer
+        from django.contrib.contenttypes.models import ContentType
+
+        serializer.validated_data.pop('customer_id', None)
         
         # Get billing address if provided
         billing_address_id = serializer.validated_data.pop('billing_address_id', None)
@@ -322,7 +330,9 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
             if billing_address_id:
                 billing_address = Address.objects.filter(
                     id=billing_address_id,
-                    workspace=self.request.workspace
+                    workspace=self.request.workspace,
+                    object_id=serializer.instance.customer_id,
+                    content_type=ContentType.objects.get_for_model(Customer),
                 ).first()
                 if not billing_address:
                     raise serializers.ValidationError({
@@ -613,6 +623,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
     Other staff members can view but not create payments.
     """
     permission_classes = [IsAuthenticated, CanManagePayments]
+    http_method_names = ['get', 'post', 'head', 'options']
     
     def get_serializer_class(self):
         """Return appropriate serializer"""
@@ -658,7 +669,8 @@ class PaymentViewSet(viewsets.ModelViewSet):
         # Get required objects
         gateway = PaymentGateway.objects.get(
             id=serializer.validated_data['gateway_id'],
-            workspace=self.request.workspace
+            workspace=self.request.workspace,
+            is_active=True,
         )
         currency = Currency.objects.get(id=serializer.validated_data['currency_id'])
         
@@ -681,7 +693,11 @@ class PaymentViewSet(viewsets.ModelViewSet):
         if serializer.validated_data.get('payment_method_id'):
             from bfg.finance.models import PaymentMethod
             payment_method = PaymentMethod.objects.get(
-                id=serializer.validated_data['payment_method_id']
+                id=serializer.validated_data['payment_method_id'],
+                workspace=self.request.workspace,
+                customer=customer,
+                gateway=gateway,
+                is_active=True,
             )
         
         # Create payment using service
@@ -690,15 +706,21 @@ class PaymentViewSet(viewsets.ModelViewSet):
             user=self.request.user
         )
         
-        payment = service.create_payment(
-            customer=customer,
-            amount=serializer.validated_data['amount'],
-            currency=currency,
-            gateway=gateway,
-            order=order,
-            invoice=invoice,
-            payment_method=payment_method,
-        )
+        try:
+            payment = service.create_payment(
+                customer=customer,
+                amount=serializer.validated_data['amount'],
+                currency=currency,
+                gateway=gateway,
+                order=order,
+                invoice=invoice,
+                payment_method=payment_method,
+            )
+        except PaymentFailed as exc:
+            raise serializers.ValidationError({
+                'detail': exc.message,
+                'code': exc.code,
+            }) from exc
         
         serializer.instance = payment
         
@@ -724,7 +746,14 @@ class PaymentViewSet(viewsets.ModelViewSet):
         service = PaymentService(workspace=request.workspace, user=request.user)
         
         try:
-            payment = service.process_payment(payment)
+            manual_confirmation = payment.gateway.gateway_type in {
+                'bank_transfer', 'pay_in_store', 'custom',
+            }
+            payment = service.process_payment(
+                payment,
+                {'reference': request.data.get('reference', '')},
+                manual_confirmation=manual_confirmation,
+            )
             serializer = self.get_serializer(payment)
             return Response(serializer.data)
         except Exception as e:
@@ -772,7 +801,11 @@ class PaymentViewSet(viewsets.ModelViewSet):
         # Select gateway
         if gateway_id:
             try:
-                gateway = PaymentGateway.objects.get(id=gateway_id, workspace=request.workspace)
+                gateway = PaymentGateway.objects.get(
+                    id=gateway_id,
+                    workspace=request.workspace,
+                    is_active=True,
+                )
             except PaymentGateway.DoesNotExist:
                 return Response({'detail': 'Payment gateway not found'}, status=status.HTTP_404_NOT_FOUND)
         else:
@@ -794,42 +827,63 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
         # Payment method must belong to this customer
         try:
-            payment_method = PaymentMethod.objects.get(id=payment_method_id, customer=customer)
+            payment_method = PaymentMethod.objects.get(
+                id=payment_method_id,
+                workspace=request.workspace,
+                customer=customer,
+                gateway=gateway,
+                is_active=True,
+            )
         except PaymentMethod.DoesNotExist:
             return Response({'detail': 'Payment method not found'}, status=status.HTTP_404_NOT_FOUND)
 
         # Reuse existing pending payment for this order when possible (keeps invoice linkage)
-        payment = Payment.objects.filter(
-            workspace=request.workspace,
-            order=order,
-            customer=customer,
-            status='pending'
-        ).first()
-
-        if payment:
-            updated_fields = []
-            if payment.gateway_id != gateway.id:
-                payment.gateway = gateway
-                payment.set_gateway_snapshot(gateway)
-                updated_fields.extend(["gateway", "gateway_display_name", "gateway_type"])
-            if payment.payment_method_id != payment_method.id:
-                payment.payment_method = payment_method
-                updated_fields.append('payment_method')
-            if updated_fields:
-                payment.save(update_fields=updated_fields)
-        else:
-            # Attach invoice if one exists for this order
-            invoice = Invoice.objects.filter(workspace=request.workspace, order=order).order_by('-created_at').first()
-            service = PaymentService(workspace=request.workspace, user=request.user)
-            payment = service.create_payment(
+        with transaction.atomic():
+            order = Order.all_objects.select_for_update().get(
+                pk=order.pk,
+                workspace=request.workspace,
+            )
+            if order.payment_status == 'paid' or order.status in {'cancelled', 'refunded'}:
+                raise serializers.ValidationError({
+                    'order_id': 'This order is already paid or cannot accept payment.'
+                })
+            payment = Payment.all_objects.filter(
+                workspace=request.workspace,
+                order=order,
                 customer=customer,
+                gateway=gateway,
+                payment_method=payment_method,
                 amount=order.total,
                 currency=currency,
-                gateway=gateway,
+                status='pending',
+            ).first()
+            conflicting_payment = Payment.all_objects.filter(
+                workspace=request.workspace,
                 order=order,
-                invoice=invoice,
-                payment_method=payment_method
-            )
+                customer=customer,
+                status__in=['pending', 'processing'],
+            ).exclude(pk=getattr(payment, 'pk', None)).exists()
+            if conflicting_payment:
+                raise serializers.ValidationError({
+                    'order_id': 'This order already has a payment attempt with different payment details.'
+                })
+            if not payment:
+                invoice = Invoice.objects.filter(
+                    workspace=request.workspace,
+                    order=order,
+                ).order_by('-created_at').first()
+                payment = PaymentService(
+                    workspace=request.workspace,
+                    user=request.user,
+                ).create_payment(
+                    customer=customer,
+                    amount=order.total,
+                    currency=currency,
+                    gateway=gateway,
+                    order=order,
+                    invoice=invoice,
+                    payment_method=payment_method,
+                )
 
         # Generate gateway payload via plugin system (returns client_secret)
         from bfg.finance.gateways.loader import get_gateway_plugin
@@ -850,7 +904,8 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 'payment_id': str(payment.id),
                 'payment_number': payment.payment_number,
             },
-            save_card=save_card
+            save_card=save_card,
+            idempotency_key=f'bfg-payment-intent-{payment.pk}',
         )
 
         payment_intent_id = payment_intent.get('payment_intent_id') or payment_intent.get('id')
@@ -872,9 +927,19 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
 
 class RefundViewSet(viewsets.ModelViewSet):
-    """Refund ViewSet (Staff only)"""
+    """Immutable refund ledger; finance users can read and request refunds."""
     serializer_class = RefundSerializer
-    permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+    permission_classes = [IsAuthenticated, CanManagePayments]
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_permissions(self):
+        """Refund issuance requires payment update permission, not create permission."""
+        classes = (
+            [IsAuthenticated, CanProcessRefunds]
+            if self.action == 'create'
+            else self.permission_classes
+        )
+        return [permission_class() for permission_class in classes]
     
     def get_queryset(self):
         return Refund.objects.filter(
@@ -882,6 +947,21 @@ class RefundViewSet(viewsets.ModelViewSet):
         ).select_related(
             'payment__customer', 'payment__currency'
         ).order_by('-created_at')
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        refund = serializer.instance
+        replayed = getattr(refund, '_idempotent_replay', False)
+        response_status = status.HTTP_200_OK if replayed else status.HTTP_201_CREATED
+        if replayed and refund.status == 'failed':
+            response_status = status.HTTP_409_CONFLICT
+        return Response(
+            self.get_serializer(refund).data,
+            status=response_status,
+            headers=self.get_success_headers(serializer.data),
+        )
     
     def perform_create(self, serializer):
         """Create refund using service for validation"""
@@ -892,6 +972,10 @@ class RefundViewSet(viewsets.ModelViewSet):
         payment = serializer.validated_data['payment']
         amount = Decimal(str(serializer.validated_data['amount']))
         reason = serializer.validated_data.get('reason', '')
+        idempotency_key = (self.request.headers.get('Idempotency-Key') or '').strip()
+        if not idempotency_key:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'idempotency_key': 'Idempotency-Key header is required.'})
         
         # Use service to create refund (validates amount doesn't exceed payment)
         service = PaymentService(
@@ -903,22 +987,22 @@ class RefundViewSet(viewsets.ModelViewSet):
             refund = service.create_refund(
                 payment=payment,
                 amount=amount,
-                reason=reason
+                reason=reason,
+                idempotency_key=idempotency_key,
             )
             serializer.instance = refund
             
-            # Audit log
-            audit = AuditService(workspace=self.request.workspace, user=self.request.user)
-            description = f"Created refund of {refund.amount} {payment.currency.code} for Payment #{payment.id}"
-            if reason:
-                description += f" - Reason: {reason}"
-            
-            audit.log_create(
-                refund,
-                description=description,
-                ip_address=self.request.META.get('REMOTE_ADDR'),
-                user_agent=self.request.META.get('HTTP_USER_AGENT', '')
-            )
+            if not getattr(refund, '_idempotent_replay', False):
+                audit = AuditService(workspace=self.request.workspace, user=self.request.user)
+                description = f"Created refund of {refund.amount} {payment.currency.code} for Payment #{payment.id}"
+                if reason:
+                    description += f" - Reason: {reason}"
+                audit.log_create(
+                    refund,
+                    description=description,
+                    ip_address=self.request.META.get('REMOTE_ADDR'),
+                    user_agent=self.request.META.get('HTTP_USER_AGENT', '')
+                )
         except Exception as e:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': str(e)})

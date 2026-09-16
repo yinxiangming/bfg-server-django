@@ -114,22 +114,20 @@ def imported(workspace, rates_file):
 
 def client_for(workspace):
     client = APIClient()
-    client.credentials(
-        HTTP_X_WORKSPACE_ID=str(workspace.id),
-        HTTP_X_BFG_CART_SESSION=CART_KEY,
-    )
+    client.credentials(HTTP_X_WORKSPACE_ID=str(workspace.id))
     return client
 
 
 def basket(workspace, product, quantity):
     """Put `quantity` of the $5.00 product in a cart and return the client holding it."""
-    response = client_for(workspace).post(
+    client = client_for(workspace)
+    response = client.post(
         f'{CART_URL}add_item/',
         {'product': product.id, 'quantity': quantity},
         format='json',
     )
     assert response.status_code in (200, 201), response.data
-    return client_for(workspace)
+    return client
 
 
 def preview(workspace, product, quantity, service):

@@ -1,7 +1,7 @@
 """
 Media-related ViewSets
 """
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -11,6 +11,7 @@ from django.db import models
 import os
 import shutil
 import logging
+from pathlib import Path
 
 from django.contrib.contenttypes.models import ContentType
 from bfg.core.permissions import IsWorkspaceStaff
@@ -18,6 +19,26 @@ from bfg.common.models import Media, MediaLink
 from bfg.shop.models import Product, ProductVariant
 from bfg.common.serializers import MediaSerializer, MediaLinkSerializer
 from django.conf import settings
+
+
+def _validated_folder_name(value):
+    """Accept one directory name only; never a path supplied by the caller."""
+    folder = (value or '').strip()
+    if not folder:
+        raise ValueError('Folder name is required')
+    if folder in {'.', '..'} or '/' in folder or '\\' in folder or '\x00' in folder:
+        raise ValueError('Folder name must not contain path separators')
+    return folder
+
+
+def _workspace_folder_path(workspace_id, folder):
+    """Resolve a validated child directory below this workspace's media root."""
+    folder = _validated_folder_name(folder)
+    base_path = (Path(settings.MEDIA_ROOT) / 'media' / str(workspace_id)).resolve()
+    folder_path = (base_path / folder).resolve()
+    if folder_path.parent != base_path:
+        raise ValueError('Invalid folder name')
+    return folder, folder_path
 
 
 class MediaPagination(PageNumberPagination):
@@ -54,7 +75,10 @@ class MediaViewSet(viewsets.ModelViewSet):
         
         folder = self.request.query_params.get('folder') or self.request.query_params.get('dir')
         if folder:
-            folder = folder.strip('/')
+            try:
+                folder = _validated_folder_name(folder)
+            except ValueError:
+                return queryset.none()
             workspace_id = self.request.workspace.id
             folder_path = f'media/{workspace_id}/{folder}/'
             queryset = queryset.filter(file__startswith=folder_path)
@@ -63,11 +87,13 @@ class MediaViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Set workspace and folder before saving"""
-        instance = serializer.save(workspace=self.request.workspace)
         folder = self.request.data.get('folder', '').strip()
         if folder:
-            instance._upload_folder = folder
-            instance.save()
+            try:
+                _validated_folder_name(folder)
+            except ValueError as exc:
+                raise serializers.ValidationError({'folder': str(exc)})
+        serializer.save(workspace=self.request.workspace)
     
     @action(detail=False, methods=['get'])
     def folders(self, request):
@@ -87,12 +113,11 @@ class MediaViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def create_folder(self, request):
         """Create a new folder physically"""
-        folder = request.data.get('folder', '').strip()
-        if not folder:
-            return Response({'detail': 'folder is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
         workspace_id = request.workspace.id
-        folder_path = os.path.join(settings.MEDIA_ROOT, 'media', str(workspace_id), folder)
+        try:
+            folder, folder_path = _workspace_folder_path(workspace_id, request.data.get('folder'))
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
             os.makedirs(folder_path, exist_ok=True)
@@ -103,12 +128,11 @@ class MediaViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['delete'])
     def delete_folder(self, request):
         """Delete a folder and all its contents"""
-        folder = request.query_params.get('folder', '').strip()
-        if not folder:
-            return Response({'detail': 'folder is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
         workspace_id = request.workspace.id
-        folder_path = os.path.join(settings.MEDIA_ROOT, 'media', str(workspace_id), folder)
+        try:
+            folder, folder_path = _workspace_folder_path(workspace_id, request.query_params.get('folder'))
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
         if not os.path.exists(folder_path):
             return Response({'detail': 'Folder not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -180,7 +204,10 @@ class ProductMediaViewSet(viewsets.ModelViewSet):
 
         folder = self.request.query_params.get('folder') or self.request.query_params.get('dir')
         if folder:
-            folder = folder.strip('/')
+            try:
+                folder = _validated_folder_name(folder)
+            except ValueError:
+                return queryset.none()
             workspace_id = self.request.workspace.id
             folder_path = f'media/{workspace_id}/{folder}/'
             queryset = queryset.filter(media__file__startswith=folder_path)
@@ -261,7 +288,10 @@ class ProductMediaViewSet(viewsets.ModelViewSet):
             except Media.DoesNotExist:
                 return Response({'detail': 'Media not found'}, status=status.HTTP_404_NOT_FOUND)
         else:
-            folder = request.data.get('folder', 'products').strip()
+            try:
+                folder = _validated_folder_name(request.data.get('folder', 'products'))
+            except ValueError as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
             media_data = {
                 'workspace': request.workspace,
                 'file': request.data.get('file'),
@@ -313,29 +343,11 @@ class ProductMediaViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], parser_classes=[JSONParser])
     def create_folder(self, request):
         """Create a new folder physically."""
-        folder = request.data.get('folder', '').strip()
-        
-        if not folder:
-            return Response(
-                {'detail': 'Folder name is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if folder.startswith('/') or folder.endswith('/'):
-            return Response(
-                {'detail': 'Folder name should not start or end with slash'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if '/' in folder or '\\' in folder:
-            return Response(
-                {'detail': 'Folder name should not contain path separators'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
         workspace_id = request.workspace.id
-        base_path = os.path.join(settings.MEDIA_ROOT, 'media', str(workspace_id))
-        folder_path = os.path.join(base_path, folder)
+        try:
+            folder, folder_path = _workspace_folder_path(workspace_id, request.data.get('folder'))
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
             os.makedirs(folder_path, exist_ok=True)
@@ -352,15 +364,11 @@ class ProductMediaViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['delete'])
     def delete_folder(self, request):
         """Delete a folder and all media files in it."""
-        folder = request.query_params.get('folder', '').strip()
-        
-        if not folder:
-            return Response(
-                {'detail': 'Folder name is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
         workspace_id = request.workspace.id
+        try:
+            folder, folder_path = _workspace_folder_path(workspace_id, request.query_params.get('folder'))
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         folder_path_prefix = f'media/{workspace_id}/{folder}/'
         product_content_type = ContentType.objects.get_for_model(Product)
         media_links = MediaLink.objects.filter(
@@ -379,9 +387,6 @@ class ProductMediaViewSet(viewsets.ModelViewSet):
                     pass
             media_link.media.delete()  # Delete Media object (this will cascade delete MediaLink)
         
-        base_path = os.path.join(settings.MEDIA_ROOT, 'media', str(workspace_id))
-        folder_path = os.path.join(base_path, folder)
-        
         try:
             if os.path.exists(folder_path) and os.path.isdir(folder_path):
                 shutil.rmtree(folder_path)
@@ -399,4 +404,3 @@ class ProductMediaViewSet(viewsets.ModelViewSet):
             'deleted_count': count,
             'message': message
         })
-

@@ -504,12 +504,41 @@ if _DJANGO_CACHE_URL:
 BFG_CACHE_TTL = int(os.environ.get('BFG_CACHE_TTL', '300') or '300')
 
 # Celery
+from celery.schedules import crontab  # noqa: E402
+
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+
+# The billing month, for a deployment running Celery beat. Times are UTC, as
+# CELERY_TIMEZONE above says. Nothing here runs without a beat process — every one
+# of these is also a management command, and a deployment without a scheduler runs
+# them from cron or by hand.
+#
+# Order matters once a month: rates are refreshed before bills are issued, because
+# a bill converts at the rate on file and a refresh that failed leaves yesterday's.
+# Everything here is safe to run twice.
+CELERY_BEAT_SCHEDULE = {
+    'close-entitlement-periods': {
+        'task': 'bfg.platform.tasks.close_entitlement_periods',
+        'schedule': crontab(hour=1, minute=10),
+    },
+    'refresh-exchange-rates': {
+        'task': 'bfg.platform.tasks.refresh_exchange_rates',
+        'schedule': crontab(hour=1, minute=20),
+    },
+    'issue-monthly-bills': {
+        'task': 'bfg.platform.tasks.issue_monthly_bills',
+        'schedule': crontab(day_of_month=1, hour=2, minute=0),
+    },
+    'archive-unused-extensions': {
+        'task': 'bfg.common.tasks.archive_unused_extensions',
+        'schedule': crontab(hour=3, minute=0),
+    },
+}
 
 # Email
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')

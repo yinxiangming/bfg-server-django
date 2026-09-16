@@ -26,13 +26,28 @@ switch off, so it is not gated on one, but it still counts against the cap.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+import time
+from typing import Dict, Optional
 
 from bfg.common.extensions import is_available, registry
 from bfg.platform.models.metering import UsageRecord
-from bfg.platform.services import usage
+from bfg.platform.services import pricing, usage
 
 logger = logging.getLogger(__name__)
+
+# How often one unpriced meter is worth mentioning. A meter is wired up before it
+# is priced every time something new is rolled out, and until the price row exists
+# every single call would otherwise write a line with a stack trace in it. An hour
+# is often enough that the gap shows up in any hour's logs someone reads, and rare
+# enough that it cannot drown anything out.
+UNPRICED_LOG_INTERVAL_SECONDS = 3600
+# Per process, not shared: this is on the path of every paid call, and coordinating
+# through a cache to save log lines would be paying in the thing that matters to
+# save the thing that does not. A deployment running four workers therefore says it
+# four times an hour, which is still four lines rather than four thousand. Plain
+# dictionary writes, which are atomic enough for a counter whose worst failure is
+# one extra line.
+_unpriced_logged_at: Dict[str, float] = {}
 
 
 def extension_for_meter(meter_name: str) -> Optional[str]:
@@ -61,6 +76,26 @@ def allowed(workspace, meter_name: str) -> bool:
     return usage.may_meter(workspace)
 
 
+def _note_unpriced(meter_name: str) -> None:
+    """Say that ``meter_name`` has no price, at most once an hour per process.
+
+    A warning rather than an error with a stack trace: nothing is broken in the
+    code, a price row is missing, and the traceback would be the same one every
+    time. What is worth knowing is which meter and that it is still happening,
+    which is what the line says.
+    """
+    now = time.monotonic()
+    last = _unpriced_logged_at.get(meter_name)
+    if last is not None and now - last < UNPRICED_LOG_INTERVAL_SECONDS:
+        return
+    _unpriced_logged_at[meter_name] = now
+    logger.warning(
+        "Meter %s has no price, so nothing is being billed for it; "
+        "price it with the meter_prices command. Reported at most every %s seconds.",
+        meter_name, UNPRICED_LOG_INTERVAL_SECONDS,
+    )
+
+
 def meter(workspace, meter_name: str, quantity=1) -> Optional[UsageRecord]:
     """Record that ``workspace`` made a call metered as ``meter_name``.
 
@@ -69,9 +104,17 @@ def meter(workspace, meter_name: str, quantity=1) -> Optional[UsageRecord]:
     be recorded — an unpriced meter, or the database being unavailable. Those are
     logged and swallowed: the caller has already done its work, and failing its
     request now would not unspend the money.
+
+    A meter nobody has priced yet is the one failure that is expected: metering is
+    wired up before the price row exists every time something is rolled out. It is
+    logged as a warning, once an hour per meter, so that a gap in pricing is
+    visible without every call writing a stack trace. Everything else keeps its.
     """
     try:
         return usage.record_usage(workspace, meter_name, quantity)
+    except pricing.MeterNotPriced:
+        _note_unpriced(meter_name)
+        return None
     except Exception:
         logger.exception(
             "Could not record %s of meter %s for workspace %s",

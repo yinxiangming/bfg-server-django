@@ -16,6 +16,7 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 
 from bfg.core.exceptions import BFGException
@@ -32,6 +33,13 @@ class MeterNotPriced(BFGException):
 
     default_message = "This meter has no price"
     default_code = "meter_not_priced"
+
+
+class InvalidMeterPrice(BFGException):
+    """A price the columns cannot hold"""
+
+    default_message = "Invalid meter price"
+    default_code = "invalid_meter_price"
 
 
 def price_for(meter: str, at=None) -> MeterPrice:
@@ -52,6 +60,71 @@ def price_for(meter: str, at=None) -> MeterPrice:
             f"No price for meter {meter!r} was in force at {moment.isoformat()}.",
             details={"meter": meter, "at": moment.isoformat()},
         )
+    return price
+
+
+def add_price(
+    meter: str,
+    *,
+    vendor_cost,
+    unit_size,
+    margin=None,
+    effective_from=None,
+) -> MeterPrice:
+    """Price ``meter`` from ``effective_from`` on (default now), and return the row.
+
+    The only way a price is written. Prices are never edited: a vendor's new rate
+    is another row with a later moment, so a bill already calculated can still be
+    explained by the row it was calculated from. Nothing here updates or deletes,
+    and neither should any caller.
+
+    A row dated in the past does not reprice usage already recorded — every usage
+    row keeps the price it was calculated with — but it does decide what usage
+    recorded from now on for a day back then will cost, which is how a rate the
+    vendor applied from the first of the month is entered after the fact. A row
+    dated behind one that already exists changes nothing today; ``price_for`` says
+    which row is in force.
+
+    Raises ``InvalidMeterPrice``, carrying the column that refused it in
+    ``details``, for anything the columns cannot hold — and for a cost or a
+    margin below zero, which they would hold and nothing should: a negative price
+    pays a workspace to use the deployment, and it is a mistyped minus far more
+    often than it is a decision.
+    """
+    for field, value in (("vendor_cost", vendor_cost), ("margin", margin)):
+        if value is None:
+            continue
+        try:
+            number = value if isinstance(value, Decimal) else Decimal(str(value))
+        except (ArithmeticError, TypeError, ValueError):
+            # Not a number at all; the column says so in better words below.
+            continue
+        if number.is_finite() and number < 0:
+            raise InvalidMeterPrice(
+                f"{field}: this cannot be negative.",
+                details={"field": field, "fields": {field: ["This cannot be negative."]}},
+            )
+
+    price = MeterPrice(
+        meter=(meter or "").strip(),
+        vendor_cost=vendor_cost,
+        unit_size=unit_size,
+        margin=margin,
+        effective_from=effective_from or timezone.now(),
+    )
+    try:
+        # The columns' own limits rather than a second copy of them here, so that a
+        # number too big for one is refused in words instead of failing, or quietly
+        # rounding, in the database.
+        price.full_clean()
+    except DjangoValidationError as invalid:
+        problems = invalid.message_dict
+        field = next(iter(problems))
+        raise InvalidMeterPrice(
+            " ".join(f"{name}: {' '.join(messages)}" for name, messages in problems.items()),
+            details={"field": field, "fields": {name: list(messages) for name, messages in problems.items()}},
+        ) from None
+    price.save()
     return price
 
 

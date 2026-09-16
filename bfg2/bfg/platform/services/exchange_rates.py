@@ -43,6 +43,13 @@ class ExchangeRateNotFound(BFGException):
     default_code = "exchange_rate_not_found"
 
 
+class InvalidExchangeRate(BFGException):
+    """A rate that cannot be stored as asked"""
+
+    default_message = "Invalid exchange rate"
+    default_code = "invalid_exchange_rate"
+
+
 def _as_day(value) -> date:
     """``value`` as a date; ``None`` is today, and a datetime is the day it falls on."""
     if value is None:
@@ -173,12 +180,98 @@ def refresh_rates(base: str = "USD", symbols: Optional[Iterable[str]] = None) ->
             from_currency=from_currency,
             to_currency=to_currency,
             effective_date=day,
-            defaults={"rate": rate},
+            # A day somebody had filled in by hand is replaced by the published
+            # rate, and stops saying it was typed: the number the bank set is the
+            # better answer, and once it has arrived the stand-in is no longer
+            # what anything was billed at.
+            defaults={"rate": rate, "source": ExchangeRate.SOURCE_FEED, "entered_by": None},
         )
         written += 1
 
     logger.info("Stored %s exchange rates against %s for %s.", written, base, day)
     return written
+
+
+def set_rate(from_code: str, to_code: str, rate, *, on=None, user=None):
+    """Store a rate somebody entered by hand, and return the row.
+
+    The way out of a refresh that failed: the feed is the only thing that writes
+    rates, so a day it could not be read for is a day nothing can be billed in
+    that currency. An operator enters the rate the bank published — or one the
+    deployment is prepared to answer for — and the row records that it was typed
+    rather than read, because an invoice has to be explainable long afterwards.
+
+    ``on`` is the day the rate applies to, today by default; a day already stored
+    is overwritten rather than duplicated, which is what correcting a typo looks
+    like. A later refresh that reaches the feed replaces it with the published
+    number, so this is a stand-in and not an override that sticks.
+
+    Raises ``InvalidExchangeRate`` for a rate that is not a positive number, for
+    a currency code that is not one, and for a pair whose two sides are the same
+    currency — converting a currency to itself needs no row and reading one back
+    would never use it.
+    """
+    from bfg.finance.models import ExchangeRate
+
+    from_code = (from_code or "").strip().upper()
+    to_code = (to_code or "").strip().upper()
+    for code in (from_code, to_code):
+        # Three letters, as ISO 4217 codes are and as the column holds.
+        if not (len(code) == 3 and code.isalpha()):
+            raise InvalidExchangeRate(
+                f"{code!r} is not a currency code.", details={"currency": code}
+            )
+    if from_code == to_code:
+        raise InvalidExchangeRate(
+            f"{from_code} is already {to_code}; a rate between them would never be read.",
+            details={"from": from_code, "to": to_code},
+        )
+
+    try:
+        amount = rate if isinstance(rate, Decimal) else Decimal(str(rate))
+    except (ArithmeticError, TypeError, ValueError):
+        raise InvalidExchangeRate(
+            f"{rate!r} is not a rate.", details={"rate": str(rate)}
+        ) from None
+    if not amount.is_finite() or amount <= 0:
+        raise InvalidExchangeRate(
+            "A rate is greater than zero.", details={"rate": str(rate)}
+        )
+    amount = amount.quantize(RATE_PRECISION, rounding=ROUND_HALF_UP)
+    if amount <= 0:
+        # Small enough to round away to nothing, which would divide a bill by zero.
+        raise InvalidExchangeRate(
+            f"A rate is written to {-RATE_PRECISION.as_tuple().exponent} decimal places, "
+            f"and this one rounds to nothing.",
+            details={"rate": str(rate)},
+        )
+
+    day = _as_day(on)
+    from_currency = _currency(from_code)
+    to_currency = _currency(to_code)
+    missing = [
+        code for code, row in ((from_code, from_currency), (to_code, to_currency)) if row is None
+    ]
+    if missing:
+        raise InvalidExchangeRate(
+            f"This deployment has no currency {', '.join(missing)}.",
+            details={"currency": missing[0]},
+        )
+
+    row, _ = ExchangeRate.objects.update_or_create(
+        from_currency=from_currency,
+        to_currency=to_currency,
+        effective_date=day,
+        defaults={
+            "rate": amount,
+            "source": ExchangeRate.SOURCE_MANUAL,
+            "entered_by": user if getattr(user, "is_authenticated", False) else None,
+        },
+    )
+    logger.info(
+        "%s/%s for %s was entered by hand as %s.", from_code, to_code, day.isoformat(), amount
+    )
+    return row
 
 
 def convert(amount, from_code: str, to_code: str, on=None) -> Decimal:

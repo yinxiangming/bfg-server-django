@@ -27,9 +27,16 @@ Unset, there are no packs and nothing here does anything.
 **Applying a pack only ever switches things on.** It activates the keys the
 workspace does not have yet and leaves everything else alone — including
 extensions the pack does not mention, which a workspace may well have switched on
-deliberately. Nothing here deactivates anything, and nothing here grants an
-entitlement: a key the workspace is not entitled to is reported as such and
-skipped, so applying a pack can be offered to somebody who cannot buy.
+deliberately. Nothing here deactivates anything.
+
+A key the workspace is not entitled to stops the pack at that key and no further:
+it is reported with the reason and the rest of the pack still applies, so a pack
+can be offered to somebody who has not bought everything in it. A deployment that
+wants some of those obtained rather than skipped — an add-on that costs nothing is
+the usual case, since nobody is being sold anything — names a callable in
+``BFG_EXTENSION_PACK_OBTAIN``: ``(workspace, manifest) -> bool``, returning whether
+the workspace may now have it. It is asked once per refused key, and only for keys
+a pack named. Unset, nothing is obtained and every unentitled key is skipped.
 """
 
 from __future__ import annotations
@@ -42,6 +49,10 @@ from django.utils.module_loading import import_string
 
 from bfg.common.extensions import registry
 from bfg.common.extensions.services import ExtensionError, activate
+
+# The code an activation refuses with when the workspace may not have the key at
+# all, as opposed to the key being unusable for some other reason.
+NOT_ENTITLED = 'not_entitled'
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +161,16 @@ def apply_pack(workspace, key: str, *, user=None) -> List[Dict[str, str]]:
         try:
             activate(workspace, extension_key, user=user)
         except ExtensionError as error:
+            if error.code == NOT_ENTITLED and _obtain(workspace, extension_key):
+                # Obtaining one switches it on where the deployment does that, so
+                # ask again rather than assume either way.
+                try:
+                    activate(workspace, extension_key, user=user)
+                except ExtensionError as second:
+                    error = second
+                else:
+                    applied.append({'key': extension_key, 'outcome': OUTCOME_ACTIVATED})
+                    continue
             applied.append({
                 'key': extension_key,
                 'outcome': OUTCOME_SKIPPED,
@@ -159,3 +180,21 @@ def apply_pack(workspace, key: str, *, user=None) -> List[Dict[str, str]]:
             continue
         applied.append({'key': extension_key, 'outcome': OUTCOME_ACTIVATED})
     return applied
+
+
+def _obtain(workspace, key: str) -> bool:
+    """Ask the deployment whether ``workspace`` may now have ``key``, free of charge.
+
+    Whatever the deployment names here is doing something that costs somebody
+    something — writing an entitlement, at least — so a failure in it is worth
+    seeing, and is not worth failing a pack over: it means the key is skipped, the
+    same as if the deployment had said no.
+    """
+    path = getattr(settings, 'BFG_EXTENSION_PACK_OBTAIN', '')
+    if not path:
+        return False
+    try:
+        return bool(import_string(path)(workspace, registry.get_manifest(key)))
+    except Exception:
+        logger.exception('Could not obtain %s for workspace %s while applying a pack', key, workspace)
+        return False

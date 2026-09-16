@@ -43,6 +43,16 @@ PUBLIC_SURFACES = frozenset({SURFACE_STOREFRONT, SURFACE_ACCOUNT, SURFACE_MINIPR
 _KEY_PATTERN = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 
 
+def is_extension_key(value) -> bool:
+    """Whether ``value`` is shaped like an extension key.
+
+    Public because a key turns up outside a manifest — written into an identifier
+    and read back out of one — and whatever reads it there has to be able to tell
+    a key from something that merely looks like one.
+    """
+    return bool(_KEY_PATTERN.match(value or ''))
+
+
 @dataclass(frozen=True)
 class Prerequisite:
     """A condition the deployment or workspace must meet before activation.
@@ -112,7 +122,7 @@ class ExtensionManifest:
     app_label: str = ''
 
     def __post_init__(self):
-        if not _KEY_PATTERN.match(self.key or ''):
+        if not is_extension_key(self.key):
             raise ValueError(
                 f'Extension key {self.key!r} must be lowercase letters, digits and underscores, '
                 f'starting with a letter.'

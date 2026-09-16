@@ -7,6 +7,7 @@ GET   /api/v1/platform/console/workspaces/{id}/                             also
 GET   /api/v1/platform/console/workspaces/{id}/usage/                       ?month=YYYY-MM, this month by default
 GET   /api/v1/platform/console/workspaces/{id}/invoices/                    the platform bills, newest first
 POST  /api/v1/platform/console/workspaces/{id}/invoices/{number}/pay/       optional body: {"gateway": <id>}
+POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/acquire/    obtain an add-on, or be billed for it
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/activate/   optional body: {"config": {...}}
 POST  /api/v1/platform/console/workspaces/{id}/extensions/{key}/deactivate/
 PATCH /api/v1/platform/console/workspaces/{id}/extensions/{key}/config/     body: {"config": {...}}
@@ -55,9 +56,9 @@ from rest_framework.exceptions import APIException, NotFound, PermissionDenied, 
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
-from bfg.common.extensions import endpoints
+from bfg.common.extensions import endpoints, services as extension_services
 from bfg.core.read_only import exempt_from_read_only
-from bfg.platform.services import bill_payment, console_billing
+from bfg.platform.services import acquisitions, bill_payment, console_billing
 from bfg.platform.services.billing import PlatformWorkspaceMissing
 from bfg.platform.services.console_service import ConsoleViewer, console_workspaces, workspace_entries
 from bfg.platform.utils import bound_workspace
@@ -239,6 +240,49 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
             raise ValidationError(
                 {'code': bill_payment.PAYMENT_GATEWAY_NOT_FOUND, 'detail': 'gateway must be an id.'}
             ) from None
+    @action(detail=True, methods=['post'], url_path=f'{_EXTENSION_PATH}/acquire')
+    def acquire_extension(self, request, pk=None, key=None):
+        """Obtain an add-on for the workspace, or bill it for one.
+
+        Who may ask is who may switch an extension on: a platform administrator, or
+        the owner of a workspace that is neither suspended nor inactive.
+
+        The answer always carries ``entitled``, ``invoice`` and ``extension``. An
+        add-on the deployment prices at nothing is entitled and switched on at once,
+        so ``entitled`` is true and ``invoice`` is null. A priced one is invoiced
+        and nothing else is written until the money arrives: ``entitled`` is false
+        and ``invoice`` is the bill, in the shape the invoice list shows it, with
+        ``issued`` saying whether it was written now or is one the workspace was
+        already holding unpaid. ``extension`` is the extension as it now stands,
+        which for a priced add-on is as it stood before.
+
+        Refused with 400 and a ``code`` when the workspace already has the add-on,
+        when the extension is part of the base plan rather than something sold
+        separately, when the deployment has never priced it, and when a bill cannot
+        be written for want of an owner, a currency or an exchange rate; with 404
+        for a key no app declares. See ``services.acquisitions``.
+        """
+        workspace = self._workspace_to_change()
+        try:
+            with bound_workspace(workspace):
+                acquired = acquisitions.acquire(workspace, key, user=request.user)
+        except extension_services.ExtensionError as refused:
+            return endpoints.error_response(refused)
+        except acquisitions.AcquisitionRefused as refused:
+            raise ValidationError({'code': refused.code, 'detail': refused.message}) from None
+        with bound_workspace(workspace):
+            state = endpoints.extension_state(
+                workspace, key, viewer_is_platform_admin=self.viewer.is_platform_admin
+            )
+        return Response({
+            'entitled': acquired.entitlement is not None,
+            'invoice': (
+                {**console_billing.invoice_entry(acquired.invoice), 'issued': acquired.invoice_is_new}
+                if acquired.invoice is not None
+                else None
+            ),
+            'extension': state,
+        })
 
     @action(detail=True, methods=['post'], url_path=f'{_EXTENSION_PATH}/activate')
     def activate_extension(self, request, pk=None, key=None):

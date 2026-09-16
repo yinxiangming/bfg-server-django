@@ -6,6 +6,16 @@ The console lists every extension a workspace can switch on or off, with its sta
 configuration, and switches or configures one; see ``bfg.platform.views.console_views``.
 Saving a configuration is not recorded against anyone.
 
+``entitled`` and ``available`` are two different questions, and a console needs both.
+``entitled`` is whether the workspace may use the extension at all — for a deployment
+that sells add-ons, whether it has obtained this one — and ``available`` is whether it
+is live right now, which additionally wants the extension switched on and everything it
+requires available. An add-on nobody has obtained is therefore ``entitled: false``, and
+one that was obtained and then switched off is ``entitled: true, available: false``:
+without the first field a console could not tell "buy this" from "switch this back on".
+Deployments that sell nothing (no ``BFG_EXTENSION_ENTITLEMENT_CHECK``) have every
+extension entitled, which is the same answer they have always given.
+
 ``status_changed_by`` is whoever last switched an extension on or off, and what it says
 depends on who is asking. A platform administrator is told ``{'id', 'username', 'email'}``.
 Anyone else, a workspace owner, is told ``{'id', 'username'}`` when the changer is active
@@ -46,13 +56,50 @@ def list_extensions(workspace, *, viewer_is_platform_admin=False):
         record.key: record
         for record in WorkspaceExtension.all_objects.filter(workspace=workspace).select_related('status_changed_by')
     }
-    available = services.compute_available_keys(workspace)
+    # Once for the whole list rather than once a row: the deployment's entitlement check
+    # may be a query per extension, and ``available`` is worked out from the same answers.
+    entitled = services.compute_entitled_keys(workspace)
+    available = services.compute_available_keys(workspace, entitled=entitled)
     describe_changer = _changer_describer(workspace, records.values(), viewer_is_platform_admin)
     return [
-        _serialize_extension(manifest, records.get(manifest.key), available, workspace, describe_changer)
+        _serialize_extension(
+            manifest, records.get(manifest.key), available, entitled, workspace, describe_changer
+        )
         for manifest in registry.all_manifests()
         if manifest.is_activatable
     ]
+
+
+def extension_state(workspace, key, record=None, *, viewer_is_platform_admin=False):
+    """One extension's state and configuration in ``workspace``, as the console shows it.
+
+    ``record`` is the workspace's ``WorkspaceExtension`` when the caller has it in hand,
+    such as one it has just changed; otherwise it is read here. Public because the state
+    of an extension is worth reporting after something other than a state change — after
+    a workspace has obtained the add-on, for one.
+    """
+    from bfg.common.models import WorkspaceExtension
+
+    if record is None:
+        record = (
+            WorkspaceExtension.all_objects.filter(workspace=workspace, key=key)
+            .select_related('status_changed_by')
+            .first()
+        )
+    entitled = services.compute_entitled_keys(workspace)
+    available = services.compute_available_keys(workspace, entitled=entitled)
+    describe_changer = _changer_describer(workspace, [record], viewer_is_platform_admin)
+    return _serialize_extension(
+        registry.get_manifest(key), record, available, entitled, workspace, describe_changer
+    )
+
+
+def error_response(exc):
+    """The answer to a change an extension refused: 404 for a key no app declares, 400 otherwise."""
+    http_status = (
+        status.HTTP_404_NOT_FOUND if exc.code == 'unknown_extension' else status.HTTP_400_BAD_REQUEST
+    )
+    return Response({'code': exc.code, 'detail': exc.message, **exc.details}, status=http_status)
 
 
 def activate(workspace, key, *, user, data, viewer_is_platform_admin=False):
@@ -86,19 +133,13 @@ def update_config(workspace, key, *, data, viewer_is_platform_admin=False):
 
 
 def _respond(workspace, key, change, viewer_is_platform_admin):
-    # The extension once ``change`` is made, or why it was refused: 404 for a key no
-    # app declares, 400 for anything else.
+    # The extension once ``change`` is made, or why it was refused.
     try:
         record = change()
     except services.ExtensionError as exc:
-        http_status = (
-            status.HTTP_404_NOT_FOUND if exc.code == 'unknown_extension' else status.HTTP_400_BAD_REQUEST
-        )
-        return Response({'code': exc.code, 'detail': exc.message, **exc.details}, status=http_status)
-    available = services.compute_available_keys(workspace)
-    describe_changer = _changer_describer(workspace, [record], viewer_is_platform_admin)
+        return error_response(exc)
     return Response(
-        _serialize_extension(registry.get_manifest(key), record, available, workspace, describe_changer)
+        extension_state(workspace, key, record, viewer_is_platform_admin=viewer_is_platform_admin)
     )
 
 
@@ -140,10 +181,11 @@ def _insiders(workspace, user_ids):
     return insiders
 
 
-def _serialize_extension(manifest, record, available, workspace, describe_changer):
+def _serialize_extension(manifest, record, available, entitled, workspace, describe_changer):
     # ``record`` is the workspace's WorkspaceExtension for the extension, None when the
-    # workspace never used it; ``available`` is what services.compute_available_keys
-    # returned for the workspace.
+    # workspace never used it; ``available`` and ``entitled`` are what
+    # services.compute_available_keys and services.compute_entitled_keys returned for the
+    # workspace.
     from bfg.common.models import WorkspaceExtension
 
     return {
@@ -165,6 +207,7 @@ def _serialize_extension(manifest, record, available, workspace, describe_change
         'status_changed_by': describe_changer(record.status_changed_by) if record else None,
         'activated_at': record.activated_at if record else None,
         'available': manifest.key in available,
+        'entitled': manifest.key in entitled,
         'unmet_prerequisites': _unmet_prerequisites(manifest, workspace),
         'config': record.config if record else {},
     }

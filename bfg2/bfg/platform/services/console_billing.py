@@ -284,10 +284,21 @@ def invoice_history(workspace, limit: int = INVOICE_LIMIT) -> list:
         # order rather than whichever one the database reaches first.
         .order_by("-issue_date", "-id")[:limit]
     )
-    return [_invoice_entry(invoice, today) for invoice in invoices]
+    return [invoice_entry(invoice, today) for invoice in invoices]
 
 
-def _invoice_entry(invoice, today: date) -> dict:
+def invoice_entry(invoice, today: Optional[date] = None) -> dict:
+    """One platform bill, as the console shows it in the list.
+
+    Public so that whatever has just issued a bill can hand the console the same
+    shape it will see the bill in again later, rather than a second one of its own.
+    ``today`` is what "past its due date" is measured against, the current UTC day
+    by default.
+
+    ``period`` is the month a monthly bill covers and is empty for a bill that
+    covers no month, such as one for an add-on being acquired.
+    """
+    today = today or timezone.now().date()
     billed = billing.billed_workspace_and_period(invoice.invoice_number)
     return {
         "id": invoice.pk,

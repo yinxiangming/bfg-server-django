@@ -1,12 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-Turning a paid platform bill into another period of everything it renewed.
+Turning a paid platform bill into the period it bought.
 
 Issuing a bill records purchases that have already happened; it deliberately
 writes nothing forward, because a bill is not a payment. This is the other half:
-once the bill has been paid, each entitlement it charged a renewal for is given
-its next period, and the row that was running out is settled. Without it a
+once the bill has been paid, what it charged for is written. Without it a
 workspace that pays on time still loses its add-ons when the grace period ends.
+
+Which period a payment buys depends on which kind of bill it settled, and the
+number says which:
+
+*A month's bill* renews. Each entitlement it charged a renewal for is given its
+next period, and the row that was running out is settled.
+
+*An acquisition* starts. There is no previous period to follow, so the first one
+is written, running a month from the day the bill was issued. It is anchored to
+the invoice rather than to the moment the money arrived, for the same reason a
+renewal is: paying late must not buy more than paying on time.
 
 Driven by the deployment's own events rather than by a schedule — see
 ``bfg.platform.handlers`` — so an entitlement comes back as soon as the money
@@ -36,7 +46,8 @@ from bfg.platform.utils import get_platform_workspace
 logger = logging.getLogger(__name__)
 
 # How much of a period one bill buys. A bill covers a month of usage and the
-# renewals that fell in it, so paying it buys the month after the one that ended.
+# renewals that fell in it, so paying it buys the month after the one that ended;
+# an acquisition buys the first month of what was acquired.
 RENEWAL_MONTHS = 1
 
 # Written to the row a renewal replaces, so that a row in the history says why it
@@ -51,14 +62,14 @@ PAID_STATUS = "paid"
 
 
 def renew_for_invoice(invoice_id: int) -> List[WorkspaceEntitlement]:
-    """Write the next period for everything one paid platform bill renewed.
+    """Write the period one paid platform bill bought.
 
     ``invoice_id`` is a ``finance.Invoice``. Anything that is not a paid platform
     bill is left alone and nothing is written: an invoice a workspace issued to
     its own customers, one belonging to another workspace, a number nothing of
     ours issued, or a bill a part payment has not settled.
 
-    For each entitlement the bill charged a renewal for — the ones
+    A month's bill renews. For each entitlement it charged a renewal for — the ones
     ``billing.renewal_period_bounds`` names, chosen the way ``issue_monthly_bills``
     priced them — a new row is written for the following month, carrying the same
     plan and marked as purchased. The row that ran out is left as history rather
@@ -68,10 +79,17 @@ def renew_for_invoice(invoice_id: int) -> List[WorkspaceEntitlement]:
     ``close_due_periods``, which will settle it and pause nothing, because the row
     written here is live by then.
 
+    A bill for an acquisition starts instead of renewing: it has no previous period
+    behind it, so the first one is written, running a month from the day the bill
+    was issued. See ``_write_first_period``.
+
     Idempotent, and safe against the same payment being reported twice at once:
     the invoice row is held for the duration, and a period is only written when no
     row for that key already ends at that moment. A second report therefore writes
-    nothing rather than handing out a second month.
+    nothing rather than handing out a second month. Which is also why both kinds of
+    period are worked out from the invoice rather than from the clock — a period
+    that depended on when the news arrived could not be recognised as one already
+    written.
 
     A bill paid long after it was issued buys the month that followed the one it
     charged for, which may itself have passed — the workspace has paid for a month
@@ -88,7 +106,7 @@ def renew_for_invoice(invoice_id: int) -> List[WorkspaceEntitlement]:
     skipped: a bill raised by hand has no renewal lines behind it, and neither does
     one whose entitlements were removed afterwards. Nothing here raises. It runs
     from a payment that has already been taken, and money that has changed hands
-    must not be undone by a renewal that could not be written.
+    must not be undone by a period that could not be written.
 
     Returns the rows written, in the order they were written.
     """
@@ -100,25 +118,28 @@ def renew_for_invoice(invoice_id: int) -> List[WorkspaceEntitlement]:
 
     # Read before locking: all but a handful of a deployment's payments are a
     # workspace's own, and those should cost a read rather than a write lock.
-    number = (
+    invoice = (
         Invoice.all_objects.filter(pk=invoice_id, workspace=platform_workspace)
-        .values_list("invoice_number", flat=True)
+        .values_list("invoice_number", "issue_date")
         .first()
     )
-    if number is None:
+    if invoice is None:
         return []
+    number, issue_date = invoice
     billed = billing.billed_workspace_and_period(number)
-    if billed is None:
+    acquired = billing.acquired_workspace_and_key(number) if billed is None else None
+    if billed is None and acquired is None:
         # The management workspace's own invoice to one of its customers, or a
-        # number entered by hand. Neither renews anything.
+        # number entered by hand. Neither buys anything.
         return []
 
-    workspace_id, period_start = billed
+    workspace_id = billed[0] if billed is not None else acquired[0]
     with transaction.atomic():
         # The invoice is what two reports of the same payment have in common, and
         # it is one row that is always there, so it is what serialises them. The
         # status is re-read under the lock: a refund or a cancellation racing this
-        # must not be overtaken by a renewal for a bill that is no longer paid.
+        # must not be overtaken by a period written for a bill that is no longer
+        # paid.
         status = (
             Invoice.all_objects.select_for_update()
             .filter(pk=invoice_id)
@@ -127,7 +148,10 @@ def renew_for_invoice(invoice_id: int) -> List[WorkspaceEntitlement]:
         )
         if status != PAID_STATUS:
             return []
-        written = _write_next_periods(workspace_id, period_start, number)
+        if billed is not None:
+            written = _write_next_periods(workspace_id, billed[1], number)
+        else:
+            written = _write_first_period(workspace_id, acquired[1], issue_date, number)
         # After the commit, and after the periods above are part of it: both
         # answers are cached for a minute and both have just been made wrong by
         # the money arriving. Metered calls are refused on the first, and every
@@ -135,11 +159,54 @@ def renew_for_invoice(invoice_id: int) -> List[WorkspaceEntitlement]:
         # settled up would otherwise go on being told it owes money and go on
         # being read only for the rest of that minute — having done the one thing
         # that was supposed to end it. Dropped whether or not anything was
-        # renewed, since what made them wrong was the bill being paid rather than
+        # written, since what made them wrong was the bill being paid rather than
         # the rows written.
         transaction.on_commit(lambda: billing.forget_overdue(workspace_id))
         transaction.on_commit(lambda: read_only.forget(workspace_id))
         return written
+
+
+def _write_first_period(workspace_id, key, issue_date, invoice_number) -> List[WorkspaceEntitlement]:
+    """The first period a paid acquisition buys, written inside the caller's transaction.
+
+    A month from the day the bill was issued, which for an acquisition is the day
+    the workspace asked for the add-on. Anchoring it there rather than to the
+    payment is what makes a second report of the same payment harmless: the period
+    is worked out from the invoice, so ``_already_renewed`` recognises the row the
+    first report wrote.
+
+    The plan is looked up again by the add-on's code rather than remembered on the
+    bill, which is the only link there is; one whose plan has been removed since is
+    written without one and logged, because the workspace has paid either way. Such
+    a row cannot be billed for a renewal — ``issue_monthly_bills`` has no price to
+    put on it — so the warning is worth acting on.
+    """
+    from bfg.platform.services import acquisitions
+
+    period_end = add_months(billing.midnight(issue_date), RENEWAL_MONTHS)
+    if _already_renewed(workspace_id, key, period_end):
+        return []
+
+    plan = acquisitions.plan_for(key)
+    if plan is None:
+        logger.warning(
+            "Invoice %s bought %r for workspace %s, but nothing prices it any more; "
+            "the entitlement is written without a plan and cannot be renewed.",
+            invoice_number, key, workspace_id,
+        )
+    row = WorkspaceEntitlement.all_objects.create(
+        workspace_id=workspace_id,
+        key=key,
+        plan=plan,
+        source=WorkspaceEntitlement.SOURCE_PURCHASED,
+        starts_at=billing.midnight(issue_date),
+        current_period_end=period_end,
+        status=WorkspaceEntitlement.STATUS_ACTIVE,
+    )
+    logger.info(
+        "Invoice %s bought workspace %s its first period of %r.", invoice_number, workspace_id, key
+    )
+    return [row]
 
 
 def _write_next_periods(workspace_id, period_start, invoice_number) -> List[WorkspaceEntitlement]:

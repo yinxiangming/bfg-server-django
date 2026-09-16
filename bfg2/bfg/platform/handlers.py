@@ -2,8 +2,9 @@
 """
 What the platform listens for.
 
-A settled platform bill is what renews the entitlements it charged for; see
-``services.renewals``. Everything here lives on the platform side rather than
+A settled platform bill is what writes the period it bought — the next one for
+everything a month's bill renewed, or the first one for an add-on just acquired;
+see ``services.renewals``. Everything here lives on the platform side rather than
 finance calling into renewals: finance is the lower layer and knows nothing about
 who sells to whom.
 
@@ -50,7 +51,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from bfg.core.events import after_commit, global_dispatcher
-from bfg.platform.services.billing import billed_workspace_and_period
+from bfg.platform.services.billing import is_platform_bill
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +106,11 @@ def on_invoice_saved(sender, instance, raw=False, **kwargs):
 
     This runs on every invoice every deployment saves, whosever it is, so it may
     not cost a query to say no. Both tests are on the instance already in hand: the
-    status, and whether the number is one ``billing`` issued — which is a string
-    the invoice is carrying, not a workspace to look up. Only a paid platform bill
-    gets as far as queueing anything, and the queued work is the same
-    ``renew_for_invoice`` the events go through, so this path is a way of hearing
-    rather than a second way of renewing.
+    status, and whether the number is one ``billing`` issued, of either shape —
+    which is a string the invoice is carrying, not a workspace to look up. Only a
+    paid platform bill gets as far as queueing anything, and the queued work is the
+    same ``renew_for_invoice`` the events go through, so this path is a way of
+    hearing rather than a second way of writing a period.
 
     Fixtures are skipped: ``raw`` means the row is being loaded rather than
     settled, and half a database is no state to renew from.
@@ -120,7 +121,7 @@ def on_invoice_saved(sender, instance, raw=False, **kwargs):
     """
     if raw or instance.status != PAID:
         return
-    if billed_workspace_and_period(instance.invoice_number) is None:
+    if not is_platform_bill(instance.invoice_number):
         return
     _renew(instance.pk)
 

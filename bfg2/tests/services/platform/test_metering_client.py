@@ -36,6 +36,14 @@ MANIFESTS = {
 
 
 @pytest.fixture(autouse=True)
+def forget_unpriced_meters():
+    """``meter`` remembers which meters it has complained about, for an hour."""
+    metering._unpriced_logged_at.clear()
+    yield
+    metering._unpriced_logged_at.clear()
+
+
+@pytest.fixture(autouse=True)
 def fake_manifests(monkeypatch):
     monkeypatch.setattr(registry, "_discover", lambda: dict(MANIFESTS))
     registry.reset_cache()
@@ -133,7 +141,34 @@ def test_metering_an_unpriced_meter_is_logged_rather_than_raised(workspace, capl
 
     assert metering.meter(workspace, PLATFORM_METER) is None
     assert not UsageRecord.all_objects.exists()
-    assert "Could not record" in caplog.text
+    assert "has no price" in caplog.text
+
+
+def test_an_unpriced_meter_is_a_warning_without_a_stack_trace(workspace, caplog):
+    # Wiring a meter up before pricing it is what every rollout looks like for a
+    # while. An error with a traceback, on every call, would say something is
+    # broken; what is true is that a price row is missing.
+    MeterPrice.objects.all().delete()
+
+    metering.meter(workspace, PLATFORM_METER)
+
+    records = [record for record in caplog.records if "has no price" in record.getMessage()]
+    assert [record.levelname for record in records] == ["WARNING"]
+    assert records[0].exc_info is None
+
+
+def test_an_unpriced_meter_is_mentioned_once_a_window_rather_than_once_a_call(workspace, caplog):
+    MeterPrice.objects.all().delete()
+
+    for _ in range(5):
+        metering.meter(workspace, PLATFORM_METER)
+    metering.meter(workspace, UNDECLARED_METER)
+
+    said = [record.getMessage() for record in caplog.records if "has no price" in record.getMessage()]
+    assert len(said) == 2
+    assert PLATFORM_METER in said[0]
+    # A different meter is a different gap and is worth saying on its own.
+    assert UNDECLARED_METER in said[1]
 
 
 def test_a_broken_database_does_not_break_the_call_that_was_already_made(workspace, monkeypatch, caplog):

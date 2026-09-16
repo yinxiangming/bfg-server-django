@@ -168,9 +168,23 @@ def allowance(workspace, *, month=None) -> Allowance:
 def may_meter(workspace, *, month=None) -> bool:
     """Whether ``workspace`` may make another metered call this month.
 
-    Asked before a paid call is made, not after. It answers on the usage cap
-    alone: once invoicing exists, a workspace whose invoice is overdue past the
-    deployment's grace period should be refused here as well, which is one more
-    condition on this line rather than a new question for callers to ask.
+    Asked before a paid call is made, not after. Two things stop it: a platform
+    invoice that is past due and unpaid, and this month's usage cap. Only metered
+    calls are stopped — a workspace behind on its bill keeps its shop, its orders
+    and its data, and loses the things that cost the deployment money on its
+    behalf.
+
+    The overdue answer is cached for a minute (``billing.OVERDUE_CACHE_SECONDS``),
+    so the common path is the one usage query it always was.
+
+    Raises whatever the database raises: a caller must not be told a workspace may
+    spend because the question could not be answered.
     """
+    # Imported here rather than at the top of the module: billing reads usage, and
+    # a module-level import each way would not resolve. After the first call this
+    # is a dictionary lookup, which is nothing against the query below it.
+    from bfg.platform.services import billing
+
+    if billing.has_overdue_invoice(workspace):
+        return False
     return allowance(workspace, month=month).remaining > ZERO

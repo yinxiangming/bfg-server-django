@@ -307,6 +307,25 @@ Only relevant to a deployment that charges workspaces for what they use. A deplo
 - One point is one US dollar. Usage is totalled per workspace, meter and UTC day in `platform.UsageRecord`.
 - A workspace may run up `WorkspacePlatformProfile.monthly_usage_cap_points` in a calendar month, or the `monthly_usage_cap_points` variable when it has no cap of its own.
 - Callers ask `bfg.platform.metering.allowed(workspace, meter)` before spending and `bfg.platform.metering.meter(workspace, meter, quantity)` after the call succeeded.
+- A meter nothing has priced yet is logged as a warning once an hour per meter, not as an error with a stack trace on every call: wiring a meter up before pricing it is what every rollout looks like for a while. Nothing is billed for it until a `MeterPrice` row exists, so watch for that warning after switching a new meter on.
+
+### The billing month
+
+There is no scheduler in this library, and the deployments it was written for run no Celery beat. The three steps below are management commands, to be run from cron or by hand. All three are safe to run twice.
+
+- `python manage.py close_entitlement_periods [--dry-run]` — moves an entitlement past its period into `grace` (for `grace_days`, counted from the period's own end), and one past its grace into `ended`. Ending one pauses the extension it paid for: `WorkspaceExtension` goes to `paused`, keeping the workspace's data and configuration, so paying again restores it. Run daily. Running it late delays the pause, not the expiry — an entitlement stops counting on time either way.
+- `python manage.py refresh_exchange_rates [--base USD] [--symbols NZD,CNY]` — stores the ECB's daily reference rates (through Frankfurter; free, no key) in `finance.ExchangeRate`, under the day the bank published them. Run daily, and in any case before issuing bills. Every published rate is read and the ones the deployment has currencies for are kept, so a currency the bank does not publish is logged and skipped rather than costing the refresh every other currency. A refresh that fails writes nothing and leaves the rates already on file, which is what conversions then use.
+- `python manage.py issue_monthly_bills [--month YYYY-MM] [--dry-run]` — issues one invoice per workspace for a month of metered usage and the entitlements whose period ended in it, defaulting to last month. The invoice is issued by the platform workspace (`PLATFORM_WORKSPACE_SLUG`) and made out to the workspace's owner, in the workspace's own currency at the day's rate; it falls due after `invoice_due_days`. Its number is `PLAT-<workspace id>-<YYYYMM>`, which is what stops a month being billed twice — the unique index on (workspace, invoice number) refuses the second attempt — and is, with the platform workspace itself, how an invoice is tied back to the workspace it is about.
+
+Three things about a bill are worth knowing before switching this on:
+
+- **Bills are for the month that ran.** An entitlement is billed for the month its period ended in, whatever has become of it since — including one that lapsed and one a sweep has already moved to `ended`. Reading only the rows still live would make whether a month is billed depend on whether `close_entitlement_periods` ran first, which for a fortnight's grace would silently drop every period ending in the first half of a month. Issuing a bill does not itself write the next period; renewing is a purchase.
+- **Tax is only worked out for New Zealand**, at whatever rate the platform workspace has recorded for `NZ` in `finance.TaxRate`, applied over the whole invoice. Every other country is billed untaxed, which is right for some and wrong for others; nothing yet records a customer's tax registration, so do not sell into a country whose rules have not been settled first.
+- **The trial credit is a one-off.** The `trial_points` variable comes off a workspace's first bill, never more than the bill itself, and `WorkspacePlatformProfile.trial_points_used_at` records that it has been spent. A first bill smaller than the credit does not keep the difference.
+
+### What an unpaid bill stops
+
+A workspace with a platform invoice that is past its due date and unpaid may not make another metered call: `bfg.platform.services.usage.may_meter` refuses it, and so `metering.allowed` does too. Nothing else stops — the shop, its orders and its data all keep working, and only what costs the deployment money on the workspace's behalf is withheld. An invoice that came to nothing (a month covered entirely by the trial credit) is not a debt and stops nothing, and only the platform workspace's own invoices count, since a workspace chooses what its own invoices are numbered. The answer is cached for a minute, so a workspace that has just paid is unblocked within one.
 
 ---
 

@@ -58,6 +58,16 @@ class WorkspacePlatformProfile(models.Model):
         blank=True,
     )
 
+    # When the deployment's trial credit was taken off one of this workspace's
+    # bills. The credit is a one-off, so the column records that it has been spent
+    # rather than how much of it is left: empty means it has not been. A workspace
+    # whose first bill came to less than the credit does not keep the difference,
+    # which is the price of the credit being one thing that happened rather than a
+    # balance to keep in step with every invoice ever issued.
+    trial_points_used_at = models.DateTimeField(
+        _("Trial Credit Used At"), null=True, blank=True
+    )
+
     # Timestamps
     created_at = models.DateTimeField(_("Created At"), default=timezone.now)
     updated_at = models.DateTimeField(_("Updated At"), auto_now=True)

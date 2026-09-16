@@ -99,6 +99,10 @@ class WorkspaceEntitlement(TenantScopedModel):
         indexes = [
             models.Index(fields=["workspace", "key", "status"]),
             models.Index(fields=["status", "current_period_end"]),
+            # Without the status in front: billing reads the periods that ended in
+            # a month whatever became of the rows afterwards, and would otherwise
+            # have no index to range-scan.
+            models.Index(fields=["current_period_end"]),
         ]
         base_manager_name = "all_objects"
 

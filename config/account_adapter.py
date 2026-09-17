@@ -22,15 +22,49 @@ from django.utils.encoding import force_str
 DEFAULT_EMAIL_CONFIRM_PATH = '/auth/verify-email'
 
 
+def _trusted_frontend_base_url(request):
+    """Return a server-attested frontend origin, never a raw HTTP header.
+
+    A server-side integration may attach ``_trusted_frontend_origin`` after it
+    has authenticated and validated its caller. Keeping this value on the
+    request object, instead of accepting a public header here, prevents a
+    browser from choosing where account confirmation secrets are delivered.
+    """
+    value = (getattr(request, '_trusted_frontend_origin', '') or '').strip()
+    if not value:
+        return ''
+
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {'http', 'https'}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {'', '/'}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return ''
+    local_hosts = {'localhost', '127.0.0.1', '::1'}
+    if parsed.scheme != 'https' and parsed.hostname not in local_hosts:
+        return ''
+    return f'{parsed.scheme}://{parsed.netloc}'.rstrip('/')
+
+
 def frontend_base_url(request):
     """The frontend a request came from when it is an allowed one, else ``FRONTEND_URL``.
 
-    ``Origin`` only counts when it is in ``CORS_ALLOWED_ORIGINS``; otherwise anyone
-    could have a confirmation link point at a host of their choosing. Without a
-    request there is only ``FRONTEND_URL``, which may be blank.
+    A server-attested request origin wins when present. A public ``Origin`` only
+    counts when it is in ``CORS_ALLOWED_ORIGINS``; otherwise anyone could have a
+    confirmation link point at a host of their choosing. Without a request there
+    is only ``FRONTEND_URL``, which may be blank.
     """
     if request is None:
         return (getattr(settings, 'FRONTEND_URL', '') or '').strip().rstrip('/')
+
+    trusted = _trusted_frontend_base_url(request)
+    if trusted:
+        return trusted
 
     from config.social_auth import _get_frontend_base_url
 

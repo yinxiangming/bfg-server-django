@@ -15,7 +15,10 @@ import pytest
 from allauth.account.models import EmailAddress
 from django.contrib.auth import get_user_model
 from django.core import mail
+from django.test import RequestFactory
 from rest_framework.test import APIClient
+
+from config.account_adapter import frontend_base_url
 
 User = get_user_model()
 
@@ -78,6 +81,42 @@ def test_an_origin_outside_the_allowlist_gets_the_configured_frontend(signup):
     [message] = mail.outbox
     link = mailed_link(message)
     assert (link.netloc, link.path) == ('app.acme.test', '/auth/verify-email')
+
+
+def test_server_attested_frontend_origin_does_not_require_cors_allowlisting(settings):
+    settings.FRONTEND_URL = 'https://app.acme.test'
+    settings.CORS_ALLOWED_ORIGINS = []
+    request = RequestFactory().post('/register', HTTP_ORIGIN='https://attacker.test')
+    request._trusted_frontend_origin = 'https://idlevo.test'
+
+    assert frontend_base_url(request) == 'https://idlevo.test'
+
+
+@pytest.mark.parametrize(
+    'value',
+    [
+        'http://idlevo.test',
+        'https://user:pass@idlevo.test',
+        'https://idlevo.test/path',
+        'https://idlevo.test?next=attacker',
+        '//idlevo.test',
+    ],
+)
+def test_invalid_server_attested_origin_falls_back_to_configured_frontend(settings, value):
+    settings.FRONTEND_URL = 'https://app.acme.test'
+    settings.CORS_ALLOWED_ORIGINS = []
+    request = RequestFactory().post('/register')
+    request._trusted_frontend_origin = value
+
+    assert frontend_base_url(request) == 'https://app.acme.test'
+
+
+def test_server_attested_localhost_may_use_http(settings):
+    settings.FRONTEND_URL = 'https://app.acme.test'
+    request = RequestFactory().post('/register')
+    request._trusted_frontend_origin = 'http://localhost:3011'
+
+    assert frontend_base_url(request) == 'http://localhost:3011'
 
 
 def test_the_mailed_key_activates_the_account(signup):

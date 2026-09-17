@@ -18,6 +18,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.apps import apps
+from django.utils import timezone
 
 from bfg.common.models import resolve_workspace_public_frontend_base_url
 from bfg.platform.utils import is_embedded_mode
@@ -320,20 +321,32 @@ class AuthViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if sso_code.is_used:
-            return Response(
-                {'error': 'SSO code has already been used'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if sso_code.is_expired:
+        # Claim the code with one conditional write. Only one concurrent
+        # exchange can change ``used_at`` from NULL before expiry.
+        claimed_at = timezone.now()
+        claimed = PlatformSSOCode.objects.filter(
+            pk=sso_code.pk,
+            used_at__isnull=True,
+            expires_at__gt=claimed_at,
+        ).update(used_at=claimed_at)
+        if claimed != 1:
+            try:
+                sso_code.refresh_from_db(fields=['used_at', 'expires_at'])
+            except PlatformSSOCode.DoesNotExist:
+                return Response(
+                    {'error': 'Invalid SSO code'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if sso_code.is_used:
+                return Response(
+                    {'error': 'SSO code has already been used'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             return Response(
                 {'error': 'SSO code has expired'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        # Mark used immediately to prevent replay
-        sso_code.mark_used()
+        sso_code.used_at = claimed_at
 
         workspace = sso_code.workspace
         user = sso_code.user

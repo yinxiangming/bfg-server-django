@@ -13,6 +13,10 @@ and changes a workspace's extensions through ``endpoints``. See ``manifest``,
 """
 
 from bfg.common.extensions.manifest import (  # noqa: F401
+    ACTIVATION_PLATFORM_ADMIN,
+    ACTIVATION_POLICIES,
+    ACTIVATION_SYSTEM,
+    ACTIVATION_WORKSPACE_OWNER,
     PRICING_ADDON,
     PRICING_CORE,
     PUBLIC_SURFACES,
@@ -23,6 +27,10 @@ from bfg.common.extensions.manifest import (  # noqa: F401
     SURFACE_ADMIN,
     SURFACE_MINIPROGRAM,
     SURFACE_STOREFRONT,
+    VISIBILITIES,
+    VISIBILITY_INTERNAL,
+    VISIBILITY_PRIVATE,
+    VISIBILITY_PUBLIC,
     ExtensionManifest,
     Prerequisite,
     setting_present,

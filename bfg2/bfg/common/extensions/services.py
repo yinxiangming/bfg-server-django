@@ -24,7 +24,15 @@ from django.utils.module_loading import import_string
 
 from bfg.common.cache_policy import cache_ttl
 from bfg.common.extensions import registry
-from bfg.common.extensions.manifest import SCOPE_WORKSPACE, ExtensionManifest
+from bfg.common.extensions.manifest import (
+    ACTIVATION_PLATFORM_ADMIN,
+    ACTIVATION_SYSTEM,
+    ACTIVATION_WORKSPACE_OWNER,
+    SCOPE_WORKSPACE,
+    VISIBILITY_INTERNAL,
+    VISIBILITY_PUBLIC,
+    ExtensionManifest,
+)
 from bfg.common.storefront_cache import invalidate_storefront_config_cache
 
 logger = logging.getLogger(__name__)
@@ -169,7 +177,11 @@ def availability(workspace, *, public_only: bool = False) -> Dict[str, List[str]
     live for ``workspace``. With ``public_only`` both lists keep only extensions that
     show up outside the admin.
     """
-    manifests = registry.all_manifests()
+    # Client configuration is never an extension-management surface. Restricted
+    # manifests stay server-side even for staff and superusers.
+    manifests = [
+        manifest for manifest in registry.all_manifests() if manifest.visibility == VISIBILITY_PUBLIC
+    ]
     if public_only:
         manifests = [manifest for manifest in manifests if manifest.has_public_surface]
     live = available_keys(workspace)
@@ -241,9 +253,30 @@ def invalidate(workspace_id: int) -> None:
 # ── State changes ────────────────────────────────────────────────────
 
 
-def _manifest_to_change(key: str) -> ExtensionManifest:
+def can_discover(manifest: ExtensionManifest, actor: str) -> bool:
+    """Whether ``actor`` may learn that ``manifest`` is deployed."""
+    if actor == ACTIVATION_SYSTEM:
+        return True
+    if actor == ACTIVATION_PLATFORM_ADMIN:
+        return manifest.visibility != VISIBILITY_INTERNAL
+    return actor == ACTIVATION_WORKSPACE_OWNER and manifest.visibility == VISIBILITY_PUBLIC
+
+
+def can_manage(manifest: ExtensionManifest, actor: str) -> bool:
+    """Whether ``actor`` may change ``manifest`` under both of its policies."""
+    if not can_discover(manifest, actor):
+        return False
+    if actor == ACTIVATION_SYSTEM:
+        return True
+    if actor == ACTIVATION_PLATFORM_ADMIN:
+        return manifest.activation_policy != ACTIVATION_SYSTEM
+    return manifest.activation_policy == ACTIVATION_WORKSPACE_OWNER
+
+
+def require_manageable(key: str, actor: str = ACTIVATION_SYSTEM) -> ExtensionManifest:
+    """Return an activatable manifest ``actor`` may manage, concealing all others."""
     manifest = registry.get_manifest(key)
-    if manifest is None:
+    if manifest is None or not can_manage(manifest, actor):
         raise ExtensionError('unknown_extension', f'No extension named {key!r} is deployed.')
     if not manifest.is_activatable:
         raise ExtensionError(
@@ -299,7 +332,7 @@ def _locked_records(workspace, keys: Iterable[str], *, ensure: str = '') -> Dict
 
 
 @transaction.atomic
-def activate(workspace, key: str, *, user=None, config=None):
+def activate(workspace, key: str, *, user=None, config=None, actor: str = ACTIVATION_SYSTEM):
     """Switch ``key`` on for ``workspace`` and return its record.
 
     Activating an extension that is already active changes nothing. ``config``, when
@@ -309,7 +342,7 @@ def activate(workspace, key: str, *, user=None, config=None):
     """
     from bfg.common.models import WorkspaceExtension
 
-    manifest = _manifest_to_change(key)
+    manifest = require_manageable(key, actor)
     record = _locked_records(workspace, [key, *manifest.requires], ensure=key)[key]
     if record.status == WorkspaceExtension.STATUS_ACTIVE:
         return record
@@ -335,7 +368,9 @@ def activate(workspace, key: str, *, user=None, config=None):
         raise ExtensionError('not_entitled', f'This workspace is not entitled to {key}.')
 
     now = timezone.now()
-    if config is not None:
+    config_changed = config is not None
+    old_status = record.status
+    if config_changed:
         record.config = _clean_config(manifest, config)
     record.status = WorkspaceExtension.STATUS_ACTIVE
     record.status_reason = ''
@@ -344,6 +379,17 @@ def activate(workspace, key: str, *, user=None, config=None):
     record.activated_at = now
     record.save()
 
+    _audit_change(
+        workspace,
+        user,
+        record,
+        {
+            'status': {'old': old_status, 'new': record.status},
+            **({'config': {'changed': True}} if config_changed else {}),
+        },
+        f'Activated extension {key}.',
+    )
+
     if manifest.on_activate is not None:
         manifest.on_activate(workspace, record)
     transaction.on_commit(lambda: invalidate(workspace.id))
@@ -351,14 +397,16 @@ def activate(workspace, key: str, *, user=None, config=None):
 
 
 @transaction.atomic
-def deactivate(workspace, key: str, *, user=None, reason: str = 'deactivated'):
+def deactivate(
+    workspace, key: str, *, user=None, reason: str = 'deactivated', actor: str = ACTIVATION_SYSTEM
+):
     """Switch ``key`` off for ``workspace``, keeping its data and configuration.
 
     Returns the record, or ``None`` when the workspace never used the extension.
     """
     from bfg.common.models import WorkspaceExtension
 
-    manifest = _manifest_to_change(key)
+    manifest = require_manageable(key, actor)
     dependent_keys = [candidate.key for candidate in registry.all_manifests() if key in candidate.requires]
     records = _locked_records(workspace, [key, *dependent_keys])
     record = records.get(key)
@@ -374,11 +422,20 @@ def deactivate(workspace, key: str, *, user=None, reason: str = 'deactivated'):
             'required_by_active', f'Deactivate {", ".join(dependents)} first.', required_by=dependents
         )
 
+    old_status = record.status
     record.status = WorkspaceExtension.STATUS_INACTIVE
     record.status_reason = reason
     record.status_changed_at = timezone.now()
     record.status_changed_by = _actor(user)
     record.save()
+
+    _audit_change(
+        workspace,
+        user,
+        record,
+        {'status': {'old': old_status, 'new': record.status}},
+        f'Deactivated extension {key}.',
+    )
 
     if manifest.on_deactivate is not None:
         manifest.on_deactivate(workspace, record)
@@ -387,16 +444,36 @@ def deactivate(workspace, key: str, *, user=None, reason: str = 'deactivated'):
 
 
 @transaction.atomic
-def update_config(workspace, key: str, config):
+def update_config(
+    workspace, key: str, config, *, user=None, actor: str = ACTIVATION_SYSTEM
+):
     """Validate and store ``workspace``'s configuration for ``key``.
 
     Configuration may be saved before the extension is activated, for extensions that
     cannot work until it is filled in.
     """
-    manifest = _manifest_to_change(key)
+    manifest = require_manageable(key, actor)
     cleaned = _clean_config(manifest, config)
     record = _locked_records(workspace, [key], ensure=key)[key]
     record.config = cleaned
     record.save(update_fields=['config', 'updated_at'])
+    _audit_change(
+        workspace,
+        user,
+        record,
+        {'config': {'changed': True}},
+        f'Updated configuration for extension {key}.',
+    )
     transaction.on_commit(lambda: invalidate(workspace.id))
     return record
+
+
+def _audit_change(workspace, user, record, changes, description):
+    """Audit a successful change without copying extension configuration secrets."""
+    from bfg.common.services.audit_service import AuditService
+
+    AuditService(workspace=workspace, user=_actor(user)).log_update(
+        record,
+        changes=changes,
+        description=description,
+    )

@@ -31,6 +31,24 @@ PRICING_CORE = 'core'
 PRICING_ADDON = 'addon'
 PRICINGS = (PRICING_CORE, PRICING_ADDON)
 
+# Shown to workspace users and platform administrators.
+VISIBILITY_PUBLIC = 'public'
+# Shown only to platform administrators. The extension may still run for a workspace.
+VISIBILITY_PRIVATE = 'private'
+# Never shown through workspace-facing or platform-console APIs.
+VISIBILITY_INTERNAL = 'internal'
+VISIBILITIES = (VISIBILITY_PUBLIC, VISIBILITY_PRIVATE, VISIBILITY_INTERNAL)
+
+# The least privileged actor allowed to change an extension's state or configuration.
+ACTIVATION_WORKSPACE_OWNER = 'workspace_owner'
+ACTIVATION_PLATFORM_ADMIN = 'platform_admin'
+ACTIVATION_SYSTEM = 'system'
+ACTIVATION_POLICIES = (
+    ACTIVATION_WORKSPACE_OWNER,
+    ACTIVATION_PLATFORM_ADMIN,
+    ACTIVATION_SYSTEM,
+)
+
 # Where an extension shows up. Public surfaces are announced in the storefront config,
 # so a client knows which extension pages and slots to render; the admin surface is
 # only ever reported to signed-in staff.
@@ -89,6 +107,12 @@ class ExtensionManifest:
     the admin, such as ``/admin/reviews``; a client resolves it against its own origin, so
     it must start with ``/`` and name no host.
 
+    ``visibility`` controls who may discover the manifest. Public extensions are shown
+    to workspace users; private extensions only to platform administrators; internal
+    extensions are never exposed through those APIs. ``activation_policy`` is the least
+    privileged actor allowed to change state or configuration. System callers include
+    management commands and trusted provisioning code.
+
     ``pricing`` defaults to add-on for workspace extensions and to core for the rest.
     ``requires`` names other extensions that must be available first; only workspace
     extensions can require anything, since the rest are always available. ``data_models``
@@ -114,6 +138,8 @@ class ExtensionManifest:
     admin_url: str = ''
     scope: str = SCOPE_WORKSPACE
     pricing: str = ''
+    visibility: str = VISIBILITY_PUBLIC
+    activation_policy: str = ACTIVATION_WORKSPACE_OWNER
     surfaces: Tuple[str, ...] = ()
     requires: Tuple[str, ...] = ()
     prerequisites: Tuple[Prerequisite, ...] = ()
@@ -140,6 +166,20 @@ class ExtensionManifest:
             object.__setattr__(self, 'pricing', PRICING_ADDON if self.scope == SCOPE_WORKSPACE else PRICING_CORE)
         if self.pricing not in PRICINGS:
             raise ValueError(f'Extension {self.key!r} has unknown pricing {self.pricing!r}.')
+        if self.visibility not in VISIBILITIES:
+            raise ValueError(f'Extension {self.key!r} has unknown visibility {self.visibility!r}.')
+        if self.activation_policy not in ACTIVATION_POLICIES:
+            raise ValueError(
+                f'Extension {self.key!r} has unknown activation policy {self.activation_policy!r}.'
+            )
+        if self.visibility == VISIBILITY_INTERNAL and self.activation_policy != ACTIVATION_SYSTEM:
+            raise ValueError(
+                f'Internal extension {self.key!r} must use the system activation policy.'
+            )
+        if self.visibility == VISIBILITY_PRIVATE and self.activation_policy == ACTIVATION_WORKSPACE_OWNER:
+            raise ValueError(
+                f'Private extension {self.key!r} cannot use the workspace_owner activation policy.'
+            )
         if self.key in self.requires:
             raise ValueError(f'Extension {self.key!r} cannot require itself.')
         if self.requires and self.scope != SCOPE_WORKSPACE:

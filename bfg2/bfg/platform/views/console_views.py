@@ -58,6 +58,7 @@ from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
 from bfg.common.extensions import endpoints, services as extension_services
+from bfg.common.extensions.manifest import ACTIVATION_PLATFORM_ADMIN, ACTIVATION_WORKSPACE_OWNER
 from bfg.common.middleware import bound_workspace
 from bfg.core.read_only import exempt_from_read_only
 from bfg.platform.services import acquisitions, bill_payment, console_billing
@@ -273,7 +274,16 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
         workspace = self._workspace_to_change()
         try:
             with bound_workspace(workspace):
-                acquired = acquisitions.acquire(workspace, key, user=request.user)
+                acquired = acquisitions.acquire(
+                    workspace,
+                    key,
+                    user=request.user,
+                    actor=(
+                        ACTIVATION_PLATFORM_ADMIN
+                        if self.viewer.is_platform_admin
+                        else ACTIVATION_WORKSPACE_OWNER
+                    ),
+                )
         except extension_services.ExtensionError as refused:
             return endpoints.error_response(refused)
         except acquisitions.AcquisitionRefused as refused:
@@ -343,7 +353,11 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
         workspace = self._workspace_to_change()
         with bound_workspace(workspace):
             return endpoints.update_config(
-                workspace, key, data=request.data, viewer_is_platform_admin=self.viewer.is_platform_admin
+                workspace,
+                key,
+                user=request.user,
+                data=request.data,
+                viewer_is_platform_admin=self.viewer.is_platform_admin,
             )
 
     def _workspace_to_change(self):

@@ -24,10 +24,15 @@ from bfg.common.extensions import permissions as extension_permissions
 from bfg.common.extensions import listen_for, registry, services
 from bfg.common.extensions.permissions import RequiresExtension
 from bfg.common.extensions.manifest import (
+    ACTIVATION_PLATFORM_ADMIN,
+    ACTIVATION_SYSTEM,
+    ACTIVATION_WORKSPACE_OWNER,
     SCOPE_PLATFORM,
     SCOPE_TOOLING,
     SURFACE_ADMIN,
     SURFACE_STOREFRONT,
+    VISIBILITY_INTERNAL,
+    VISIBILITY_PRIVATE,
     ExtensionManifest,
     Prerequisite,
 )
@@ -76,6 +81,20 @@ MANIFESTS = {
     ),
     'sign_in': ExtensionManifest(key='sign_in', name='Sign-in', scope=SCOPE_PLATFORM, app_label='sign_in_app'),
     'importer': ExtensionManifest(key='importer', name='Importer', scope=SCOPE_TOOLING, app_label='importer_app'),
+    'brand_portal': ExtensionManifest(
+        key='brand_portal',
+        name='Brand portal',
+        visibility=VISIBILITY_PRIVATE,
+        activation_policy=ACTIVATION_PLATFORM_ADMIN,
+        app_label='brand_portal_app',
+    ),
+    'maintenance': ExtensionManifest(
+        key='maintenance',
+        name='Maintenance',
+        visibility=VISIBILITY_INTERNAL,
+        activation_policy=ACTIVATION_SYSTEM,
+        app_label='maintenance_app',
+    ),
 }
 
 
@@ -175,6 +194,27 @@ def test_display_fields_are_optional():
     assert (manifest.name_zh, manifest.description_zh, manifest.icon, manifest.admin_url) == ('', '', '', '')
 
 
+def test_manifest_access_policies_default_to_public_and_workspace_owner():
+    manifest = ExtensionManifest(key='gallery', name='Gallery')
+
+    assert manifest.visibility == 'public'
+    assert manifest.activation_policy == ACTIVATION_WORKSPACE_OWNER
+
+
+@pytest.mark.parametrize(
+    'fields',
+    [
+        {'visibility': 'secret'},
+        {'activation_policy': 'operator'},
+        {'visibility': VISIBILITY_PRIVATE},
+        {'visibility': VISIBILITY_INTERNAL, 'activation_policy': ACTIVATION_PLATFORM_ADMIN},
+    ],
+)
+def test_manifest_rejects_invalid_access_policy_combinations(fields):
+    with pytest.raises(ValueError):
+        ExtensionManifest(key='gallery', name='Gallery', **fields)
+
+
 @pytest.mark.parametrize(
     'admin_url',
     [
@@ -199,6 +239,43 @@ def test_platform_and_tooling_extensions_are_always_available(workspace):
     assert services.is_available(None, 'sign_in')
     assert not services.is_available(workspace, 'reviews')
     assert not services.is_available(workspace, 'not_deployed')
+
+
+def test_restricted_extensions_never_leak_into_client_availability(workspace):
+    WorkspaceExtension.all_objects.create(
+        workspace=workspace,
+        key='brand_portal',
+        status=WorkspaceExtension.STATUS_ACTIVE,
+    )
+
+    assert 'brand_portal' in services.available_keys(workspace)
+    assert services.availability(workspace) == {
+        'available': ['importer', 'sign_in'],
+        'offered': ['maps', 'review_insights', 'reviews'],
+    }
+    assert 'brand_portal' not in str(services.availability(workspace, public_only=True))
+
+
+@pytest.mark.parametrize(
+    ('key', 'actor', 'allowed'),
+    [
+        ('reviews', ACTIVATION_WORKSPACE_OWNER, True),
+        ('brand_portal', ACTIVATION_WORKSPACE_OWNER, False),
+        ('brand_portal', ACTIVATION_PLATFORM_ADMIN, True),
+        ('maintenance', ACTIVATION_PLATFORM_ADMIN, False),
+        ('maintenance', ACTIVATION_SYSTEM, True),
+    ],
+)
+def test_service_layer_enforces_extension_management_policy(key, actor, allowed):
+    manifest = MANIFESTS[key]
+
+    assert services.can_manage(manifest, actor) is allowed
+    if allowed:
+        assert services.require_manageable(key, actor) is manifest
+    else:
+        with pytest.raises(services.ExtensionError) as refused:
+            services.require_manageable(key, actor)
+        assert refused.value.code == 'unknown_extension'
 
 
 def test_a_record_without_a_deployed_manifest_is_not_available(workspace):
@@ -503,6 +580,8 @@ def test_the_command_lists_what_each_workspace_uses(workspace):
     out, _, error = _run_command('list', '--workspace', 'extensions-ws')
     assert error is None
     assert [line.split() for line in out.splitlines()[1:]] == [
+        ['brand_portal', str(workspace.id), 'extensions-ws', '-', 'no'],
+        ['maintenance', str(workspace.id), 'extensions-ws', '-', 'no'],
         ['maps', str(workspace.id), 'extensions-ws', '-', 'no'],
         ['review_insights', str(workspace.id), 'extensions-ws', '-', 'no'],
         ['reviews', str(workspace.id), 'extensions-ws', 'active', 'yes'],
@@ -655,18 +734,32 @@ def test_lists_can_keep_only_the_rows_of_workspaces_using_an_extension(workspace
     assert not Workspace.objects.filter(services.where_available('not_deployed', workspace_field=None)).exists()
 
 
+@pytest.mark.parametrize('key', ['brand_portal', 'maintenance'])
+def test_the_command_retains_system_recovery_for_restricted_extensions(workspace, key):
+    out, err, error = _run_command('activate', key, '--workspace', workspace.slug)
+
+    assert (err, error) == ('', None)
+    assert out.splitlines() == [f'{workspace.id} {workspace.slug}: {key} active']
+    assert WorkspaceExtension.all_objects.get(workspace=workspace, key=key).status == 'active'
+
+
 # ── Listeners and contributions ──────────────────────────────────────
 
 
 def test_the_apps_of_extensions_a_workspace_does_not_use_are_listed(workspace):
-    assert services.unavailable_apps(workspace) == {'reviews_app', 'insights_app', 'maps_app'}
+    restricted = {'brand_portal_app', 'maintenance_app'}
+    assert services.unavailable_apps(workspace) == {
+        'reviews_app', 'insights_app', 'maps_app', *restricted,
+    }
 
     WorkspaceExtension.all_objects.create(workspace=workspace, key='reviews', status=WorkspaceExtension.STATUS_ACTIVE)
     services.invalidate(workspace.id)
 
     # Review insights still waits for its own activation; sign-in and the importer are always available.
-    assert services.unavailable_apps(workspace) == {'insights_app', 'maps_app'}
-    assert services.unavailable_apps(None) == {'reviews_app', 'insights_app', 'maps_app'}
+    assert services.unavailable_apps(workspace) == {'insights_app', 'maps_app', *restricted}
+    assert services.unavailable_apps(None) == {
+        'reviews_app', 'insights_app', 'maps_app', *restricted,
+    }
 
 
 @pytest.fixture

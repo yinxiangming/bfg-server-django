@@ -50,6 +50,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from bfg.common.extensions import registry, services
+from bfg.common.extensions.manifest import ACTIVATION_PLATFORM_ADMIN, ACTIVATION_WORKSPACE_OWNER
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ def list_extensions(workspace, *, viewer_is_platform_admin=False):
     available = services.compute_available_keys(workspace, entitled=entitled)
     describe_changer = _changer_describer(workspace, records.values(), viewer_is_platform_admin)
     prices = _price_list(workspace)
+    actor = _console_actor(viewer_is_platform_admin)
     return [
         _serialize_extension(
             manifest,
@@ -91,7 +93,7 @@ def list_extensions(workspace, *, viewer_is_platform_admin=False):
             prices,
         )
         for manifest in registry.all_manifests()
-        if manifest.is_activatable
+        if manifest.is_activatable and services.can_discover(manifest, actor)
     ]
 
 
@@ -140,7 +142,13 @@ def activate(workspace, key, *, user, data, viewer_is_platform_admin=False):
     return _respond(
         workspace,
         key,
-        lambda: services.activate(workspace, key, user=user, config=config),
+        lambda: services.activate(
+            workspace,
+            key,
+            user=user,
+            config=config,
+            actor=_console_actor(viewer_is_platform_admin),
+        ),
         viewer_is_platform_admin,
     )
 
@@ -148,7 +156,12 @@ def activate(workspace, key, *, user, data, viewer_is_platform_admin=False):
 def deactivate(workspace, key, *, user, viewer_is_platform_admin=False):
     """Switch ``key`` off for ``workspace``."""
     return _respond(
-        workspace, key, lambda: services.deactivate(workspace, key, user=user), viewer_is_platform_admin
+        workspace,
+        key,
+        lambda: services.deactivate(
+            workspace, key, user=user, actor=_console_actor(viewer_is_platform_admin)
+        ),
+        viewer_is_platform_admin,
     )
 
 
@@ -162,7 +175,12 @@ def restore(workspace, key, *, user, viewer_is_platform_admin=False):
     from bfg.common.extensions import archive
 
     def begin_and_load():
-        record = archive.begin_restore(workspace, key, user=user)
+        record = archive.begin_restore(
+            workspace,
+            key,
+            user=user,
+            actor=_console_actor(viewer_is_platform_admin),
+        )
         if getattr(settings, 'BFG_EXTENSION_ARCHIVE_RESTORE_ASYNC', False):
             from bfg.common.tasks import finish_extension_restore
 
@@ -181,7 +199,7 @@ def restore(workspace, key, *, user, viewer_is_platform_admin=False):
         )
 
 
-def update_config(workspace, key, *, data, viewer_is_platform_admin=False):
+def update_config(workspace, key, *, user, data, viewer_is_platform_admin=False):
     """Store the ``config`` the request body ``data`` carries for ``key``."""
     if not hasattr(data, 'get') or 'config' not in data:
         return Response(
@@ -189,8 +207,21 @@ def update_config(workspace, key, *, data, viewer_is_platform_admin=False):
             status=status.HTTP_400_BAD_REQUEST,
         )
     return _respond(
-        workspace, key, lambda: services.update_config(workspace, key, data['config']), viewer_is_platform_admin
+        workspace,
+        key,
+        lambda: services.update_config(
+            workspace,
+            key,
+            data['config'],
+            user=user,
+            actor=_console_actor(viewer_is_platform_admin),
+        ),
+        viewer_is_platform_admin,
     )
+
+
+def _console_actor(viewer_is_platform_admin):
+    return ACTIVATION_PLATFORM_ADMIN if viewer_is_platform_admin else ACTIVATION_WORKSPACE_OWNER
 
 
 def _respond(workspace, key, change, viewer_is_platform_admin):
@@ -279,6 +310,8 @@ def _serialize_extension(
         'icon': manifest.icon,
         'admin_url': manifest.admin_url,
         'pricing': manifest.pricing,
+        'visibility': manifest.visibility,
+        'activation_policy': manifest.activation_policy,
         'price': (prices or {}).get(manifest.key),
         'surfaces': list(manifest.surfaces),
         'requires': list(manifest.requires),

@@ -71,6 +71,7 @@ from bfg.common.extensions.archive_storage import (  # noqa: F401  (re-exported 
     is_configured,
     why_unconfigured,
 )
+from bfg.common.extensions.manifest import ACTIVATION_SYSTEM
 from bfg.common.extensions.services import ExtensionError, invalidate
 
 logger = logging.getLogger(__name__)
@@ -786,7 +787,7 @@ def _parse(stamp: str):
 # ── Restoring ────────────────────────────────────────────────────────
 
 
-def begin_restore(workspace, key, *, user=None):
+def begin_restore(workspace, key, *, user=None, actor=ACTIVATION_SYSTEM):
     """Put ``key`` on ``restoring`` so that whoever asked can see it is happening.
 
     Split from the loading so that a deployment can answer the request at once and load
@@ -798,6 +799,9 @@ def begin_restore(workspace, key, *, user=None):
     """
     WorkspaceExtension = _extension_model()
 
+    from bfg.common.extensions import services
+
+    services.require_manageable(key, actor)
     archive_storage()
     _manifest_of(key)
     with transaction.atomic():
@@ -861,9 +865,9 @@ def finish_restore(workspace, key):
     return record
 
 
-def restore(workspace, key, *, user=None):
+def restore(workspace, key, *, user=None, actor=ACTIVATION_SYSTEM):
     """Restore ``key`` for ``workspace`` and switch it on, start to finish."""
-    begin_restore(workspace, key, user=user)
+    begin_restore(workspace, key, user=user, actor=actor)
     return finish_restore(workspace, key)
 
 

@@ -67,7 +67,8 @@ from bfg.common.constants import (
     get_default_country_for_workspace,
     get_default_currency_for_workspace,
 )
-from bfg.common.extensions import registry, services as extension_services
+from bfg.common.extensions import services as extension_services
+from bfg.common.extensions.manifest import ACTIVATION_SYSTEM
 from bfg.common.extensions.manifest import PRICING_ADDON
 from bfg.core.exceptions import BFGException
 from bfg.platform.models.entitlement import WorkspaceEntitlement
@@ -155,7 +156,7 @@ def plan_for(key: str = PLAN_CODE_BASE_PLAN):
     )
 
 
-def acquire(workspace, key: str, *, user=None) -> Acquisition:
+def acquire(workspace, key: str, *, user=None, actor=ACTIVATION_SYSTEM) -> Acquisition:
     """Get ``workspace`` the add-on ``key``, or bill it for one.
 
     A free add-on is entitled and switched on. A priced one is invoiced and left to
@@ -174,11 +175,7 @@ def acquire(workspace, key: str, *, user=None) -> Acquisition:
     comes back from a key no app declares and from an activation the extension itself
     refused.
     """
-    manifest = registry.get_manifest(key)
-    if manifest is None:
-        raise extension_services.ExtensionError(
-            "unknown_extension", f"No extension named {key!r} is deployed."
-        )
+    manifest = extension_services.require_manageable(key, actor)
     if manifest.pricing != PRICING_ADDON:
         raise AcquisitionRefused(
             f"{key} is part of the base plan and is not acquired separately.", code=NOT_AN_ADDON
@@ -196,7 +193,7 @@ def acquire(workspace, key: str, *, user=None) -> Acquisition:
         )
 
     if Decimal(plan.price) <= ZERO:
-        return Acquisition(entitlement=_entitle(workspace, key, plan, user))
+        return Acquisition(entitlement=_entitle(workspace, key, plan, user, actor=actor))
     outstanding = _outstanding_invoice(workspace, key)
     if outstanding is not None:
         return Acquisition(invoice=outstanding, invoice_is_new=False)
@@ -212,6 +209,7 @@ def acquire(workspace, key: str, *, user=None) -> Acquisition:
                 user,
                 starts_at=now,
                 period_end=now + timedelta(days=trial_days),
+                actor=actor,
             ),
             trial_days=trial_days,
         )
@@ -237,6 +235,7 @@ def acquire(workspace, key: str, *, user=None) -> Acquisition:
                 user,
                 starts_at=now,
                 period_end=entitlements.add_months(now, DEFERRED_MONTHS),
+                actor=actor,
             ),
             billed_later=True,
         )
@@ -340,7 +339,8 @@ def price_list(workspace) -> dict:
 
 @transaction.atomic
 def _entitle(
-    workspace, key: str, plan, user, *, starts_at=None, period_end=None
+    workspace, key: str, plan, user, *, starts_at=None, period_end=None,
+    actor=ACTIVATION_SYSTEM,
 ) -> WorkspaceEntitlement:
     """Entitle ``workspace`` to ``key`` and switch the extension on.
 
@@ -370,7 +370,7 @@ def _entitle(
         current_period_end=period_end,
         status=WorkspaceEntitlement.STATUS_ACTIVE,
     )
-    extension_services.activate(workspace, key, user=user)
+    extension_services.activate(workspace, key, user=user, actor=actor)
     return entitlement
 
 

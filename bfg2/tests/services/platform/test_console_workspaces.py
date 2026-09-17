@@ -21,9 +21,17 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
 from bfg.common.extensions import registry, services
-from bfg.common.extensions.manifest import SCOPE_PLATFORM, ExtensionManifest, Prerequisite
+from bfg.common.extensions.manifest import (
+    ACTIVATION_PLATFORM_ADMIN,
+    ACTIVATION_SYSTEM,
+    SCOPE_PLATFORM,
+    VISIBILITY_INTERNAL,
+    VISIBILITY_PRIVATE,
+    ExtensionManifest,
+    Prerequisite,
+)
 from bfg.common.middleware import get_current_workspace, set_current_workspace
-from bfg.common.models import StaffMember, StaffRole, Workspace, WorkspaceDomain, WorkspaceExtension
+from bfg.common.models import AuditLog, StaffMember, StaffRole, Workspace, WorkspaceDomain, WorkspaceExtension
 from bfg.platform.models.workspace_profile import WorkspacePlatformProfile
 from bfg.platform.services.ownership import assign_workspace_owner
 from bfg.platform.services.provision_service import suspend_workspace
@@ -82,6 +90,21 @@ MANIFESTS = {
         app_label='maps_app',
     ),
     'sign_in': ExtensionManifest(key='sign_in', name='Sign-in', scope=SCOPE_PLATFORM, app_label='sign_in_app'),
+    'brand_portal': ExtensionManifest(
+        key='brand_portal',
+        name='Brand portal',
+        visibility=VISIBILITY_PRIVATE,
+        activation_policy=ACTIVATION_PLATFORM_ADMIN,
+        clean_config=lambda config: {'brand': str(config.get('brand', '')).strip()},
+        app_label='brand_portal_app',
+    ),
+    'maintenance': ExtensionManifest(
+        key='maintenance',
+        name='Maintenance',
+        visibility=VISIBILITY_INTERNAL,
+        activation_policy=ACTIVATION_SYSTEM,
+        app_label='maintenance_app',
+    ),
 }
 
 
@@ -236,6 +259,17 @@ def test_a_platform_administrator_is_let_in(operator, shop):
     assert client.get(detail_url(shop.id)).status_code == 200
 
 
+def test_restricted_extensions_are_disclosed_only_to_their_management_audience(
+    operator, shop, shop_owner
+):
+    keys_for = lambda user: {
+        row['key'] for row in client_for(user).get(detail_url(shop.id)).data['extensions']
+    }
+
+    assert keys_for(shop_owner) == {'maps', 'review_insights', 'reviews'}
+    assert keys_for(operator) == {'brand_portal', 'maps', 'review_insights', 'reviews'}
+
+
 # ── The list ─────────────────────────────────────────────────────────
 
 
@@ -346,7 +380,7 @@ def test_the_detail_adds_every_extension_with_its_configuration(
     listed = next(row for row in rows(client.get(CONSOLE)) if row['id'] == shop.id)
     assert {field: value for field, value in body.items() if field != 'extensions'} == listed
     extensions = {row['key']: row for row in body['extensions']}
-    assert list(extensions) == ['maps', 'review_insights', 'reviews']
+    assert list(extensions) == ['brand_portal', 'maps', 'review_insights', 'reviews']
     reviews = extensions['reviews']
     assert {field: reviews[field] for field in DISPLAY_FIELDS} == {
         'name': 'Reviews',
@@ -434,6 +468,44 @@ def test_a_platform_administrator_switches_extensions_for_a_workspace_they_are_n
     assert not WorkspaceExtension.all_objects.filter(workspace=platform_workspace).exists()
 
 
+def test_a_platform_administrator_manages_a_private_extension_and_actions_are_audited(
+    operator, shop
+):
+    client = client_for(operator)
+
+    activated = client.post(
+        extension_url(shop.id, 'brand_portal', 'activate'),
+        {'config': {'brand': ' Surlex ', 'secret': 'must-not-be-audited'}},
+        format='json',
+    )
+    configured = client.patch(
+        extension_url(shop.id, 'brand_portal', 'config'),
+        {'config': {'brand': 'Idlevo', 'secret': 'must-not-be-audited'}},
+        format='json',
+    )
+
+    assert activated.status_code == 200
+    assert activated.data['visibility'] == VISIBILITY_PRIVATE
+    assert activated.data['activation_policy'] == ACTIVATION_PLATFORM_ADMIN
+    assert configured.status_code == 200
+    assert configured.data['config'] == {'brand': 'Idlevo'}
+    audits = list(
+        AuditLog.objects.filter(workspace=shop, user=operator).order_by('created_at')
+    )
+    assert [entry.description for entry in audits] == [
+        'Activated extension brand_portal.',
+        'Updated configuration for extension brand_portal.',
+    ]
+    assert [entry.changes for entry in audits] == [
+        {
+            'status': {'old': WorkspaceExtension.STATUS_INACTIVE, 'new': WorkspaceExtension.STATUS_ACTIVE},
+            'config': {'changed': True},
+        },
+        {'config': {'changed': True}},
+    ]
+    assert 'must-not-be-audited' not in str([entry.changes for entry in audits])
+
+
 def test_refused_changes_say_why(operator, shop):
     client = client_for(operator)
 
@@ -497,6 +569,27 @@ def test_an_owner_switches_extensions_for_a_workspace_they_own(shop, shop_owner,
     assert 'reviews' not in services.available_keys(shop)
 
 
+def test_an_owner_cannot_probe_or_change_a_private_extension(shop, shop_owner):
+    client = client_for(shop_owner)
+    requests = [
+        client.post(extension_url(shop.id, 'brand_portal', 'activate'), {}, format='json'),
+        client.post(extension_url(shop.id, 'brand_portal', 'deactivate'), {}, format='json'),
+        client.patch(
+            extension_url(shop.id, 'brand_portal', 'config'),
+            {'config': {'brand': 'Surlex'}},
+            format='json',
+        ),
+        client.post(extension_url(shop.id, 'brand_portal', 'restore'), {}, format='json'),
+        client.post(extension_url(shop.id, 'brand_portal', 'acquire'), {}, format='json'),
+    ]
+
+    assert [(response.status_code, response.data['code']) for response in requests] == [
+        (404, 'unknown_extension'),
+    ] * 5
+    assert not WorkspaceExtension.all_objects.filter(workspace=shop, key='brand_portal').exists()
+    assert not AuditLog.objects.filter(workspace=shop).exists()
+
+
 def test_an_owner_is_not_told_whether_a_workspace_they_do_not_own_exists(shop, shop_owner):
     rival = _furnish('rival')
     missing = Workspace.objects.order_by('-id').first().id + 1
@@ -544,6 +637,7 @@ def test_owners_are_not_told_which_platform_administrator_switched_an_extension(
 
     _, seen_by_operator = changers_seen_by(operator)
     assert seen_by_operator == {
+        'brand_portal': None,
         'maps': None,
         'review_insights': summary(shop_admin),
         'reviews': summary(operator),

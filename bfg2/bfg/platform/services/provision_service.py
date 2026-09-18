@@ -21,7 +21,13 @@ def generate_api_key(prefix: str = "ws") -> str:
 
 
 @shared_task(bind=True, max_retries=3)
-def provision_workspace(self, workspace_id: int, cluster_id: str = None, initiated_by_id: int = None):
+def provision_workspace(
+    self,
+    workspace_id: int,
+    cluster_id: str = None,
+    initiated_by_id: int = None,
+    skin: str = "",
+):
     """
     Celery task: provision a workspace a standalone platform has created.
 
@@ -44,13 +50,18 @@ def provision_workspace(self, workspace_id: int, cluster_id: str = None, initiat
         workspace = Workspace.objects.get(id=workspace_id)
         initiated_by = User.objects.filter(id=initiated_by_id).first() if initiated_by_id else None
 
+        if skin:
+            from bfg.common.extensions.storefront_skins import set_storefront_skin
+
+            set_storefront_skin(workspace, skin, extension_keys=(), only_if_empty=True)
+
         # Record operation start
         operation = WorkspaceOperation.objects.create(
             workspace=workspace,
             operation="create",
             status="running",
             initiated_by=initiated_by,
-            details={"cluster_id": cluster_id},
+            details={"cluster_id": cluster_id, **({"skin": skin} if skin else {})},
         )
 
         profile, created = WorkspacePlatformProfile.objects.get_or_create(

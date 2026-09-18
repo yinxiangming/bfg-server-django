@@ -505,3 +505,14 @@ class TestStorefrontConfigEndpoint:
     def test_unconfigured_workspace_publishes_the_defaults(self, workspace):
         response = shopper(workspace).get(CONFIG_URL)
         assert response.data['storefront_display'] == DEFAULTS
+        assert response.data['theme'] == 'store'
+
+    def test_configured_theme_is_published(self, workspace):
+        settings_obj, _ = Settings.objects.update_or_create(workspace=workspace)
+        settings_obj.custom_settings = {'storefront_ui': {'theme': 'preloved'}}
+        settings_obj.save(update_fields=['custom_settings'])
+
+        response = shopper(workspace).get(CONFIG_URL)
+
+        assert response.status_code == 200
+        assert response.data['theme'] == 'preloved'

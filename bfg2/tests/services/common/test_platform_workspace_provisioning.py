@@ -48,13 +48,17 @@ def queued(monkeypatch):
     return calls
 
 
-def create_through_api(slug):
+def create_through_api(slug, **fields):
     owner = User.objects.create_user(username=f'{slug}-owner', password='x')
     # Only an account that already owns or administers a workspace may create one.
     assign_workspace_owner(Workspace.objects.create(name=f'{slug} first', slug=f'{slug}-first'), owner)
     api = APIClient()
     api.force_authenticate(user=owner)
-    response = api.post('/api/v1/platform/workspaces/', {'name': slug.title(), 'slug': slug}, format='json')
+    response = api.post(
+        '/api/v1/platform/workspaces/',
+        {'name': slug.title(), 'slug': slug, **fields},
+        format='json',
+    )
     assert response.status_code == 201, response.data
     return Workspace.objects.get(slug=slug)
 
@@ -103,3 +107,34 @@ def test_a_retried_task_adds_no_second_set(queued):
 
     assert retry['notification_templates'] == []
     assert MessageTemplate.objects.filter(workspace=workspace).count() == len(NOTIFICATION_CODES)
+
+
+@pytest.mark.django_db
+def test_explicit_skin_is_passed_to_and_written_by_standalone_provisioning(queued):
+    workspace = create_through_api('api-skinned', skin='website')
+    assert queued == [{
+        'workspace_id': workspace.id,
+        'initiated_by_id': workspace.platform_profile.memberships.get(role='owner').user_id,
+        'skin': 'website',
+    }]
+    assert (Settings.objects.get(workspace=workspace).custom_settings or {}).get('storefront_ui') is None
+
+    run_queued(queued)
+
+    assert Settings.objects.get(workspace=workspace).custom_settings['storefront_ui']['theme'] == 'website'
+    assert WorkspaceOperation.objects.get(workspace=workspace).details['skin'] == 'website'
+
+
+@pytest.mark.django_db
+def test_standalone_provisioning_never_overwrites_a_theme_saved_before_the_worker_runs(queued):
+    workspace = create_through_api('api-custom-theme', skin='website')
+    settings_obj = Settings.objects.get(workspace=workspace)
+    settings_obj.custom_settings = {'storefront_ui': {'theme': 'store', 'header': 'custom'}}
+    settings_obj.save(update_fields=['custom_settings'])
+
+    run_queued(queued)
+    run_queued(queued)
+
+    assert Settings.objects.get(workspace=workspace).custom_settings == {
+        'storefront_ui': {'theme': 'store', 'header': 'custom'},
+    }

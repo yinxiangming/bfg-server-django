@@ -7,6 +7,7 @@ from django.apps import apps
 
 from bfg.common.models import normalize_hostname, resolve_workspace_public_frontend_base_url
 from bfg.common.onboarding.catalog import CURRENCY_PROFILES, SUPPORTED_LANGUAGES
+from bfg.common.extensions import validate_storefront_skin
 
 
 def _safe_workspace_domain(instance):
@@ -86,7 +87,9 @@ class WorkspaceCreateSerializer(serializers.Serializer):
 
     Only ``name`` is required; the other fields may be left out, blank or null, and
     come out as ``""``. A blank ``slug`` is made from the name, and a blank
-    ``country``, ``currency`` or ``language`` is left to ``create_owned_workspace``.
+    ``country``, ``currency``, ``language`` or ``skin`` is left to
+    ``create_owned_workspace``. This generic endpoint activates no extension, so
+    an explicit skin must be a core skin.
     """
     name = serializers.CharField(max_length=255)
     slug = serializers.SlugField(max_length=100, required=False, allow_blank=True, allow_null=True)
@@ -97,6 +100,7 @@ class WorkspaceCreateSerializer(serializers.Serializer):
     )
     currency = serializers.CharField(max_length=3, required=False, allow_blank=True, allow_null=True)
     language = serializers.CharField(max_length=10, required=False, allow_blank=True, allow_null=True)
+    skin = serializers.CharField(max_length=64, required=False, allow_blank=True, allow_null=True)
 
     def validate_slug(self, value):
         # A slug the caller picked is refused when taken, never quietly changed.
@@ -122,6 +126,14 @@ class WorkspaceCreateSerializer(serializers.Serializer):
         if code and code not in SUPPORTED_LANGUAGES:
             raise serializers.ValidationError("Unsupported language.")
         return code
+
+    def validate_skin(self, value):
+        try:
+            # Generic workspace creation does not install extensions, so it may
+            # select only skins that every deployment provides.
+            return validate_storefront_skin(value, extension_keys=())
+        except ValueError as exc:
+            raise serializers.ValidationError('Unsupported storefront skin.') from exc
 
     def validate(self, attrs):
         _reject_domain(getattr(self, 'initial_data', None))

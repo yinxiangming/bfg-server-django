@@ -77,6 +77,10 @@ extensions and defaults are installed.
    `WorkspacePlatformProfile.cluster`.
 8. Configure Brand Portal defaults and a dedicated BFF API key separately when
    applicable.
+   A direct generic workspace create/provision request may pass a core ``skin``.
+   Brand Portal provisioning should use its ``default_theme`` setting instead;
+   an extension-owned theme is valid only when that extension is also listed in
+   ``provisioning_extensions``.
 9. Validate database state, DNS, TLS, Workspace creation, system-domain
    materialization, extension activation, and SSO.
 10. Record evidence and stop at the requested environment boundary.
@@ -84,4 +88,3 @@ extensions and defaults are installed.
 Read [references/cluster-runbook.md](references/cluster-runbook.md) for the
 field matrix, preflight queries, logical and physical checklists, validation,
 rollback, and current implementation limitations.
-

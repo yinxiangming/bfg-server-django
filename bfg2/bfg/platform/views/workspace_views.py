@@ -124,6 +124,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                 country=data.get('country', ''),
                 currency=data.get('currency', ''),
                 language=data.get('language', ''),
+                skin=data.get('skin', ''),
                 current_workspace_id=_token_workspace_id(request),
             )
         except WorkspaceCreateForbidden as exc:

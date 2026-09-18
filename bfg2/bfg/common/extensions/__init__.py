@@ -35,6 +35,11 @@ from bfg.common.extensions.manifest import (  # noqa: F401
     Prerequisite,
     setting_present,
 )
+from bfg.common.extensions.storefront_skins import (  # noqa: F401
+    CORE_STOREFRONT_SKINS,
+    available_storefront_skins,
+    validate_storefront_skin,
+)
 
 
 def is_available(workspace, key):

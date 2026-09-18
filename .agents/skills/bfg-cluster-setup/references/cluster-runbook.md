@@ -81,6 +81,11 @@ Workspace domain suffixes.
   new Cluster.
 - Configure registration, default country, currency, language, theme, plan, and
   provisioning extensions in the Brand Portal profile.
+- Use the generic workspace create/provision ``skin`` field for an explicit core
+  skin, or Brand Portal ``default_theme`` for brand-wide provisioning. An
+  extension skin must be declared in the deployed server manifest and the same
+  extension must appear in ``provisioning_extensions``. A blank value safely
+  falls back to the core ``store`` skin.
 - Create a dedicated Workspace-scoped API key for the brand BFF.
 - Configure the BFF API origin, key, secret, and exact callback origin as
   server-only values.

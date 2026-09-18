@@ -475,6 +475,22 @@ class TestNotifyMe:
 
 
 class TestStorefrontConfigEndpoint:
+    def test_only_the_public_ga4_measurement_id_is_published(self, workspace):
+        settings_obj, _ = Settings.objects.update_or_create(workspace=workspace)
+        settings_obj.custom_settings = {
+            'analytics': {
+                'google_analytics_id': '  G-PUBLIC123  ',
+                'api_secret': 'must-never-be-public',
+            },
+        }
+        settings_obj.save(update_fields=['custom_settings'])
+
+        response = shopper(workspace).get(CONFIG_URL)
+
+        assert response.status_code == 200
+        assert response.data['analytics'] == {'google_analytics_id': 'G-PUBLIC123'}
+        assert 'must-never-be-public' not in str(response.data)
+
     def test_policy_travels_with_the_public_config(self, workspace):
         configure(workspace, sku_display='hidden', stock_display='low_only',
                   out_of_stock_policy='notify')

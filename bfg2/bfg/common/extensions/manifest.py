@@ -59,6 +59,7 @@ SURFACE_MINIPROGRAM = 'miniprogram'
 PUBLIC_SURFACES = frozenset({SURFACE_STOREFRONT, SURFACE_ACCOUNT, SURFACE_MINIPROGRAM})
 
 _KEY_PATTERN = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
+_STOREFRONT_SKIN_PATTERN = re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 
 
 def is_extension_key(value) -> bool:
@@ -126,7 +127,9 @@ class ExtensionManifest:
     normalises a workspace's configuration, raising ``ValueError`` (or Django's
     ``ValidationError``) on bad input. ``on_activate`` and ``on_deactivate`` are called
     with ``(workspace, record)`` inside the transaction that changes the state, so a
-    hook that raises leaves the state unchanged.
+    hook that raises leaves the state unchanged. ``storefront_skins`` names client
+    skins deployed with the extension. ``default_storefront_skin``, when set, must be
+    one of them and is applied on first activation only when the workspace has no theme.
     """
 
     key: str
@@ -148,6 +151,8 @@ class ExtensionManifest:
     restore_converters: Optional[dict] = None
     config_schema: Optional[dict] = None
     clean_config: Optional[Callable[[dict], dict]] = None
+    storefront_skins: Tuple[str, ...] = ()
+    default_storefront_skin: str = ''
     on_activate: Optional[Callable[[Any, Any], None]] = None
     on_deactivate: Optional[Callable[[Any, Any], None]] = None
     # Filled in by the registry with the label of the app that shipped the manifest.
@@ -192,6 +197,25 @@ class ExtensionManifest:
             raise ValueError(
                 f'Extension {self.key!r} has admin_url {self.admin_url!r}, '
                 f'which must be a path starting with "/" that names no host.'
+            )
+        if isinstance(self.storefront_skins, str):
+            raise ValueError(f'Extension {self.key!r} storefront_skins must be a sequence of names.')
+        storefront_skins = tuple(self.storefront_skins or ())
+        object.__setattr__(self, 'storefront_skins', storefront_skins)
+        if not isinstance(self.default_storefront_skin, str):
+            raise ValueError(f'Extension {self.key!r} default_storefront_skin must be a string.')
+        if len(set(storefront_skins)) != len(storefront_skins):
+            raise ValueError(f'Extension {self.key!r} declares duplicate storefront skins.')
+        for skin in storefront_skins:
+            if not isinstance(skin, str) or not _STOREFRONT_SKIN_PATTERN.match(skin):
+                raise ValueError(
+                    f'Extension {self.key!r} has invalid storefront skin {skin!r}. '
+                    'Skin names must be lowercase letters, digits, hyphens or underscores.'
+                )
+        if self.default_storefront_skin and self.default_storefront_skin not in storefront_skins:
+            raise ValueError(
+                f'Extension {self.key!r} default storefront skin '
+                f'{self.default_storefront_skin!r} is not declared in storefront_skins.'
             )
 
     @property

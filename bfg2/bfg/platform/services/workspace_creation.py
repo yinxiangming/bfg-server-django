@@ -103,6 +103,7 @@ def create_owned_workspace(
     country: str = "",
     currency: str = "",
     language: str = "",
+    skin: str = "",
     current_workspace_id: Optional[int] = None,
 ):
     """Create a workspace owned by *user*, who is also made its admin, and return it.
@@ -114,10 +115,16 @@ def create_owned_workspace(
     Embedded, the workspace is provisioned in the same transaction. *country*,
     *currency* and *language* each fall back to the settings of the workspace
     *current_workspace_id*, when *user* is its active staff or its owner, and
-    then to the settings defaults. Standalone, they are not applied: the
-    ``provision_workspace`` task is queued once the workspace is committed, as
-    it always was.
+    then to the settings defaults. A non-blank *skin* is written to
+    ``custom_settings.storefront_ui.theme``. Standalone, locale values are not
+    applied and the skin is passed to ``provision_workspace``, which is queued
+    once the workspace is committed.
     """
+    from bfg.common.extensions import validate_storefront_skin
+
+    # This generic path activates no extension. Extension-owned skins are only
+    # valid in a provisioning flow that explicitly installs their extension.
+    skin = validate_storefront_skin(skin, extension_keys=())
     User = get_user_model()
     embedded = is_embedded_mode()
 
@@ -143,11 +150,12 @@ def create_owned_workspace(
                 country=country,
                 currency=currency,
                 language=language,
+                skin=skin,
                 current_workspace_id=current_workspace_id,
             )
 
     if not embedded:
-        provision_workspace.delay(workspace_id=workspace.id, initiated_by_id=user.id)
+        provision_workspace.delay(workspace_id=workspace.id, initiated_by_id=user.id, skin=skin)
     return workspace
 
 
@@ -177,7 +185,7 @@ def unique_workspace_slug(name: str) -> str:
 
 # ── Embedded provisioning ─────────────────────────────────────────────────────
 
-def _provision(workspace, user, *, name, country, currency, language, current_workspace_id) -> None:
+def _provision(workspace, user, *, name, country, currency, language, skin, current_workspace_id) -> None:
     """Give a new workspace what its storefront needs, and record its creation."""
     from bfg.common.middleware import get_current_workspace, set_current_workspace
     from bfg.common.onboarding import provisioning
@@ -200,6 +208,10 @@ def _provision(workspace, user, *, name, country, currency, language, current_wo
             language=language or current.get("language", ""),
             site_name=name,
         )
+        if skin:
+            from bfg.common.extensions.storefront_skins import set_storefront_skin
+
+            set_storefront_skin(workspace, skin, extension_keys=(), only_if_empty=True)
         provisioning.ensure_currency(settings_obj.default_currency)
         provisioning.ensure_store(workspace)
         templates = ensure_notification_templates(
@@ -214,7 +226,11 @@ def _provision(workspace, user, *, name, country, currency, language, current_wo
         operation="create",
         status="completed",
         initiated_by=user,
-        details={"embedded": True, "notification_templates": templates["created"]},
+        details={
+            "embedded": True,
+            "notification_templates": templates["created"],
+            **({"skin": skin} if skin else {}),
+        },
         completed_at=timezone.now(),
     )
 

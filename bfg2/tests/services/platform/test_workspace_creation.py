@@ -20,6 +20,7 @@ from celery.app.task import Task
 from django.contrib.auth import get_user_model
 from django.db.models.query import QuerySet
 from kombu.exceptions import OperationalError
+from rest_framework import serializers
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
 
@@ -30,6 +31,7 @@ from bfg.finance.models import Currency
 from bfg.inbox.models import MessageTemplate
 from bfg.inbox.notification_templates import NOTIFICATION_CODES
 from bfg.platform.models import PlatformMembership, WorkspaceOperation, WorkspacePlatformProfile
+from bfg.platform.serializers.workspace import WorkspaceCreateSerializer
 from bfg.platform.services import workspace_creation
 from bfg.platform.services.ownership import assign_workspace_owner
 from bfg.platform.services.provision_service import suspend_workspace
@@ -247,8 +249,8 @@ class TestAskedAgainWithTheAccountLocked:
 class TestWhatACreateMakes:
     @pytest.mark.parametrize('rest', [
         {},
-        {'slug': '', 'country': '', 'currency': '', 'language': ''},
-        {'slug': None, 'country': None, 'currency': None, 'language': None},
+        {'slug': '', 'country': '', 'currency': '', 'language': '', 'skin': ''},
+        {'slug': None, 'country': None, 'currency': None, 'language': None, 'skin': None},
     ], ids=['left-out', 'blank', 'null'])
     def test_a_chinese_name_gets_a_generated_slug_and_a_workspace_ready_to_sell_from(self, queued, rest):
         user = admin_elsewhere('founder')
@@ -278,6 +280,35 @@ class TestWhatACreateMakes:
         assert operation.completed_at is not None
         # Nothing is left to a worker.
         assert queued == []
+
+    def test_an_explicit_core_skin_is_written_during_embedded_provisioning(self):
+        user = admin_elsewhere('founder')
+
+        response = create(user, {'name': 'Website Shop', 'skin': 'website'})
+
+        assert response.status_code == 201, response.data
+        settings_obj = Settings.objects.get(workspace_id=response.json()['id'])
+        assert settings_obj.custom_settings['storefront_ui']['theme'] == 'website'
+        assert WorkspaceOperation.objects.get(workspace_id=response.json()['id']).details['skin'] == 'website'
+
+    @pytest.mark.parametrize('skin', ['not-deployed', 'preloved'])
+    def test_an_extension_or_unknown_skin_is_rejected_without_creating_a_workspace(self, skin):
+        user = admin_elsewhere('founder')
+
+        response = create(user, {'name': 'Unknown Skin', 'skin': skin})
+
+        assert response.status_code == 400
+        assert response.json()['skin'] == ['Unsupported storefront skin.']
+        assert not Workspace.objects.filter(slug='unknown-skin').exists()
+
+    def test_skin_validation_preserves_the_internal_cause_without_exposing_it(self):
+        serializer = WorkspaceCreateSerializer()
+
+        with pytest.raises(serializers.ValidationError) as refused:
+            serializer.validate_skin('not-deployed')
+
+        assert refused.value.detail == ['Unsupported storefront skin.']
+        assert isinstance(refused.value.__cause__, ValueError)
 
     def test_the_created_workspace_is_returned_as_me_lists_it(self):
         user = admin_elsewhere('founder')

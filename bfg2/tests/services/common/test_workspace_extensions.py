@@ -194,6 +194,25 @@ def test_display_fields_are_optional():
     assert (manifest.name_zh, manifest.description_zh, manifest.icon, manifest.admin_url) == ('', '', '', '')
 
 
+def test_a_default_storefront_skin_must_be_declared_by_the_manifest():
+    with pytest.raises(ValueError, match='not declared'):
+        ExtensionManifest(key='gallery', name='Gallery', default_storefront_skin='gallery')
+
+    manifest = ExtensionManifest(
+        key='gallery',
+        name='Gallery',
+        storefront_skins=('gallery',),
+        default_storefront_skin='gallery',
+    )
+    assert manifest.storefront_skins == ('gallery',)
+
+    with pytest.raises(ValueError, match='sequence'):
+        ExtensionManifest(key='gallery', name='Gallery', storefront_skins='gallery')
+
+    with pytest.raises(ValueError, match='invalid storefront skin'):
+        ExtensionManifest(key='gallery', name='Gallery', storefront_skins=('gallery', 1))
+
+
 def test_manifest_access_policies_default_to_public_and_workspace_owner():
     manifest = ExtensionManifest(key='gallery', name='Gallery')
 
@@ -346,6 +365,78 @@ def test_activating_makes_the_extension_available_and_runs_its_hook(workspace, d
     assert record.activated_at is not None
     assert HOOK_CALLS == [('activate', workspace.id, 'reviews')]
     assert 'reviews' in services.available_keys(workspace)
+
+
+def test_activation_applies_the_manifest_default_skin_only_when_theme_is_empty(
+    workspace, monkeypatch, django_capture_on_commit_callbacks,
+):
+    from bfg.common.models import Settings
+
+    monkeypatch.setitem(
+        MANIFESTS,
+        'reviews',
+        replace(
+            MANIFESTS['reviews'],
+            storefront_skins=('preloved',),
+            default_storefront_skin='preloved',
+        ),
+    )
+    registry.reset_cache()
+
+    with django_capture_on_commit_callbacks(execute=True):
+        services.activate(workspace, 'reviews')
+
+    custom = Settings.objects.get(workspace=workspace).custom_settings
+    assert custom['storefront_ui']['theme'] == 'preloved'
+
+
+def test_activation_default_skin_invalidates_a_cached_storefront_config(
+    workspace, monkeypatch, django_capture_on_commit_callbacks,
+):
+    api = _client(workspace)
+    assert api.get('/api/v1/settings/storefront/').json()['theme'] == 'store'
+    monkeypatch.setitem(
+        MANIFESTS,
+        'reviews',
+        replace(
+            MANIFESTS['reviews'],
+            storefront_skins=('preloved',),
+            default_storefront_skin='preloved',
+        ),
+    )
+    registry.reset_cache()
+
+    with django_capture_on_commit_callbacks(execute=True):
+        services.activate(workspace, 'reviews')
+
+    assert api.get('/api/v1/settings/storefront/').json()['theme'] == 'preloved'
+
+
+def test_activation_never_replaces_an_existing_workspace_theme(
+    workspace, monkeypatch, django_capture_on_commit_callbacks,
+):
+    from bfg.common.models import Settings
+
+    settings_obj = Settings.objects.get(workspace=workspace)
+    settings_obj.custom_settings = {'storefront_ui': {'theme': 'website', 'header': 'compact'}}
+    settings_obj.save(update_fields=['custom_settings'])
+    monkeypatch.setitem(
+        MANIFESTS,
+        'reviews',
+        replace(
+            MANIFESTS['reviews'],
+            storefront_skins=('preloved',),
+            default_storefront_skin='preloved',
+        ),
+    )
+    registry.reset_cache()
+
+    with django_capture_on_commit_callbacks(execute=True):
+        services.activate(workspace, 'reviews')
+
+    assert Settings.objects.get(workspace=workspace).custom_settings == {
+        'storefront_ui': {'theme': 'website', 'header': 'compact'},
+    }
 
 
 def test_the_cached_answer_is_dropped_when_the_change_commits(workspace, django_capture_on_commit_callbacks):

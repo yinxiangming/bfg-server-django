@@ -33,6 +33,7 @@ from bfg.common.extensions.manifest import (
     VISIBILITY_PUBLIC,
     ExtensionManifest,
 )
+from bfg.common.extensions.storefront_skins import set_storefront_skin
 from bfg.common.storefront_cache import invalidate_storefront_config_cache
 
 logger = logging.getLogger(__name__)
@@ -392,6 +393,13 @@ def activate(workspace, key: str, *, user=None, config=None, actor: str = ACTIVA
 
     if manifest.on_activate is not None:
         manifest.on_activate(workspace, record)
+    if manifest.default_storefront_skin:
+        set_storefront_skin(
+            workspace,
+            manifest.default_storefront_skin,
+            extension_keys=(manifest.key,),
+            only_if_empty=True,
+        )
     transaction.on_commit(lambda: invalidate(workspace.id))
     return record
 

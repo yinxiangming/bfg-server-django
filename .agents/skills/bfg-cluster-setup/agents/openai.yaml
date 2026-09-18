@@ -1,0 +1,5 @@
+interface:
+  display_name: "BFG Cluster Setup"
+  short_description: "Configure BFG clusters and Workspace routing safely"
+  default_prompt: "Use $bfg-cluster-setup to plan and validate a new BFG cluster safely."
+

@@ -98,6 +98,12 @@ Copy `.env.example` to `.env`. Key variables:
 
 See `.env.example` for the full reference including email, social login, Stripe, AI keys, etc.
 
+## Repository skills
+
+- [`bfg-cluster-setup`](./.agents/skills/bfg-cluster-setup/SKILL.md) — plan,
+  configure, migrate, and validate logical brand-routing clusters or independent
+  BFG infrastructure clusters.
+
 ---
 
 ## Local Extension Apps

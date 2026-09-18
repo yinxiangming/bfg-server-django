@@ -619,6 +619,10 @@ EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False').lower() == 'true'
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@example.com')
+# Inquiry notifications use a workspace EmailConfig for delivery. These only
+# select the fallback recipient when a Site has no enabled recipient list.
+CLUSTER_ADMIN_EMAIL = os.environ.get('CLUSTER_ADMIN_EMAIL', '').strip()
+PLATFORM_ADMIN_EMAIL = os.environ.get('PLATFORM_ADMIN_EMAIL', '').strip()
 
 # Anymail (Mailgun) — activated when EMAIL_BACKEND is set to the anymail backend.
 # Keep the default (smtp) for callers that haven't opted in; UAT / prod can flip this

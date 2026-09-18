@@ -89,9 +89,9 @@ class InquiryService(BaseService):
         from bfg.core.events import after_commit
         from bfg.web.tasks import send_inquiry_email, send_inquiry_webhook
         
-        email_config = notification_config.get('email', {})
-        if email_config.get('enabled') and email_config.get('recipients'):
-            after_commit(send_inquiry_email.delay, inquiry.id)
+        # Always enqueue the task. It resolves Site recipients first and then
+        # the deployment-level cluster administrator fallback after commit.
+        after_commit(send_inquiry_email.delay, inquiry.id)
         
         webhook_config = notification_config.get('webhook', {})
         if webhook_config.get('enabled') and webhook_config.get('url'):

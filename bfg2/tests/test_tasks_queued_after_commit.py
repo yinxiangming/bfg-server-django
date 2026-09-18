@@ -121,6 +121,17 @@ class ListenersQueueAfterCommitTests(TestCase):
             email.delay.assert_called_once_with(44)
             webhook.delay.assert_called_once_with(44)
 
+    def test_inquiry_email_is_queued_without_site_recipients(self):
+        site = SimpleNamespace(notification_config={'email': {}})
+        inquiry = SimpleNamespace(id=45, site=site)
+
+        with patch('bfg.web.tasks.send_inquiry_email') as email:
+            with self.captureOnCommitCallbacks(execute=True):
+                InquiryService(workspace=WORKSPACE)._send_notifications(inquiry)
+                email.delay.assert_not_called()
+
+            email.delay.assert_called_once_with(45)
+
 
 class OrderStatusChangeTests(TestCase):
     """The same through a service method that emits inside its own transaction."""

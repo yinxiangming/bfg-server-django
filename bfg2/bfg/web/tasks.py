@@ -11,11 +11,60 @@ import hmac
 import requests
 from celery import shared_task
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
+from django.core.validators import validate_email
 from django.template.loader import render_to_string
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_email_list(values):
+    """Return unique valid addresses from trusted notification configuration."""
+    if isinstance(values, str):
+        values = values.split(',')
+    if not isinstance(values, (list, tuple, set)):
+        return []
+
+    recipients = []
+    seen = set()
+    for value in values:
+        address = str(value or '').strip()
+        try:
+            validate_email(address)
+        except ValidationError:
+            continue
+        normalized = address.casefold()
+        if normalized not in seen:
+            recipients.append(address)
+            seen.add(normalized)
+    return recipients
+
+
+def _inquiry_notification_recipients(notification_config):
+    """Resolve Site recipients before the deployment-level admin fallback."""
+    email_config = notification_config.get('email', {}) if isinstance(notification_config, dict) else {}
+    if isinstance(email_config, dict):
+        if email_config.get('enabled') is False:
+            return []
+        explicit = _clean_email_list(email_config.get('recipients'))
+        if explicit:
+            return explicit
+
+    cluster_admin = (
+        getattr(settings, 'CLUSTER_ADMIN_EMAIL', '')
+        or getattr(settings, 'PLATFORM_ADMIN_EMAIL', '')
+    )
+    return _clean_email_list(cluster_admin)
+
+
+def _inquiry_email_is_disabled(notification_config):
+    """Return whether the Site explicitly disabled inquiry email delivery."""
+    if not isinstance(notification_config, dict):
+        return False
+    email_config = notification_config.get('email')
+    return isinstance(email_config, dict) and email_config.get('enabled') is False
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -46,13 +95,26 @@ def send_inquiry_email(self, inquiry_id: int):
         if default_site:
             notification_config = default_site.notification_config or {}
     
-    email_config = notification_config.get('email', {})
-    if not email_config.get('enabled'):
-        return
-    
-    recipients = email_config.get('recipients', [])
+    recipients = _inquiry_notification_recipients(notification_config)
     if not recipients:
-        logger.warning(f"No email recipients configured for inquiry {inquiry_id}")
+        if _inquiry_email_is_disabled(notification_config):
+            logger.info("Inquiry %s email skipped: Site email notifications are disabled", inquiry_id)
+        else:
+            logger.warning(
+                "Inquiry %s email skipped: no Site recipients or deployment-level admin email configured",
+                inquiry_id,
+            )
+        return
+
+    from bfg.common.services import EmailService
+
+    email_backend_config = EmailService.get_active_config(inquiry.workspace)
+    if email_backend_config is None:
+        logger.warning(
+            "Inquiry %s email skipped: workspace %s has no active default EmailConfig",
+            inquiry_id,
+            inquiry.workspace_id,
+        )
         return
     
     try:
@@ -83,13 +145,13 @@ Submitted at: {inquiry.created_at}
 Source: {inquiry.source_url or 'N/A'}
 """
         
-        send_mail(
+        EmailService.send_email(
+            workspace=inquiry.workspace,
+            to_list=recipients,
             subject=subject,
-            message=text_message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=recipients,
-            html_message=html_message,
-            fail_silently=False,
+            body_plain=text_message,
+            body_html=html_message,
+            config=email_backend_config,
         )
         
         # Mark as sent

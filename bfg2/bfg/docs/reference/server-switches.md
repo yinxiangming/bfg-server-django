@@ -201,7 +201,21 @@ This makes verification/onboarding flows project-specific while keeping the core
 ### `DEFAULT_FROM_EMAIL`
 - Default: `noreply@example.com`
 
-These values together determine whether password reset and email confirmation mails can actually be delivered.
+The `EMAIL_*` values above determine whether password reset and email
+confirmation mails can actually be delivered.
+
+### `CLUSTER_ADMIN_EMAIL`
+- Default: empty
+- Purpose:
+  - Fallback recipient for public inquiry notifications when the Site has no
+    enabled `notification_config.email.recipients` list.
+  - Delivery still requires the inquiry workspace to have an active default
+    `EmailConfig`; Django's global email backend is not used for this path.
+
+### `PLATFORM_ADMIN_EMAIL`
+- Default: empty
+- Purpose:
+  - Legacy fallback used only when `CLUSTER_ADMIN_EMAIL` is empty.
 
 ---
 

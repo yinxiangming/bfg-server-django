@@ -149,12 +149,21 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='me')
     def me(self, request):
         """GET /api/v1/platform/workspaces/me/ — current user's workspaces and whether they may create one."""
+        is_superuser = is_platform_superuser(request.user)
         return Response({
             'workspaces': get_user_workspaces(request.user),
             # Keep the legacy key for existing clients, but do not make a staff
             # account look like it may access the deployment control plane.
-            'is_platform_superuser': is_platform_superuser(request.user),
-            'is_platform_admin': is_platform_superuser(request.user),
+            'is_platform_superuser': is_superuser,
+            'is_platform_admin': is_superuser,
+            # The browser uses these only for navigation. Every matching API
+            # endpoint independently verifies the Django superuser permission.
+            'platform_capabilities': {
+                'cluster_management': is_superuser,
+                'audit_log': is_superuser,
+                'configuration': is_superuser,
+                'exchange_rates': is_superuser,
+            },
             'workspace_limit': max_owned_workspaces(),
             # Asked without a lock: what a create request would meet right now.
             'create_blocked': workspace_create_blocked(request.user),

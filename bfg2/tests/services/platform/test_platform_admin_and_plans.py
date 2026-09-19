@@ -119,6 +119,12 @@ def test_workspaces_me_reports_only_the_django_superuser_for_control_plane_acces
         assert response.status_code == 200
         assert response.data["is_platform_admin"] is expected
         assert response.data["is_platform_superuser"] is expected
+        assert response.data["platform_capabilities"] == {
+            "cluster_management": expected,
+            "audit_log": expected,
+            "configuration": expected,
+            "exchange_rates": expected,
+        }
         assert _is_platform_superuser(user) is expected
 
 

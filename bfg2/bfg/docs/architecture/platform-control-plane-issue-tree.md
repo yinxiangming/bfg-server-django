@@ -110,7 +110,7 @@ rather than claim that the workspace moved.
 
 ### Verification record (2026-09-20)
 
-- Current local BFG suite: `2062 passed, 22 subtests passed`.
+- Current local BFG suite: `2063 passed, 22 subtests passed`.
 - Placement reservations are strict-superuser-only, reserve capacity without
   changing ``WorkspacePlatformProfile.cluster``, have idempotent rollback and
   persist ordered progress events. An explicit preview-by-default maintenance

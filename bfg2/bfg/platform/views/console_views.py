@@ -23,6 +23,7 @@ from bfg.platform.services.audit_service import record_platform_audit, redact_pl
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
+from bfg.common.models import normalize_hostname
 from bfg.common.services.workspace_service import WorkspaceService
 from bfg.common.services.user_service import UserService
 
@@ -244,12 +245,20 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         workspace = self._workspace(pk)
         profile = getattr(workspace, "platform_profile", None)
         cluster = getattr(profile, "cluster", None) if profile else None
+        owner = self._owner(workspace)
         data = {
             "format": "idlevo-workspace-v1",
+            "scope": "configuration-template",
+            "does_not_include": ["members", "business_data", "media"],
             "workspace": {"name": workspace.name, "slug": workspace.slug, "email": workspace.email,
                           "phone": workspace.phone, "settings": workspace.settings or {}},
-            "domains": list(workspace.domains.values_list("hostname", flat=True)),
+            "owner_email": owner["email"] if owner else None,
             "cluster": {"id": cluster.id, "name": cluster.name, "region": cluster.region} if cluster else None,
+            # Importing a hostname never proves control. The destination always
+            # restores custom domains as pending, non-primary candidates.
+            "custom_domains": list(workspace.domains.filter(
+                kind=apps.get_model("common", "WorkspaceDomain").KIND_CUSTOM,
+            ).values("hostname")),
             "exported_at": timezone.now().isoformat(),
         }
         record_platform_audit(
@@ -268,7 +277,15 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         _confirmed(request)
         reason = _change_reason(request)
         data = request.data if isinstance(request.data, dict) else {}
+        export_format = data.get("format")
+        if export_format and export_format != "idlevo-workspace-v1":
+            return Response({
+                "detail": "This is not a supported Idlevo workspace configuration export.",
+                "code": "unsupported_workspace_import_format",
+            }, status=status.HTTP_400_BAD_REQUEST)
         source = data.get("workspace", data)
+        if not isinstance(source, dict):
+            return Response({"detail": "workspace must be an object."}, status=status.HTTP_400_BAD_REQUEST)
         name = str(source.get("name", "")).strip()
         if not name:
             return Response({"detail": "workspace.name is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -277,24 +294,79 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         if slug and Workspace.objects.filter(slug=slug).exists():
             return Response({"detail": "A workspace with this slug already exists."}, status=status.HTTP_409_CONFLICT)
         User = apps.get_model("common", "User")
-        owner = None
         owner_email = str(data.get("owner_email", "")).strip().lower()
-        if owner_email:
-            owner = User.objects.filter(email__iexact=owner_email).first()
+        if not owner_email:
+            return Response({
+                "detail": "owner_email is required to import a workspace configuration.",
+                "code": "workspace_import_owner_required",
+            }, status=status.HTTP_400_BAD_REQUEST)
+        owner = User.objects.filter(email__iexact=owner_email, is_active=True).first()
+        if not owner:
+            return Response({
+                "detail": "The import owner must be an active user on this Platform.",
+                "code": "workspace_import_owner_not_found",
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        cluster_data = data.get("cluster") if isinstance(data.get("cluster"), dict) else {}
+        cluster = None
+        cluster_id = str(cluster_data.get("id") or "").strip()
+        if cluster_id:
+            Cluster = apps.get_model("platform", "Cluster")
+            try:
+                cluster = Cluster.objects.get(pk=cluster_id)
+            except Cluster.DoesNotExist:
+                return Response({
+                    "detail": "The exported Cluster is not available on this Platform.",
+                    "code": "workspace_import_cluster_not_found",
+                }, status=status.HTTP_409_CONFLICT)
+
+        domains_data = data.get("custom_domains", [])
+        if not isinstance(domains_data, list) or len(domains_data) > 20:
+            return Response({"detail": "custom_domains must contain at most 20 domains."}, status=status.HTTP_400_BAD_REQUEST)
+        custom_domains = []
+        for item in domains_data:
+            hostname = normalize_hostname(item.get("hostname") if isinstance(item, dict) else item)
+            if not hostname:
+                return Response({"detail": "A custom domain is invalid."}, status=status.HTTP_400_BAD_REQUEST)
+            custom_domains.append(hostname)
+        if len(set(custom_domains)) != len(custom_domains):
+            return Response({"detail": "Custom domains must be unique."}, status=status.HTTP_400_BAD_REQUEST)
+        WorkspaceDomain = apps.get_model("common", "WorkspaceDomain")
+        conflicts = list(WorkspaceDomain.objects.filter(hostname__in=custom_domains).values_list("hostname", flat=True))
+        if conflicts:
+            return Response({
+                "detail": "One or more custom domains are already assigned on this Platform.",
+                "code": "workspace_import_domain_conflict",
+                "domains": conflicts,
+            }, status=status.HTTP_409_CONFLICT)
+
         try:
             workspace = WorkspaceService(user=request.user).create_workspace(
                 name=name, slug=slug, owner_user=owner, email=source.get("email", ""),
                 phone=source.get("phone", ""), settings=source.get("settings") or {},
-                region=(data.get("cluster") or {}).get("region") or "us",
+                region=(cluster.region if cluster else cluster_data.get("region")) or "us",
+                cluster=cluster,
             )
         except WorkspaceCapacityUnavailable as exc:
             return Response(
                 {"detail": str(exc), "code": exc.default_code},
                 status=status.HTTP_409_CONFLICT,
             )
+        WorkspaceDomain.objects.bulk_create([
+            WorkspaceDomain(
+                workspace=workspace,
+                hostname=hostname,
+                kind=WorkspaceDomain.KIND_CUSTOM,
+                verification_status=WorkspaceDomain.VERIFICATION_PENDING,
+                ssl_status=WorkspaceDomain.SSL_NONE,
+                is_primary=False,
+            )
+            for hostname in custom_domains
+        ])
         record_platform_audit(
             request=request, action="workspace.imported", target_type="workspace",
-            target_id=workspace.id, reason=reason, after={"slug": workspace.slug},
+            target_id=workspace.id, reason=reason,
+            after={"slug": workspace.slug, "cluster_id": workspace.platform_profile.cluster_id, "custom_domains": custom_domains},
         )
         return Response(self._item(workspace), status=status.HTTP_201_CREATED)
 

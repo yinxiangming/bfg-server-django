@@ -380,6 +380,75 @@ def test_workspace_deletion_schedule_is_idempotent_and_can_be_explicitly_cancell
 
 
 @pytest.mark.django_db
+def test_workspace_configuration_export_import_maps_owner_cluster_and_pending_domains(settings):
+    settings.PLATFORM_EMBEDDED = True
+    superuser = User.objects.create_superuser(
+        username="export-root", password="secret", email="root@example.test",
+    )
+    owner = User.objects.create_user(username="export-owner", password="secret", email="owner@example.test")
+    cluster = Cluster.objects.create(
+        id="import-cluster", name="Import", region="apac",
+        api_base_url="https://api.example.test", frontend_base_url="https://shops.example.test",
+        db_host="db.example.test", redis_url="rediss://private.example.test/0", s3_bucket="import",
+    )
+    workspace = _embedded_workspace_member(owner, slug="export-source")
+    profile = WorkspacePlatformProfile.objects.get(workspace=workspace)
+    profile.cluster = cluster
+    profile.save(update_fields=["cluster", "updated_at"])
+    WorkspaceDomain.objects.create(
+        workspace=workspace, hostname="source.example.test", kind=WorkspaceDomain.KIND_CUSTOM,
+        verification_status=WorkspaceDomain.VERIFICATION_VERIFIED, ssl_status=WorkspaceDomain.SSL_ACTIVE,
+        is_primary=True,
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    exported = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/export/")
+    assert exported.status_code == 200
+    import json
+    payload = json.loads(exported.content)
+    assert payload["scope"] == "configuration-template"
+    assert payload["owner_email"] == owner.email
+    payload["workspace"]["name"] = "Imported Workspace"
+    payload["workspace"]["slug"] = "imported-workspace"
+    payload["custom_domains"] = [{"hostname": "imported.example.test"}]
+    payload.update({"confirm": True, "reason": "Move configuration template"})
+
+    imported = client.post("/api/v1/platform/console/workspaces/import-workspace/", payload, format="json")
+    assert imported.status_code == 201
+    restored = Workspace.objects.get(slug="imported-workspace")
+    restored_profile = WorkspacePlatformProfile.objects.get(workspace=restored)
+    assert restored_profile.cluster_id == cluster.id
+    assert StaffMember.all_objects.filter(workspace=restored, user=owner, is_active=True).exists()
+    restored_domain = WorkspaceDomain.objects.get(workspace=restored, hostname="imported.example.test")
+    assert restored_domain.verification_status == WorkspaceDomain.VERIFICATION_PENDING
+    assert restored_domain.is_primary is False
+
+
+@pytest.mark.django_db
+def test_workspace_import_requires_an_active_owner_and_supported_format():
+    superuser = User.objects.create_superuser(
+        username="import-root", password="secret", email="root@example.test",
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    missing_owner = client.post("/api/v1/platform/console/workspaces/import-workspace/", {
+        "format": "idlevo-workspace-v1", "workspace": {"name": "No owner", "slug": "no-owner"},
+        "confirm": True, "reason": "Test import",
+    }, format="json")
+    assert missing_owner.status_code == 400
+    assert missing_owner.data["code"] == "workspace_import_owner_required"
+
+    unsupported = client.post("/api/v1/platform/console/workspaces/import-workspace/", {
+        "format": "other-export-v1", "workspace": {"name": "Wrong", "slug": "wrong"},
+        "confirm": True, "reason": "Test import",
+    }, format="json")
+    assert unsupported.status_code == 400
+    assert unsupported.data["code"] == "unsupported_workspace_import_format"
+
+
+@pytest.mark.django_db
 @patch("bfg.platform.views.console_views.UserService.request_password_reset", return_value=True)
 def test_password_reset_uses_standalone_platform_owner_and_only_that_owner(mock_reset, settings):
     settings.PLATFORM_EMBEDDED = False

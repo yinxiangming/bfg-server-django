@@ -40,7 +40,10 @@ from bfg.platform.services.control_actions import (
 )
 from bfg.platform.services.control_audit import record_control_audit, redact_control_value
 from bfg.platform.services.provision_service import resume_workspace, suspend_workspace
+from bfg.platform.services import console_admin, exchange_rates, pricing
+from bfg.platform.services import platform_variables as variables
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
+from bfg.platform.views.console_admin_views import _body, _day, _limit, _moment
 from config.authentication import BearerTokenAuthentication
 
 
@@ -613,6 +616,128 @@ class PlatformControlClusterViewSet(PlatformControlAccessViewSet):
             body = self._item(cluster)
             complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
         return Response(body)
+
+
+class PlatformControlVariableViewSet(PlatformControlAccessViewSet):
+    """Audited deployment variables, without reusing the historical console route."""
+
+    lookup_field = "key"
+    lookup_value_regex = r"[a-z][a-z0-9_]*"
+
+    def list(self, request):
+        return Response(console_admin.variable_entries())
+
+    def partial_update(self, request, key=None):
+        require_confirmation(request)
+        data = _body(request)
+        if "value" not in data:
+            raise ValidationError({"code": variables.InvalidPlatformVariable.default_code, "detail": "Send the new value with a reason."})
+        reason = require_reason(request)
+        try:
+            before = console_admin.variable_entry(key)
+        except variables.UnknownPlatformVariable as exc:
+            return Response({"code": exc.code, "detail": exc.message}, status=status.HTTP_404_NOT_FOUND)
+        action_request, replay = claim_action(
+            request, action="configuration.variable_updated", target_type="platform_variable", target_id=key,
+            payload={"value": data["value"], "reason": reason},
+        )
+        if replay is not None:
+            return replay
+        try:
+            entry = console_admin.change_variable(key, data["value"], user=request.user, reason=reason)
+        except variables.InvalidPlatformVariable as exc:
+            body = {"code": exc.code, "detail": exc.message}
+            complete_action(action_request, result="failed", response_status=status.HTTP_400_BAD_REQUEST, response_body=body)
+            return Response(body, status=status.HTTP_400_BAD_REQUEST)
+        body = entry
+        complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
+        record_control_audit(
+            request=request, action="configuration.variable_updated", target_type="platform_variable",
+            target_id=key, reason=reason, before=before, after=entry,
+        )
+        return Response(body)
+
+
+class PlatformControlMeterPriceViewSet(PlatformControlAccessViewSet):
+    """Append-only, idempotent meter pricing with a durable audit reason."""
+
+    def list(self, request):
+        return Response(console_admin.meter_price_entries(request.query_params.get("meter")))
+
+    def create(self, request):
+        require_confirmation(request)
+        data = _body(request)
+        reason = require_reason(request)
+        for field in ("meter", "vendor_cost", "unit_size"):
+            if data.get(field) in (None, ""):
+                raise ValidationError({"code": pricing.InvalidMeterPrice.default_code, "detail": f"{field} is required to price a meter.", "field": field})
+        meter = str(data["meter"]).strip()
+        effective_from = _moment(data.get("effective_from"), "effective_from", pricing.InvalidMeterPrice.default_code)
+        action_request, replay = claim_action(
+            request, action="configuration.meter_price_added", target_type="meter", target_id=meter,
+            payload={
+                "vendor_cost": data["vendor_cost"], "unit_size": data["unit_size"],
+                "margin": data.get("margin"), "effective_from": effective_from, "reason": reason,
+            },
+        )
+        if replay is not None:
+            return replay
+        before = console_admin.meter_price_entries(meter)
+        try:
+            entry = console_admin.add_meter_price(
+                meter, vendor_cost=data["vendor_cost"], unit_size=data["unit_size"], margin=data.get("margin"),
+                effective_from=effective_from,
+            )
+        except pricing.InvalidMeterPrice as exc:
+            body = {"code": exc.code, "detail": exc.message}
+            complete_action(action_request, result="failed", response_status=status.HTTP_400_BAD_REQUEST, response_body=body)
+            return Response(body, status=status.HTTP_400_BAD_REQUEST)
+        complete_action(action_request, result="succeeded", response_status=status.HTTP_201_CREATED, response_body=entry)
+        record_control_audit(
+            request=request, action="configuration.meter_price_added", target_type="meter", target_id=meter,
+            reason=reason, before={"prices": before}, after=entry,
+        )
+        return Response(entry, status=status.HTTP_201_CREATED)
+
+
+class PlatformControlExchangeRateViewSet(PlatformControlAccessViewSet):
+    """Audited manual exchange-rate corrections for one currency pair and date."""
+
+    def list(self, request):
+        return Response(console_admin.exchange_rate_entries(
+            base=request.query_params.get("base"), currency=request.query_params.get("currency"),
+            limit=_limit(request.query_params.get("limit")),
+        ))
+
+    def create(self, request):
+        require_confirmation(request)
+        data = _body(request)
+        reason = require_reason(request)
+        for field in ("from", "to", "rate"):
+            if data.get(field) in (None, ""):
+                raise ValidationError({"code": exchange_rates.InvalidExchangeRate.default_code, "detail": f"{field} is required to store a rate.", "field": field})
+        from_code, to_code = str(data["from"]), str(data["to"])
+        effective_date = _day(data.get("effective_date"), "effective_date", exchange_rates.InvalidExchangeRate.default_code)
+        target_id = f"{from_code.strip().upper()}:{to_code.strip().upper()}:{effective_date or timezone.localdate()}"
+        action_request, replay = claim_action(
+            request, action="configuration.exchange_rate_set", target_type="exchange_rate", target_id=target_id,
+            payload={"from": from_code, "to": to_code, "rate": data["rate"], "effective_date": str(effective_date or ""), "reason": reason},
+        )
+        if replay is not None:
+            return replay
+        before = console_admin.exchange_rate_entries(base=from_code, currency=to_code, limit=200)
+        try:
+            entry = console_admin.set_exchange_rate(from_code, to_code, data["rate"], on=effective_date, user=request.user)
+        except exchange_rates.InvalidExchangeRate as exc:
+            body = {"code": exc.code, "detail": exc.message}
+            complete_action(action_request, result="failed", response_status=status.HTTP_400_BAD_REQUEST, response_body=body)
+            return Response(body, status=status.HTTP_400_BAD_REQUEST)
+        complete_action(action_request, result="succeeded", response_status=status.HTTP_201_CREATED, response_body=entry)
+        record_control_audit(
+            request=request, action="configuration.exchange_rate_set", target_type="exchange_rate", target_id=target_id,
+            reason=reason, before={"rates": before}, after=entry,
+        )
+        return Response(entry, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="health-check")
     def health_check(self, request, pk=None):

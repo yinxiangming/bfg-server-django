@@ -22,6 +22,9 @@ from bfg.platform.views.console_admin_views import (
 from bfg.platform.views.control_views import (
     PlatformControlAuditEventViewSet,
     PlatformControlClusterViewSet,
+    PlatformControlExchangeRateViewSet,
+    PlatformControlMeterPriceViewSet,
+    PlatformControlVariableViewSet,
     PlatformControlWorkspaceViewSet,
 )
 
@@ -49,9 +52,9 @@ router.register(r'control/clusters', PlatformControlClusterViewSet, basename='pl
 router.register(r'control/audit-events', PlatformControlAuditEventViewSet, basename='platform-control-audit-event')
 # Existing configuration resources are strict-superuser views. Publish their
 # control-plane aliases before clients migrate off the historical console path.
-router.register(r'control/variables', ConsolePlatformVariableViewSet, basename='platform-control-variable')
-router.register(r'control/meter-prices', ConsoleMeterPriceViewSet, basename='platform-control-meter-price')
-router.register(r'control/exchange-rates', ConsoleExchangeRateViewSet, basename='platform-control-exchange-rate')
+router.register(r'control/variables', PlatformControlVariableViewSet, basename='platform-control-variable')
+router.register(r'control/meter-prices', PlatformControlMeterPriceViewSet, basename='platform-control-meter-price')
+router.register(r'control/exchange-rates', PlatformControlExchangeRateViewSet, basename='platform-control-exchange-rate')
 
 urlpatterns = [
     path('', include(router.urls)),

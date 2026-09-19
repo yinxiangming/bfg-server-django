@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 from bfg.common.models import Workspace
+from bfg.finance.models import Currency
 from bfg.platform.models import Cluster, PlatformAuditEvent
 from bfg.platform.models.workspace_profile import WorkspacePlatformProfile
 from bfg.platform.services.cluster_health import (
@@ -188,3 +189,60 @@ def test_cluster_health_target_is_allowlisted_and_never_uses_an_ip_literal(setti
     cluster.api_base_url = "https://api.uat.example.test/redirect?to=https://127.0.0.1/"
     with pytest.raises(ClusterHealthProbeConfigurationError):
         cluster_health_url(cluster)
+
+
+def test_control_variable_write_is_audited_and_replayed():
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+    client = client_for(superuser)
+    url = f"{CONTROL}variables/grace_days/"
+    payload = {"confirm": True, "value": 21, "reason": "Allow a longer payment grace period"}
+
+    response = client.patch(url, payload, format="json", HTTP_X_IDEMPOTENCY_KEY="variable-key-0001")
+    assert response.status_code == 200
+    assert response.data["value"] == 21
+    audit = PlatformAuditEvent.objects.get(action="configuration.variable_updated")
+    assert audit.reason == payload["reason"]
+    assert audit.before["value"] == 14
+    assert audit.after["value"] == 21
+
+    replay = client.patch(url, payload, format="json", HTTP_X_IDEMPOTENCY_KEY="variable-key-0001")
+    assert replay.status_code == 200
+    assert replay["Idempotent-Replayed"] == "true"
+    assert PlatformAuditEvent.objects.filter(action="configuration.variable_updated").count() == 1
+
+
+def test_control_meter_price_and_exchange_rate_writes_are_audited():
+    for code, name in (("USD", "US Dollar"), ("NZD", "New Zealand Dollar")):
+        Currency.objects.create(code=code, name=name, symbol=code, decimal_places=2, is_active=True)
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+    client = client_for(superuser)
+
+    meter = client.post(
+        f"{CONTROL}meter-prices/",
+        {
+            "confirm": True,
+            "meter": "vendor.lookup",
+            "vendor_cost": "0.15",
+            "unit_size": 1000,
+            "reason": "Vendor increased lookup costs",
+        },
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="meter-key-0001",
+    )
+    assert meter.status_code == 201
+    assert PlatformAuditEvent.objects.filter(action="configuration.meter_price_added").exists()
+
+    rate = client.post(
+        f"{CONTROL}exchange-rates/",
+        {
+            "confirm": True,
+            "from": "USD",
+            "to": "NZD",
+            "rate": "1.70",
+            "reason": "Reference feed was unavailable",
+        },
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="rate-key-0001",
+    )
+    assert rate.status_code == 201
+    assert PlatformAuditEvent.objects.filter(action="configuration.exchange_rate_set").exists()

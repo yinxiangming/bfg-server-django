@@ -1329,6 +1329,21 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             reason = _change_reason(request)
         except ValidationError:
             return Response({"detail": "Provide a grant reason.", "code": "invalid_grant"}, status=400)
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="workspace.entitlement_granted",
+                target_type="workspace",
+                target_id=workspace.id,
+                payload={"key": key, "months": months, "never_expires": never_expires, "reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
         now = timezone.now()
         with transaction.atomic():
             Workspace = apps.get_model("common", "Workspace")
@@ -1337,11 +1352,18 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
                 workspace=locked_workspace, key=key, status=Entitlement.STATUS_ACTIVE,
             ).filter(Q(current_period_end__isnull=True) | Q(current_period_end__gt=now)).first()
             if active:
-                return Response({
+                response_body = {
                     "detail": "This workspace already has that entitlement.",
                     "code": "already_entitled",
                     "entitlement": self._entitlement_item(active),
-                }, status=status.HTTP_409_CONFLICT)
+                }
+                _complete_platform_action(
+                    action_request,
+                    result="failed",
+                    response_status=status.HTTP_409_CONFLICT,
+                    response_body=response_body,
+                )
+                return Response(response_body, status=status.HTTP_409_CONFLICT)
             Entitlement.objects.filter(
                 workspace=locked_workspace, key=key, status=Entitlement.STATUS_ACTIVE,
                 current_period_end__lte=now,
@@ -1356,7 +1378,14 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
                 request=request, action="workspace.entitlement_granted", target_type="workspace",
                 target_id=workspace.id, reason=reason, after={"entitlement": item},
             )
-        return Response({"workspace": workspace.id, "entitlement": item}, status=status.HTTP_201_CREATED)
+            response_body = {"workspace": workspace.id, "entitlement": item}
+            _complete_platform_action(
+                action_request,
+                result="succeeded",
+                response_status=status.HTTP_201_CREATED,
+                response_body=response_body,
+            )
+        return Response(response_body, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path=r"grants/(?P<grant_id>[^/.]+)/revoke")
     def revoke_grant(self, request, pk=None, grant_id=None):
@@ -1370,6 +1399,23 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             raise Http404
 
         Entitlement = apps.get_model("platform", "WorkspaceEntitlement")
+        if not Entitlement.objects.filter(pk=grant_id, workspace=workspace).exists():
+            raise Http404
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="workspace.entitlement_revoked",
+                target_type="workspace_entitlement",
+                target_id=grant_id,
+                payload={"workspace_id": workspace.id, "reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
         Workspace = apps.get_model("common", "Workspace")
         with transaction.atomic():
             locked_workspace = Workspace.objects.select_for_update().get(pk=workspace.pk)
@@ -1389,7 +1435,11 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
                     after={"entitlement": self._entitlement_item(entitlement)},
                 )
             item = self._entitlement_item(entitlement)
-        return Response({"workspace": workspace.id, "entitlement": item})
+            response_body = {"workspace": workspace.id, "entitlement": item}
+            _complete_platform_action(
+                action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+            )
+        return Response(response_body)
 
     @staticmethod
     def _entitlement_item(entitlement):

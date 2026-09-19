@@ -575,6 +575,7 @@ def test_superuser_can_set_workspace_usage_cap_and_grant_once():
     grant = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
         {"key": "batch_management", "months": 12, "reason": "Migration support", "confirm": True}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="workspace-grant-0001",
     )
     assert grant.status_code == 201
     assert grant.data["entitlement"]["key"] == "batch_management"
@@ -582,6 +583,7 @@ def test_superuser_can_set_workspace_usage_cap_and_grant_once():
     duplicate = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
         {"key": "batch_management", "months": 12, "reason": "Duplicate", "confirm": True}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="workspace-grant-duplicate-001",
     )
     assert duplicate.status_code == 409
     assert duplicate.data["code"] == "already_entitled"
@@ -612,6 +614,7 @@ def test_runtime_entitlement_enables_batch_management_and_can_be_revoked(setting
     granted = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
         {"key": "batch_management", "never_expires": True, "reason": "Plan migration", "confirm": True}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="runtime-grant-0001",
     )
     assert granted.status_code == 201
     grant_id = granted.data["entitlement"]["id"]
@@ -624,6 +627,7 @@ def test_runtime_entitlement_enables_batch_management_and_can_be_revoked(setting
     revoked = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/grants/{grant_id}/revoke/",
         {"reason": "Plan migration rolled back", "confirm": True}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="runtime-revoke-0001",
     )
     assert revoked.status_code == 200
     assert revoked.data["entitlement"]["status"] == "revoked"
@@ -633,9 +637,11 @@ def test_runtime_entitlement_enables_batch_management_and_can_be_revoked(setting
 
     repeated = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/grants/{grant_id}/revoke/",
-        {"reason": "Repeated revoke", "confirm": True}, format="json",
+        {"reason": "Plan migration rolled back", "confirm": True}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="runtime-revoke-0001",
     )
     assert repeated.status_code == 200
+    assert repeated["Idempotent-Replayed"] == "true"
     assert PlatformAuditEvent.objects.filter(action="workspace.entitlement_revoked").count() == 1
 
 

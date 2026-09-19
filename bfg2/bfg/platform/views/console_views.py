@@ -134,6 +134,7 @@ class PlatformConsoleVariableViewSet(viewsets.ViewSet):
                 {"detail": "This Platform variable is not declared.", "code": "unknown_platform_variable"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        _confirmed(request)
         reason = _change_reason(request)
         try:
             value = validate_platform_variable(key, request.data.get("value"))
@@ -219,6 +220,7 @@ class PlatformConsoleMeterPriceViewSet(viewsets.ViewSet):
         return Response(self._group_items(list(prices.order_by("meter", "-effective_from", "-created_at", "-id"))))
 
     def create(self, request):
+        _confirmed(request)
         meter = str(request.data.get("meter") or "").strip()
         if not meter or len(meter) > 100:
             return Response({"detail": "Use a meter key of 1 to 100 characters.", "code": "invalid_meter_price"}, status=400)
@@ -294,6 +296,7 @@ class PlatformConsoleExchangeRateViewSet(viewsets.ViewSet):
         return Response([self._item(rate) for rate in rates[:limit]])
 
     def create(self, request):
+        _confirmed(request)
         try:
             from_code = self._currency_code(request.data.get("from"), "from")
             to_code = self._currency_code(request.data.get("to"), "to")
@@ -719,6 +722,7 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
 
         if request.method == "GET":
             return Response(item(cap))
+        _confirmed(request)
         raw = request.data.get("cap_points")
         if raw is None:
             desired = None
@@ -748,6 +752,7 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
     @action(detail=True, methods=["post"], url_path="grants")
     def grants(self, request, pk=None):
         """Grant a temporary or perpetual base-plan/extension entitlement."""
+        _confirmed(request)
         workspace = self._workspace(pk)
         key = str(request.data.get("key") or "").strip()
         if len(key) > 255:

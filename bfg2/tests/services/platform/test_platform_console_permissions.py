@@ -159,7 +159,7 @@ def test_superuser_can_change_typed_platform_variable_with_an_audit_reason():
 
     changed = client.patch(
         "/api/v1/platform/console/variables/default_meter_margin/",
-        {"value": "0.35", "reason": "Vendor margin changed"}, format="json",
+        {"value": "0.35", "reason": "Vendor margin changed", "confirm": True}, format="json",
     )
     assert changed.status_code == 200
     assert changed.data["value"] == "0.35"
@@ -168,6 +168,11 @@ def test_superuser_can_change_typed_platform_variable_with_an_audit_reason():
     assert PlatformAuditEvent.objects.filter(
         action="configuration.variable_updated", target_id="default_meter_margin",
     ).exists()
+    refused = client.patch(
+        "/api/v1/platform/console/variables/default_meter_margin/",
+        {"value": "0.40", "reason": "Missing explicit confirmation"}, format="json",
+    )
+    assert refused.status_code == 400
 
 
 @pytest.mark.django_db
@@ -179,7 +184,7 @@ def test_meter_prices_are_append_only_and_use_the_platform_margin():
     client.force_authenticate(user=superuser)
 
     first = client.post("/api/v1/platform/console/meter-prices/", {
-        "meter": "ai.tokens", "vendor_cost": "10", "unit_size": "100", "margin": "0.25",
+        "meter": "ai.tokens", "vendor_cost": "10", "unit_size": "100", "margin": "0.25", "confirm": True,
     }, format="json")
     assert first.status_code == 201
     assert first.data["meter"] == "ai.tokens"
@@ -187,7 +192,7 @@ def test_meter_prices_are_append_only_and_use_the_platform_margin():
     assert first.data["prices"][0]["points_per_unit"] == "0.1250000000"
 
     second = client.post("/api/v1/platform/console/meter-prices/", {
-        "meter": "ai.tokens", "vendor_cost": "12", "unit_size": "100",
+        "meter": "ai.tokens", "vendor_cost": "12", "unit_size": "100", "confirm": True,
     }, format="json")
     assert second.status_code == 201
     assert len(second.data["prices"]) == 2
@@ -206,14 +211,14 @@ def test_superuser_can_set_and_correct_platform_exchange_rate():
     client.force_authenticate(user=superuser)
 
     created = client.post("/api/v1/platform/console/exchange-rates/", {
-        "from": "NZD", "to": "USD", "rate": "0.600000", "effective_date": "2026-09-19",
+        "from": "NZD", "to": "USD", "rate": "0.600000", "effective_date": "2026-09-19", "confirm": True,
     }, format="json")
     assert created.status_code == 201
     assert created.data["source"] == "manual"
     assert created.data["entered_by"]["id"] == superuser.id
 
     corrected = client.post("/api/v1/platform/console/exchange-rates/", {
-        "from": "NZD", "to": "USD", "rate": "0.610000", "effective_date": "2026-09-19",
+        "from": "NZD", "to": "USD", "rate": "0.610000", "effective_date": "2026-09-19", "confirm": True,
     }, format="json")
     assert corrected.status_code == 200
     assert ExchangeRate.objects.filter(from_currency__code="NZD", to_currency__code="USD").count() == 1
@@ -236,27 +241,27 @@ def test_superuser_can_set_workspace_usage_cap_and_grant_once():
     assert inherited.data["source"] == "platform"
 
     own = client.patch(
-        f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/", {"cap_points": "0"}, format="json",
+        f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/", {"cap_points": "0", "confirm": True}, format="json",
     )
     assert own.status_code == 200
     assert own.data["source"] == "workspace"
     assert own.data["effective_cap_points"] == "0.0000"
 
     restored = client.patch(
-        f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/", {"cap_points": None}, format="json",
+        f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/", {"cap_points": None, "confirm": True}, format="json",
     )
     assert restored.status_code == 200
     assert restored.data["source"] == "platform"
 
     grant = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
-        {"key": "", "months": 12, "reason": "Migration support"}, format="json",
+        {"key": "", "months": 12, "reason": "Migration support", "confirm": True}, format="json",
     )
     assert grant.status_code == 201
     assert grant.data["entitlement"]["key"] == ""
     duplicate = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
-        {"key": "", "months": 12, "reason": "Duplicate"}, format="json",
+        {"key": "", "months": 12, "reason": "Duplicate", "confirm": True}, format="json",
     )
     assert duplicate.status_code == 409
     assert duplicate.data["code"] == "already_entitled"

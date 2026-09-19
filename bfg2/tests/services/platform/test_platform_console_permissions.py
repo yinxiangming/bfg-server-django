@@ -61,6 +61,22 @@ def test_platform_console_refuses_authenticated_non_superusers(path):
     "/api/v1/platform/console/meter-prices/",
     "/api/v1/platform/console/exchange-rates/",
 ])
+def test_platform_console_challenges_unauthenticated_requests(path):
+    response = APIClient().get(path)
+
+    assert response.status_code == 401
+    assert response["WWW-Authenticate"].startswith("Bearer")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", [
+    "/api/v1/platform/console/workspaces/",
+    "/api/v1/platform/console/clusters/",
+    "/api/v1/platform/console/audit-events/",
+    "/api/v1/platform/console/variables/",
+    "/api/v1/platform/console/meter-prices/",
+    "/api/v1/platform/console/exchange-rates/",
+])
 def test_platform_console_allows_django_superusers(path):
     superuser = User.objects.create_superuser(
         username="platform-root", password="secret", email="root@example.test",

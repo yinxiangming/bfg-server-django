@@ -18,6 +18,7 @@ from django.db.models.functions import TruncDate
 from django.http import Http404, HttpResponse
 from django.utils import dateparse, timezone
 from rest_framework import status, viewsets
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import LimitOffsetPagination
@@ -25,6 +26,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from bfg.platform.permissions import IsPlatformSuperuser
+from config.authentication import BearerTokenAuthentication
 from bfg.platform.services.audit_service import record_platform_audit, redact_platform_audit_value
 from bfg.platform.services.configuration_service import (
     PLATFORM_VARIABLES,
@@ -187,10 +189,19 @@ def _add_months(moment, months):
     return moment.replace(year=year, month=month, day=min(moment.day, monthrange(year, month)[1]))
 
 
-class PlatformConsoleVariableViewSet(viewsets.ViewSet):
+class PlatformConsoleAccessViewSet(viewsets.ViewSet):
+    """Shared authentication contract for the superuser-only control plane."""
+
+    # API-key credentials deliberately cannot manage the deployment. Put JWT
+    # first so an anonymous Platform request has a Bearer challenge and answers
+    # 401, while an authenticated non-superuser is consistently refused with 403.
+    authentication_classes = [BearerTokenAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
+
+
+class PlatformConsoleVariableViewSet(PlatformConsoleAccessViewSet):
     """Typed Platform variables, overridden by Django superusers only."""
 
-    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
     lookup_field = "key"
 
     def list(self, request):
@@ -241,10 +252,8 @@ class PlatformConsoleVariableViewSet(viewsets.ViewSet):
         return Response(platform_variable_item(key))
 
 
-class PlatformConsoleMeterPriceViewSet(viewsets.ViewSet):
+class PlatformConsoleMeterPriceViewSet(PlatformConsoleAccessViewSet):
     """Append-only pricing history for every metered Platform capability."""
-
-    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
 
     @staticmethod
     def _price_item(price):
@@ -371,10 +380,9 @@ class PlatformConsoleMeterPriceViewSet(viewsets.ViewSet):
         return response
 
 
-class PlatformConsoleExchangeRateViewSet(viewsets.ViewSet):
+class PlatformConsoleExchangeRateViewSet(PlatformConsoleAccessViewSet):
     """Global finance rates with a traceable manual fallback for a missing feed day."""
 
-    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
     _DEFAULT_LIMIT = 50
     _MAX_LIMIT = 200
 
@@ -459,10 +467,8 @@ class PlatformConsoleExchangeRateViewSet(viewsets.ViewSet):
         return Response(self._item(stored), status=status.HTTP_200_OK if existing else status.HTTP_201_CREATED)
 
 
-class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
+class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
     """Cross-workspace management for platform administrators only."""
-
-    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
 
     class Pagination(LimitOffsetPagination):
         """Bounded, explicit pagination for the cross-tenant inventory."""
@@ -1087,10 +1093,8 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         }
 
 
-class PlatformConsoleClusterViewSet(viewsets.ViewSet):
+class PlatformConsoleClusterViewSet(PlatformConsoleAccessViewSet):
     """Platform-owned cluster inventory and safe operational settings."""
-
-    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
 
     _WRITABLE_FIELDS = {
         "name", "region", "api_base_url", "frontend_base_url", "db_host", "db_port",
@@ -1317,10 +1321,9 @@ class PlatformConsoleClusterViewSet(viewsets.ViewSet):
         return Response(self._item(locked_cluster))
 
 
-class PlatformConsoleAuditEventViewSet(viewsets.ViewSet):
+class PlatformConsoleAuditEventViewSet(PlatformConsoleAccessViewSet):
     """Read-only, paginated history of sensitive Platform control-plane changes."""
 
-    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
     _DEFAULT_LIMIT = 50
     _MAX_LIMIT = 100
 

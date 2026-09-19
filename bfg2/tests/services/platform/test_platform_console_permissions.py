@@ -965,7 +965,17 @@ def test_workspace_configuration_export_import_maps_owner_cluster_and_pending_do
     client = APIClient()
     client.force_authenticate(user=superuser)
 
-    exported = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/export/")
+    unconfirmed = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/export/",
+        {"reason": "Move configuration template"}, format="json",
+    )
+    assert unconfirmed.status_code == 400
+    assert PlatformAuditEvent.objects.filter(action="workspace.exported").count() == 0
+
+    exported = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/export/",
+        {"confirm": True, "reason": "Move configuration template"}, format="json",
+    )
     assert exported.status_code == 200
     import json
     payload = json.loads(exported.content)

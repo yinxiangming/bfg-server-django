@@ -698,8 +698,10 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             )
             return Response(self._item(workspace))
 
-    @action(detail=True, methods=["get"])
+    @action(detail=True, methods=["post"])
     def export(self, request, pk=None):
+        _confirmed(request)
+        reason = _change_reason(request)
         workspace = self._workspace(pk)
         profile = getattr(workspace, "platform_profile", None)
         cluster = getattr(profile, "cluster", None) if profile else None
@@ -721,7 +723,7 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         }
         record_platform_audit(
             request=request, action="workspace.exported", target_type="workspace",
-            target_id=workspace.id, reason="Workspace configuration export downloaded.",
+            target_id=workspace.id, reason=reason,
             after={"format": data["format"]},
         )
         import json

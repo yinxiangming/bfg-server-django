@@ -11,7 +11,8 @@ from decimal import Decimal, InvalidOperation
 from django.apps import apps
 from django.core import signing
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Q, Sum
+from django.db.models.functions import TruncDate
 from django.http import Http404, HttpResponse
 from django.utils import dateparse, timezone
 from rest_framework import status, viewsets
@@ -38,6 +39,7 @@ from bfg.platform.services.provision_service import suspend_workspace, resume_wo
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
 from bfg.common.models import normalize_hostname
+from bfg.common.constants import get_default_currency_for_workspace
 from bfg.common.services.workspace_service import WorkspaceService
 from bfg.common.services.user_service import UserService
 
@@ -108,6 +110,25 @@ def _positive_integer(value, *, maximum, field):
 
 def _decimal_text(value):
     return format(value, "f")
+
+
+def _points_text(value):
+    """Return persisted metering points with the model's fixed precision."""
+    return format(Decimal(value).quantize(Decimal("0.0001")), "f")
+
+
+def _usage_period(value):
+    """Return the first day of a requested ``YYYY-MM`` reporting month."""
+    raw = str(value or "").strip()
+    if not raw:
+        current = timezone.localdate()
+        return date(current.year, current.month, 1)
+    if len(raw) != 7 or raw[4] != "-" or not (raw[:4].isdigit() and raw[5:].isdigit()):
+        raise ValidationError({"month": "Use a reporting month in YYYY-MM format."})
+    try:
+        return date(int(raw[:4]), int(raw[5:]), 1)
+    except ValueError as exc:
+        raise ValidationError({"month": "Use a reporting month in YYYY-MM format."}) from exc
 
 
 def _automatic_reason(request, fallback):
@@ -438,6 +459,13 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             "active_extensions": [],
             "cluster": ({"id": cluster.id, "name": cluster.name, "region": cluster.region,
                          "is_active": cluster.is_active} if cluster else None),
+            # This view is exclusively protected by IsPlatformSuperuser. Usage is
+            # intentionally advertised here, rather than on the owner workspace
+            # serializer, because the reporting endpoint is also platform-only.
+            "capabilities": {
+                "extension_management": False,
+                "usage": True,
+            },
         }
 
     def list(self, request):
@@ -762,6 +790,64 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             target_id=workspace.id, reason=reason, after={"administrator_id": recipient.id},
         )
         return Response({"detail": "If the account exists, a password reset email has been sent."})
+
+    @action(detail=True, methods=["get"])
+    def usage(self, request, pk=None):
+        """Return immutable meter usage for one reporting month.
+
+        Amount estimates remain deliberately unavailable until meter prices carry
+        their billing currency and every record snapshots it. Points, quantities,
+        and caps are durable today, so exposing those values does not imply that an
+        invoice or money total exists.
+        """
+        workspace = self._workspace(pk)
+        period_start = _usage_period(request.query_params.get("month"))
+        Usage = apps.get_model("platform", "WorkspaceMeterUsage")
+        UsageCap = apps.get_model("platform", "WorkspaceUsageCap")
+        records = Usage.objects.filter(workspace=workspace, period_start=period_start)
+        used = records.aggregate(total=Sum("points"))["total"] or Decimal("0.0000")
+        own_cap = UsageCap.objects.filter(workspace=workspace).values_list("cap_points", flat=True).first()
+        cap = own_cap if own_cap is not None else platform_variable_decimal("default_usage_cap_points")
+        remaining = max(Decimal("0.0000"), cap - used)
+
+        meters = [
+            {
+                "meter": row["meter"],
+                "quantity": _decimal_text(row["quantity"]),
+                "points": _points_text(row["points"]),
+                "amount": None,
+            }
+            for row in records.values("meter").annotate(
+                quantity=Sum("units"), points=Sum("points"),
+            ).order_by("meter")
+        ]
+        days_by_key = {}
+        for row in records.annotate(day=TruncDate("recorded_at")).values("day", "meter").annotate(
+            quantity=Sum("units"), points=Sum("points"),
+        ).order_by("-day", "meter"):
+            day = row["day"].isoformat()
+            bucket = days_by_key.setdefault(day, {"day": day, "points": Decimal("0.0000"), "meters": []})
+            bucket["points"] += row["points"]
+            bucket["meters"].append({
+                "meter": row["meter"],
+                "quantity": _decimal_text(row["quantity"]),
+                "points": _points_text(row["points"]),
+            })
+        days = [
+            {**bucket, "points": _points_text(bucket["points"])}
+            for bucket in days_by_key.values()
+        ]
+        return Response({
+            "month": period_start.strftime("%Y-%m"),
+            "currency": get_default_currency_for_workspace(workspace),
+            "cap_points": _points_text(cap),
+            "used_points": _points_text(used),
+            "remaining_points": _points_text(remaining),
+            "estimated_amount": None,
+            "overdue": False,
+            "meters": meters,
+            "days": days,
+        })
 
     @action(detail=True, methods=["get", "patch"], url_path="usage-cap")
     def usage_cap(self, request, pk=None):

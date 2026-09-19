@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -9,8 +10,16 @@ from rest_framework.test import APIClient
 from bfg.common.models import StaffMember, StaffRole, Workspace, WorkspaceDomain
 from bfg.finance.models import Currency, ExchangeRate
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
+from bfg.common.constants import get_default_currency_for_workspace
 from bfg.common.services.workspace_service import WorkspaceService
-from bfg.platform.models import Cluster, PlatformAuditEvent, PlatformMeterPrice, WorkspaceOperation
+from bfg.platform.models import (
+    Cluster,
+    PlatformAuditEvent,
+    PlatformMeterPrice,
+    WorkspaceMeterUsage,
+    WorkspaceOperation,
+    WorkspaceUsageCap,
+)
 from bfg.platform.models import PlatformMembership, WorkspacePlatformProfile
 from bfg.platform.serializers.workspace import WorkspaceCreateSerializer
 from bfg.platform.services.workspace_service import is_platform_admin
@@ -258,6 +267,97 @@ def test_platform_console_missing_workspace_returns_404_instead_of_server_error(
     response = client.get("/api/v1/platform/console/workspaces/999999/usage-cap/")
 
     assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_platform_superuser_can_read_monthly_workspace_usage_only():
+    superuser = User.objects.create_superuser(
+        username="usage-root", password="secret", email="usage@example.test",
+    )
+    tenant_admin = User.objects.create_user(
+        username="usage-tenant", password="secret", is_staff=True,
+    )
+    workspace = Workspace.objects.create(name="Usage Workspace", slug="usage-workspace", is_active=True)
+    price = PlatformMeterPrice.objects.create(
+        meter="ai.agent_chat", vendor_cost=Decimal("1"), unit_size=1, margin=Decimal("0"),
+    )
+    image_price = PlatformMeterPrice.objects.create(
+        meter="store.image", vendor_cost=Decimal("1"), unit_size=1, margin=Decimal("0"),
+    )
+    WorkspaceUsageCap.objects.create(workspace=workspace, cap_points=Decimal("10.0000"))
+    september = date(2026, 9, 1)
+    WorkspaceMeterUsage.objects.create(
+        workspace=workspace, meter="ai.agent_chat", idempotency_key="usage-chat-0001",
+        units=Decimal("2"), points=Decimal("1.2000"), period_start=september, price=price,
+        recorded_at=timezone.make_aware(datetime(2026, 9, 7, 10, 0)),
+    )
+    WorkspaceMeterUsage.objects.create(
+        workspace=workspace, meter="ai.agent_chat", idempotency_key="usage-chat-0002",
+        units=Decimal("3"), points=Decimal("1.8000"), period_start=september, price=price,
+        recorded_at=timezone.make_aware(datetime(2026, 9, 8, 10, 0)),
+    )
+    WorkspaceMeterUsage.objects.create(
+        workspace=workspace, meter="store.image", idempotency_key="usage-image-001",
+        units=Decimal("1"), points=Decimal("0.5000"), period_start=september, price=image_price,
+        recorded_at=timezone.make_aware(datetime(2026, 9, 8, 11, 0)),
+    )
+    WorkspaceMeterUsage.objects.create(
+        workspace=workspace, meter="ai.agent_chat", idempotency_key="usage-august-01",
+        units=Decimal("100"), points=Decimal("100.0000"), period_start=date(2026, 8, 1), price=price,
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=tenant_admin)
+    denied = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/usage/?month=2026-09")
+    assert denied.status_code == 403
+
+    client.force_authenticate(user=superuser)
+    response = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/usage/?month=2026-09")
+
+    assert response.status_code == 200
+    assert response.data["month"] == "2026-09"
+    assert response.data["currency"] == get_default_currency_for_workspace(workspace)
+    assert response.data["cap_points"] == "10.0000"
+    assert response.data["used_points"] == "3.5000"
+    assert response.data["remaining_points"] == "6.5000"
+    assert response.data["estimated_amount"] is None
+    assert response.data["overdue"] is False
+    assert response.data["meters"] == [
+        {"meter": "ai.agent_chat", "quantity": "5", "points": "3.0000", "amount": None},
+        {"meter": "store.image", "quantity": "1", "points": "0.5000", "amount": None},
+    ]
+    assert response.data["days"] == [
+        {
+            "day": "2026-09-08", "points": "2.3000",
+            "meters": [
+                {"meter": "ai.agent_chat", "quantity": "3", "points": "1.8000"},
+                {"meter": "store.image", "quantity": "1", "points": "0.5000"},
+            ],
+        },
+        {
+            "day": "2026-09-07", "points": "1.2000",
+            "meters": [{"meter": "ai.agent_chat", "quantity": "2", "points": "1.2000"}],
+        },
+    ]
+
+    detail = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/")
+    assert detail.status_code == 200
+    assert detail.data["capabilities"] == {"extension_management": False, "usage": True}
+
+
+@pytest.mark.django_db
+def test_workspace_usage_rejects_invalid_reporting_month():
+    superuser = User.objects.create_superuser(
+        username="usage-month-root", password="secret", email="usage-month@example.test",
+    )
+    workspace = Workspace.objects.create(name="Month Workspace", slug="month-workspace", is_active=True)
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    response = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/usage/?month=September")
+
+    assert response.status_code == 400
+    assert response.data["month"] == "Use a reporting month in YYYY-MM format."
 
 
 @pytest.mark.django_db

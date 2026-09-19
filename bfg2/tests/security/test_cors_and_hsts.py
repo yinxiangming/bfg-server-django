@@ -27,6 +27,18 @@ class TestCorsWhitelist:
         )
         assert response.get("Access-Control-Allow-Origin") == ALLOWED_ORIGIN
 
+    def test_whitelisted_origin_may_send_metering_idempotency_key(self, settings):
+        settings.CORS_ALLOW_ALL_ORIGINS = False
+        settings.CORS_ALLOWED_ORIGINS = [ALLOWED_ORIGIN]
+        response = Client().options(
+            "/api/v1/health/__cors_probe__/",
+            HTTP_ORIGIN=ALLOWED_ORIGIN,
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="x-idempotency-key",
+        )
+        assert response.get("Access-Control-Allow-Origin") == ALLOWED_ORIGIN
+        assert "x-idempotency-key" in response.get("Access-Control-Allow-Headers", "").lower()
+
     def test_unlisted_origin_is_rejected(self, settings):
         settings.CORS_ALLOW_ALL_ORIGINS = False
         settings.CORS_ALLOWED_ORIGINS = [ALLOWED_ORIGIN]

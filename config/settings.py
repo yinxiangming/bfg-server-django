@@ -366,7 +366,7 @@ CORS_ALLOW_HEADERS = [
     'accept', 'accept-language', 'accept-encoding', 'authorization',
     'content-type', 'dnt', 'origin', 'user-agent', 'x-csrftoken',
     'x-requested-with', 'x-workspace-id', 'x-forwarded-host',
-    'x-api-key', 'x-api-secret',
+    'x-api-key', 'x-api-secret', 'x-idempotency-key',
 ]
 CORS_EXPOSE_HEADERS = [
     'X-Request-Id',

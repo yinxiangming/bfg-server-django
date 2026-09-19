@@ -94,6 +94,7 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     'accept-language',
     'x-forwarded-host',
     'x-workspace-id',
+    'x-idempotency-key',
 ]
 
 # Phase-0 PR-02: CSP origin lists consumed by SecurityHeadersMiddleware.

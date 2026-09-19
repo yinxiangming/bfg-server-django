@@ -60,8 +60,9 @@ and verification boundary; it must not be inferred from database cascades.
 - [x] Add a fixed-path HTTPS health probe, allowlisted by
       `CLUSTER_HEALTH_ALLOWED_HOSTS`, with no redirects, proxy environment, IP
       literals, credentials, or response-body disclosure.
-- [ ] Provide a controlled assignment/migration queue with capacity reservation,
-      rollback, and progress events.
+- [x] Provide a controlled placement-reservation queue with capacity reservation,
+      rollback, ordered progress events, and a profile fencing version. It is
+      intentionally not a live-data migration executor.
 - [x] Add a deployment health dashboard based on stored observations, rather
       than browser-side probes.
 
@@ -102,7 +103,13 @@ rather than claim that the workspace moved.
 
 ### Verification record (2026-09-20)
 
-- Current local BFG suite: `2051 passed, 22 subtests passed`.
+- Current local BFG suite: `2061 passed, 22 subtests passed`.
+- Placement reservations are strict-superuser-only, reserve capacity without
+  changing ``WorkspacePlatformProfile.cluster``, have idempotent rollback and
+  persist ordered progress events. Requests to move an already assigned
+  workspace return a clear data-plane-adapter refusal instead of changing
+  routing metadata. Focused control regressions: `23 passed`; client typecheck
+  and Webpack production build also pass.
 - UAT server-layer smoke used existing persisted accounts without changing data:
   the Django superuser received 200 from the workspace, Cluster, and audit
   control reads; an existing workspace owner received 200 from the established

@@ -41,6 +41,11 @@ from bfg.platform.services.control_actions import (
 )
 from bfg.platform.services.control_audit import record_control_audit, redact_control_value
 from bfg.platform.services.provision_service import resume_workspace, suspend_workspace
+from bfg.platform.services.placement_queue import (
+    PlacementQueueError,
+    create_reservation,
+    rollback_reservation,
+)
 from bfg.platform.services import console_admin, entitlements, exchange_rates, pricing, usage
 from bfg.platform.services import platform_variables as variables
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
@@ -128,7 +133,43 @@ def _workspace_item(workspace, *, viewer=None):
             {"id": cluster.id, "name": cluster.name, "region": cluster.region, "is_active": cluster.is_active}
             if cluster else None
         ),
+        "placement_fence": profile.placement_fence if profile else 0,
         "capabilities": {"extension_management": False, "usage": True},
+    }
+
+
+def _placement_cluster_item(cluster):
+    if not cluster:
+        return None
+    return {"id": cluster.id, "name": cluster.name, "region": cluster.region, "is_active": cluster.is_active}
+
+
+def _placement_item(placement):
+    return {
+        "id": str(placement.id),
+        "workspace": {
+            "id": placement.workspace_id,
+            "name": placement.workspace.name,
+            "slug": placement.workspace.slug,
+        },
+        "source_cluster": _placement_cluster_item(placement.source_cluster),
+        "target_cluster": _placement_cluster_item(placement.target_cluster),
+        "profile_fence": placement.profile_fence,
+        "status": placement.status,
+        "reservation_expires_at": placement.reservation_expires_at,
+        "rolled_back_at": placement.rolled_back_at,
+        "created_by": _user_item(placement.created_by),
+        "created_at": placement.created_at,
+        "updated_at": placement.updated_at,
+        "events": [
+            {
+                "sequence": event.sequence,
+                "event_type": event.event_type,
+                "details": redact_control_value(event.details or {}),
+                "created_at": event.created_at,
+            }
+            for event in placement.events.all()
+        ],
     }
 
 
@@ -628,6 +669,176 @@ class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
         record_control_audit(
             request=request, action="workspace.password_reset_requested", target_type="workspace",
             target_id=workspace.id, reason=reason, after={"administrator_id": recipient.id},
+        )
+        return Response(body)
+
+
+class PlatformControlPlacementRequestViewSet(PlatformControlAccessViewSet):
+    """Superuser-only reservations for a future, verified Cluster placement."""
+
+    _STATUSES = {"reserved", "rolled_back", "expired"}
+
+    @staticmethod
+    def _queryset():
+        PlacementRequest = apps.get_model("platform", "WorkspacePlacementRequest")
+        return PlacementRequest.objects.select_related(
+            "workspace", "source_cluster", "target_cluster", "created_by",
+        ).prefetch_related("events")
+
+    def list(self, request):
+        queryset = self._queryset()
+        workspace_id = (request.query_params.get("workspace") or "").strip()
+        target_cluster_id = (request.query_params.get("target_cluster") or "").strip()
+        requested_status = (request.query_params.get("status") or "").strip()
+        if workspace_id:
+            try:
+                workspace_id = int(workspace_id)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError({"workspace": "Use a whole Workspace ID."}) from exc
+            queryset = queryset.filter(workspace_id=workspace_id)
+        if target_cluster_id:
+            if len(target_cluster_id) > 32:
+                raise ValidationError({"target_cluster": "Use a Cluster ID of 32 characters or fewer."})
+            queryset = queryset.filter(target_cluster_id=target_cluster_id)
+        if requested_status:
+            if requested_status not in self._STATUSES:
+                raise ValidationError({"status": "Use reserved, rolled_back, or expired."})
+            queryset = queryset.filter(status=requested_status)
+        return Response([_placement_item(placement) for placement in queryset])
+
+    def retrieve(self, request, pk=None):
+        PlacementRequest = apps.get_model("platform", "WorkspacePlacementRequest")
+        try:
+            placement = self._queryset().get(pk=pk)
+        except PlacementRequest.DoesNotExist as exc:
+            raise Http404 from exc
+        return Response(_placement_item(placement))
+
+    def create(self, request):
+        require_confirmation(request)
+        reason = require_reason(request)
+        data = _body(request)
+        workspace = _workspace_or_404(data.get("workspace_id"))
+        target_cluster_id = data.get("target_cluster_id")
+        expected_fence = data.get("expected_placement_fence")
+        action_request, replay = claim_action(
+            request,
+            action="workspace.placement_reserved",
+            target_type="workspace",
+            target_id=workspace.id,
+            payload={
+                "target_cluster_id": target_cluster_id,
+                "expected_placement_fence": expected_fence,
+                "reason": reason,
+            },
+        )
+        if replay is not None:
+            return replay
+        profile = getattr(workspace, "platform_profile", None)
+        before = {
+            "cluster_id": profile.cluster_id if profile else None,
+            "placement_fence": profile.placement_fence if profile else 0,
+        }
+        try:
+            placement = create_reservation(
+                workspace=workspace,
+                target_cluster_id=target_cluster_id,
+                expected_profile_fence=expected_fence,
+                initiated_by=request.user,
+            )
+        except PlacementQueueError as exc:
+            body = {"detail": exc.detail, "code": exc.code}
+            complete_action(
+                action_request,
+                result="failed",
+                response_status=exc.status_code,
+                response_body=body,
+            )
+            record_control_audit(
+                request=request,
+                action="workspace.placement_reserved",
+                target_type="workspace",
+                target_id=workspace.id,
+                reason=reason,
+                before=before,
+                after={"target_cluster_id": target_cluster_id, "code": exc.code},
+                result="failed",
+            )
+            return Response(body, status=exc.status_code)
+        placement = self._queryset().get(pk=placement.pk)
+        body = _placement_item(placement)
+        complete_action(action_request, result="succeeded", response_status=status.HTTP_202_ACCEPTED, response_body=body)
+        record_control_audit(
+            request=request,
+            action="workspace.placement_reserved",
+            target_type="workspace",
+            target_id=workspace.id,
+            reason=reason,
+            before=before,
+            after={
+                "placement_request_id": str(placement.id),
+                "target_cluster_id": placement.target_cluster_id,
+                "profile_fence": placement.profile_fence,
+                "reservation_expires_at": placement.reservation_expires_at,
+            },
+        )
+        return Response(body, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=["post"])
+    def rollback(self, request, pk=None):
+        require_confirmation(request)
+        reason = require_reason(request)
+        PlacementRequest = apps.get_model("platform", "WorkspacePlacementRequest")
+        try:
+            placement = self._queryset().get(pk=pk)
+        except PlacementRequest.DoesNotExist as exc:
+            raise Http404 from exc
+        action_request, replay = claim_action(
+            request,
+            action="workspace.placement_rolled_back",
+            target_type="placement_request",
+            target_id=placement.id,
+            payload={"reason": reason},
+        )
+        if replay is not None:
+            return replay
+        before = {
+            "status": placement.status,
+            "target_cluster_id": placement.target_cluster_id,
+            "profile_fence": placement.profile_fence,
+        }
+        try:
+            placement = rollback_reservation(request=placement)
+        except PlacementQueueError as exc:
+            body = {"detail": exc.detail, "code": exc.code}
+            complete_action(
+                action_request,
+                result="failed",
+                response_status=exc.status_code,
+                response_body=body,
+            )
+            record_control_audit(
+                request=request,
+                action="workspace.placement_rolled_back",
+                target_type="placement_request",
+                target_id=placement.id,
+                reason=reason,
+                before=before,
+                after={"code": exc.code},
+                result="failed",
+            )
+            return Response(body, status=exc.status_code)
+        placement = self._queryset().get(pk=placement.pk)
+        body = _placement_item(placement)
+        complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
+        record_control_audit(
+            request=request,
+            action="workspace.placement_rolled_back",
+            target_type="placement_request",
+            target_id=placement.id,
+            reason=reason,
+            before=before,
+            after={"status": placement.status, "rolled_back_at": placement.rolled_back_at},
         )
         return Response(body)
 

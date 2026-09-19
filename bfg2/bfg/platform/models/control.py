@@ -110,3 +110,88 @@ class ClusterHealthObservation(models.Model):
         indexes = [
             models.Index(fields=["cluster", "-observed_at"], name="plat_cluster_health_obs_idx"),
         ]
+
+
+class WorkspacePlacementRequest(models.Model):
+    """A fenced, reversible capacity reservation for a future placement.
+
+    A reservation is deliberately not a change to ``WorkspacePlatformProfile.cluster``.
+    Applying one requires an authenticated data-plane adapter to prove the tenant data
+    was copied and cut over. Keeping that boundary explicit prevents the control plane
+    from claiming that a live Workspace has moved when only its routing metadata changed.
+    """
+
+    STATUS_RESERVED = "reserved"
+    STATUS_ROLLED_BACK = "rolled_back"
+    STATUS_EXPIRED = "expired"
+    STATUS_CHOICES = [
+        (STATUS_RESERVED, "Capacity reserved"),
+        (STATUS_ROLLED_BACK, "Rolled back"),
+        (STATUS_EXPIRED, "Expired"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    workspace = models.ForeignKey(
+        "common.Workspace",
+        on_delete=models.PROTECT,
+        related_name="placement_requests",
+    )
+    source_cluster = models.ForeignKey(
+        "platform.Cluster",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="placement_requests_from",
+    )
+    target_cluster = models.ForeignKey(
+        "platform.Cluster",
+        on_delete=models.PROTECT,
+        related_name="placement_requests_to",
+    )
+    profile_fence = models.PositiveIntegerField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_RESERVED)
+    reservation_expires_at = models.DateTimeField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="workspace_placement_requests",
+    )
+    rolled_back_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["target_cluster", "status", "reservation_expires_at"], name="plat_place_target_idx"),
+            models.Index(fields=["workspace", "status", "-created_at"], name="plat_place_workspace_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace"],
+                condition=models.Q(status="reserved"),
+                name="plat_place_one_active_per_workspace",
+            ),
+        ]
+
+
+class WorkspacePlacementEvent(models.Model):
+    """Ordered, redaction-safe progress evidence for one placement request."""
+
+    request = models.ForeignKey(
+        WorkspacePlacementRequest,
+        on_delete=models.CASCADE,
+        related_name="events",
+    )
+    sequence = models.PositiveIntegerField()
+    event_type = models.CharField(max_length=40)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        ordering = ["sequence", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["request", "sequence"], name="plat_place_event_sequence"),
+        ]

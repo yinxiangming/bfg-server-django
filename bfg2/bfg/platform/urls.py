@@ -18,6 +18,7 @@ from bfg.platform.views.control_views import (
     PlatformControlClusterViewSet,
     PlatformControlExchangeRateViewSet,
     PlatformControlMeterPriceViewSet,
+    PlatformControlPlacementRequestViewSet,
     PlatformControlStatusViewSet,
     PlatformControlVariableViewSet,
     PlatformControlWorkspaceViewSet,
@@ -35,6 +36,7 @@ router.register(r'console/workspaces', ConsoleWorkspaceViewSet, basename='platfo
 router.register(r'control/workspaces', PlatformControlWorkspaceViewSet, basename='platform-control-workspace')
 router.register(r'control/status', PlatformControlStatusViewSet, basename='platform-control-status')
 router.register(r'control/clusters', PlatformControlClusterViewSet, basename='platform-control-cluster')
+router.register(r'control/placement-requests', PlatformControlPlacementRequestViewSet, basename='platform-control-placement-request')
 router.register(r'control/audit-events', PlatformControlAuditEventViewSet, basename='platform-control-audit-event')
 # Deployment configuration is deliberately only exposed through the strict,
 # audited control-plane contract. The historic privileged ``console/`` aliases

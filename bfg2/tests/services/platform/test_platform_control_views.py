@@ -7,7 +7,12 @@ from rest_framework.test import APIClient
 
 from bfg.common.models import Workspace
 from bfg.finance.models import Currency
-from bfg.platform.models import Cluster, ClusterHealthObservation, PlatformAuditEvent
+from bfg.platform.models import (
+    Cluster,
+    ClusterHealthObservation,
+    PlatformAuditEvent,
+    WorkspacePlacementRequest,
+)
 from bfg.platform.models.workspace_profile import WorkspacePlatformProfile
 from bfg.platform.services.cluster_health import (
     ClusterHealthProbeConfigurationError,
@@ -41,6 +46,7 @@ def test_control_plane_requires_a_django_superuser():
     allowed = client_for(superuser).get(f"{CONTROL}workspaces/")
     assert allowed.status_code == 200
     assert allowed.data["count"] == 1
+    assert client_for(regular).get(f"{CONTROL}placement-requests/").status_code == 403
 
 
 def test_control_status_is_a_superuser_only_capability_document():
@@ -337,6 +343,154 @@ def test_configuration_only_workspace_import_creates_pending_domains():
     assert workspace.domains.get(hostname="restored.example.test").verification_status == "pending"
     audit = PlatformAuditEvent.objects.get(action="workspace.imported")
     assert audit.after["custom_domains"] == ["restored.example.test"]
+
+
+def _placement_cluster(identifier, *, max_workspaces=10):
+    return Cluster.objects.create(
+        id=identifier,
+        name=identifier.title(),
+        region="apac",
+        api_base_url=f"https://{identifier}.example.test",
+        db_host="db.example.test",
+        redis_url="rediss://redis.example.test",
+        s3_bucket=f"{identifier}-workspaces",
+        max_workspaces=max_workspaces,
+    )
+
+
+def test_placement_reservation_is_fenced_audited_and_reversible():
+    workspace = Workspace.objects.create(name="Unplaced Shop", slug="unplaced-shop", is_active=True)
+    target = _placement_cluster("target")
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+    client = client_for(superuser)
+
+    response = client.post(
+        f"{CONTROL}placement-requests/",
+        {
+            "confirm": True,
+            "reason": "Reserve capacity before verified placement",
+            "workspace_id": workspace.id,
+            "target_cluster_id": target.id,
+            "expected_placement_fence": 0,
+        },
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="placement-key-0001",
+    )
+
+    assert response.status_code == 202
+    assert response.data["status"] == "reserved"
+    assert [event["event_type"] for event in response.data["events"]] == ["requested", "capacity_reserved"]
+    placement = WorkspacePlacementRequest.objects.get()
+    assert placement.workspace_id == workspace.id
+    assert placement.target_cluster_id == target.id
+    profile = WorkspacePlatformProfile.objects.get(workspace=workspace)
+    assert profile.cluster_id is None
+    assert profile.placement_fence == 1
+    assert PlatformAuditEvent.objects.filter(action="workspace.placement_reserved", target_id=str(workspace.id)).exists()
+
+    replay = client.post(
+        f"{CONTROL}placement-requests/",
+        {
+            "confirm": True,
+            "reason": "Reserve capacity before verified placement",
+            "workspace_id": workspace.id,
+            "target_cluster_id": target.id,
+            "expected_placement_fence": 0,
+        },
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="placement-key-0001",
+    )
+    assert replay.status_code == 202
+    assert replay["Idempotent-Replayed"] == "true"
+    assert WorkspacePlacementRequest.objects.count() == 1
+
+    queued = client.get(f"{CONTROL}placement-requests/?workspace={workspace.id}")
+    assert queued.status_code == 200
+    assert queued.data[0]["id"] == str(placement.id)
+
+    rollback = client.post(
+        f"{CONTROL}placement-requests/{placement.id}/rollback/",
+        {"confirm": True, "reason": "Placement no longer required"},
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="placement-rollback-0001",
+    )
+    assert rollback.status_code == 200
+    assert rollback.data["status"] == "rolled_back"
+    assert [event["event_type"] for event in rollback.data["events"]] == [
+        "requested", "capacity_reserved", "rollback_requested", "capacity_released",
+    ]
+    profile.refresh_from_db()
+    assert profile.cluster_id is None
+    assert profile.placement_fence == 2
+
+
+def test_placement_reservations_consume_capacity_without_changing_workspace_routing():
+    target = _placement_cluster("single", max_workspaces=1)
+    first = Workspace.objects.create(name="First", slug="first", is_active=True)
+    second = Workspace.objects.create(name="Second", slug="second", is_active=True)
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+    client = client_for(superuser)
+
+    first_response = client.post(
+        f"{CONTROL}placement-requests/",
+        {
+            "confirm": True,
+            "reason": "Reserve the only available slot",
+            "workspace_id": first.id,
+            "target_cluster_id": target.id,
+            "expected_placement_fence": 0,
+        },
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="placement-capacity-0001",
+    )
+    assert first_response.status_code == 202
+
+    refused = client.post(
+        f"{CONTROL}placement-requests/",
+        {
+            "confirm": True,
+            "reason": "Try to reserve capacity for another workspace",
+            "workspace_id": second.id,
+            "target_cluster_id": target.id,
+            "expected_placement_fence": 0,
+        },
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="placement-capacity-0002",
+    )
+    assert refused.status_code == 409
+    assert refused.data["code"] == "cluster_capacity_reserved"
+    assert WorkspacePlatformProfile.objects.get(workspace=first).cluster_id is None
+    assert not WorkspacePlatformProfile.objects.filter(workspace=second).exists()
+
+
+def test_live_migration_request_is_refused_without_data_plane_adapter():
+    source = _placement_cluster("source")
+    target = _placement_cluster("target")
+    workspace = Workspace.objects.create(name="Existing Shop", slug="existing-shop", is_active=True)
+    profile = WorkspacePlatformProfile.objects.create(workspace=workspace, cluster=source)
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+
+    response = client_for(superuser).post(
+        f"{CONTROL}placement-requests/",
+        {
+            "confirm": True,
+            "reason": "Move workspace closer to customers",
+            "workspace_id": workspace.id,
+            "target_cluster_id": target.id,
+            "expected_placement_fence": profile.placement_fence,
+        },
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="placement-migrate-0001",
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "workspace_live_migration_unsupported"
+    profile.refresh_from_db()
+    assert profile.cluster_id == source.id
+    assert not WorkspacePlacementRequest.objects.exists()
+    assert PlatformAuditEvent.objects.filter(
+        action="workspace.placement_reserved", result="failed", target_id=str(workspace.id),
+    ).exists()
 
 
 def test_workspace_import_refuses_a_cluster_that_is_not_accepting_new_workspaces():

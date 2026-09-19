@@ -18,6 +18,7 @@ from rest_framework.response import Response
 
 from bfg.platform.permissions import IsPlatformAdmin
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
+from bfg.platform.utils import is_platform_workspace
 from bfg.common.services.workspace_service import WorkspaceService
 
 
@@ -53,7 +54,7 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             "name": workspace.name,
             "slug": workspace.slug,
             "is_active": workspace.is_active,
-            "is_platform": bool(profile and getattr(profile, "region", "") == "platform"),
+            "is_platform": is_platform_workspace(workspace),
             "suspended_at": profile.suspended_at.isoformat() if profile and profile.suspended_at else None,
             "created_at": workspace.created_at,
             "domains": domains,

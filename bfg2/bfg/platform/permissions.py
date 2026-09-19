@@ -51,7 +51,10 @@ class IsPlatformAdmin(BasePermission):
             if not platform_ws:
                 return False
             StaffMember = apps.get_model("common", "StaffMember")
-            return StaffMember.objects.filter(
+            # Platform administration is intentionally cross-workspace. The
+            # request may be bound to another tenant, so the tenant-scoped
+            # manager would incorrectly hide the management membership.
+            return StaffMember.all_objects.filter(
                 user=request.user,
                 workspace=platform_ws,
                 is_active=True,

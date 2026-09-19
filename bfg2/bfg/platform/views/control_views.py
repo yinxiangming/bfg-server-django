@@ -277,6 +277,8 @@ class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
                 return Response(body, status=status.HTTP_409_CONFLICT)
             before = {"is_active": workspace.is_active, "scheduled_deletion_at": profile.scheduled_deletion_at}
             resume_workspace(workspace, initiated_by=request.user)
+            profile.scheduled_deletion_at = None
+            profile.save(update_fields=["scheduled_deletion_at", "updated_at"])
             payload = _workspace_item(workspace, viewer=request.user)
             complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=payload)
             record_control_audit(

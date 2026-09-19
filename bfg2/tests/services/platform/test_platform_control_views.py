@@ -5,6 +5,10 @@ from rest_framework.test import APIClient
 from bfg.common.models import Workspace
 from bfg.platform.models import Cluster, PlatformAuditEvent
 from bfg.platform.models.workspace_profile import WorkspacePlatformProfile
+from bfg.platform.services.cluster_health import (
+    ClusterHealthProbeConfigurationError,
+    cluster_health_url,
+)
 
 
 pytestmark = pytest.mark.django_db
@@ -79,6 +83,34 @@ def test_resume_handles_a_workspace_without_a_platform_profile():
     assert workspace.is_active is True
 
 
+def test_restore_clears_the_scheduled_deletion_deadline():
+    workspace = Workspace.objects.create(name="Recoverable Shop", slug="recoverable-shop", is_active=True)
+    WorkspacePlatformProfile.objects.create(workspace=workspace)
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+    client = client_for(superuser)
+    delete = client.post(
+        f"{CONTROL}workspaces/{workspace.id}/delete/",
+        {"confirm": True, "reason": "Customer requested closure"},
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="delete-key-0001",
+    )
+    assert delete.status_code == 200
+    workspace.platform_profile.refresh_from_db()
+    assert workspace.platform_profile.scheduled_deletion_at is not None
+
+    restore = client.post(
+        f"{CONTROL}workspaces/{workspace.id}/restore/",
+        {"confirm": True, "reason": "Customer cancelled closure"},
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="restore-key-0001",
+    )
+    assert restore.status_code == 200
+    workspace.refresh_from_db()
+    workspace.platform_profile.refresh_from_db()
+    assert workspace.is_active is True
+    assert workspace.platform_profile.scheduled_deletion_at is None
+
+
 def test_cluster_create_keeps_redis_secret_out_of_response_and_audit():
     superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
     response = client_for(superuser).post(
@@ -142,3 +174,17 @@ def test_configuration_only_workspace_import_creates_pending_domains():
     assert workspace.domains.get(hostname="restored.example.test").verification_status == "pending"
     audit = PlatformAuditEvent.objects.get(action="workspace.imported")
     assert audit.after["custom_domains"] == ["restored.example.test"]
+
+
+def test_cluster_health_target_is_allowlisted_and_never_uses_an_ip_literal(settings):
+    settings.CLUSTER_HEALTH_ALLOWED_HOSTS = ["api.uat.example.test"]
+    cluster = Cluster(id="uat", name="UAT", region="apac", api_base_url="https://api.uat.example.test")
+    assert cluster_health_url(cluster) == "https://api.uat.example.test/api/v1/health/"
+
+    cluster.api_base_url = "https://127.0.0.1:8443/"
+    with pytest.raises(ClusterHealthProbeConfigurationError):
+        cluster_health_url(cluster)
+
+    cluster.api_base_url = "https://api.uat.example.test/redirect?to=https://127.0.0.1/"
+    with pytest.raises(ClusterHealthProbeConfigurationError):
+        cluster_health_url(cluster)

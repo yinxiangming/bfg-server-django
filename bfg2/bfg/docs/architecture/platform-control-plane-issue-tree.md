@@ -36,6 +36,22 @@ turning an ordinary workspace owner into a deployment administrator.
 - [ ] Add an explicit migration workflow between clusters. Do not reuse export
       and import as a live-data migration.
 
+### Deletion retention implementation gate
+
+Do not implement this worker as ``workspace.delete()``. A scheduled deletion is
+recoverable until the Platform has a complete per-workspace archive: database
+rows, private media inventory, a versioned manifest, a verified read-back, and
+an isolated restore test. The existing extension archive mechanism is not that
+archive; it intentionally covers only one extension's rows.
+
+The eventual purge command or worker must remain disabled unless a deployment
+setting explicitly enables it, default to a read-only preview, and require a
+separate execute confirmation. It must lock the profile, re-check that its
+scheduled timestamp is still due and that the workspace is inactive, record the
+verified archive reference before deletion, and write one idempotent final audit
+event after the transaction succeeds. Media removal requires the same manifest
+and verification boundary; it must not be inferred from database cascades.
+
 ## P2: Cluster operations
 
 - [x] List, create, and edit clusters with optimistic configuration versions.

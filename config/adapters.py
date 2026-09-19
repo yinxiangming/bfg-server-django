@@ -3,10 +3,17 @@ from types import SimpleNamespace
 from allauth.account.adapter import DefaultAccountAdapter
 from django.conf import settings
 from django.contrib.sites.shortcuts import get_current_site
+from django.utils.encoding import force_str
 
 
 class ClusterAccountAdapter(DefaultAccountAdapter):
     """Use the hosting Cluster brand in account emails instead of a platform vendor name."""
+
+    def format_email_subject(self, subject):
+        """Always prefix account mail with the active Cluster, never a platform default."""
+        request = getattr(self, 'request', None)
+        site = get_current_site(request) if request is not None else None
+        return f'[{self._cluster_name(site)}] {force_str(subject)}'
 
     def send_mail(self, template_prefix, email, context):
         request = getattr(self, 'request', None)

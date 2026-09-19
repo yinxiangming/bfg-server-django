@@ -47,10 +47,14 @@ class ConsoleViewer:
         if not getattr(user, "is_authenticated", False):
             return cls(is_platform_admin=False, owned_ids=frozenset())
         return cls(
-            # The existing owner/platform-admin console keeps its historical
-            # tenant-level authorization. Deployment controls live separately
-            # under ``/control/`` and require a Django superuser there.
-            is_platform_admin=workspace_service.is_platform_admin(user),
+            # Workspace-console visibility retains historical management
+            # administrators and also admits a Django superuser even when that
+            # account has no tenant membership. The separate configuration and
+            # deployment-control routes make their stricter checks themselves.
+            is_platform_admin=(
+                workspace_service.is_platform_superuser(user)
+                or workspace_service.is_platform_admin(user)
+            ),
             owned_ids=frozenset(owned_workspace_ids(user)),
         )
 

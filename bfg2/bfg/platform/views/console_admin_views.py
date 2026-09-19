@@ -63,7 +63,7 @@ from rest_framework.response import Response
 
 from bfg.platform.models.entitlement import WorkspaceEntitlement
 from bfg.platform.models.variables import PlatformVariableChange
-from bfg.platform.permissions import IsPlatformAdmin
+from bfg.platform.permissions import IsPlatformSuperuser
 from bfg.platform.services import console_admin, exchange_rates, pricing, usage
 from bfg.platform.services import platform_variables as variables
 from bfg.platform.views.console_views import WORKSPACE_NOT_FOUND
@@ -84,8 +84,8 @@ REASON_MAX_LENGTH = min(
 )
 
 
-class _MayAdministerPlatform(IsPlatformAdmin):
-    """``IsPlatformAdmin``, refusing with a code the console can act on.
+class _MayAdministerPlatform(IsPlatformSuperuser):
+    """``IsPlatformSuperuser``, refusing with a code the console can act on.
 
     DRF sends a dict message as the response body, which is how the code reaches
     the client next to the detail.
@@ -93,7 +93,7 @@ class _MayAdministerPlatform(IsPlatformAdmin):
 
     message = {
         'code': PLATFORM_ADMIN_REQUIRED,
-        'detail': 'Only platform administrators can use this part of the console.',
+        'detail': 'Only a Django superuser can use this part of the console.',
     }
 
 

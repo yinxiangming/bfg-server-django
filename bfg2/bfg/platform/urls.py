@@ -13,7 +13,11 @@ from bfg.platform.views.workspace_views import WorkspaceViewSet, PlanViewSet, SS
 from bfg.platform.views.auth_views import AuthViewSet, InternalAuthViewSet
 from bfg.platform.views.subscription_views import WebhookViewSet
 from bfg.platform.views.switch_workspace_view import switch_workspace
-from bfg.platform.views.console_views import PlatformConsoleClusterViewSet, PlatformConsoleWorkspaceViewSet
+from bfg.platform.views.console_views import (
+    PlatformConsoleAuditEventViewSet,
+    PlatformConsoleClusterViewSet,
+    PlatformConsoleWorkspaceViewSet,
+)
 
 router = DefaultRouter()
 router.register(r'workspaces', WorkspaceViewSet, basename='platform-workspace')
@@ -24,6 +28,7 @@ router.register(r'internal',   InternalAuthViewSet, basename='platform-internal'
 router.register(r'webhooks',   WebhookViewSet,   basename='platform-webhook')
 router.register(r'console/workspaces', PlatformConsoleWorkspaceViewSet, basename='platform-console-workspace')
 router.register(r'console/clusters', PlatformConsoleClusterViewSet, basename='platform-console-cluster')
+router.register(r'console/audit-events', PlatformConsoleAuditEventViewSet, basename='platform-console-audit-event')
 
 urlpatterns = [
     path('', include(router.urls)),

@@ -7,9 +7,11 @@ credentials or allowing a hard delete from the web console.
 from datetime import timedelta
 
 from django.apps import apps
+from django.core import signing
 from django.db import transaction
+from django.db.models import Q
 from django.http import HttpResponse
-from django.utils import timezone
+from django.utils import dateparse, timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -17,7 +19,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from bfg.platform.permissions import IsPlatformSuperuser
-from bfg.platform.services.audit_service import record_platform_audit
+from bfg.platform.services.audit_service import record_platform_audit, redact_platform_audit_value
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
 from bfg.platform.utils import is_platform_workspace
 from bfg.common.services.workspace_service import WorkspaceService
@@ -401,3 +403,85 @@ class PlatformConsoleClusterViewSet(viewsets.ViewSet):
                 reason=reason, before=before, after=_cluster_snapshot(cluster),
             )
         return Response(self._item(cluster))
+
+
+class PlatformConsoleAuditEventViewSet(viewsets.ViewSet):
+    """Read-only, paginated history of sensitive Platform control-plane changes."""
+
+    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
+    _DEFAULT_LIMIT = 50
+    _MAX_LIMIT = 100
+
+    @staticmethod
+    def _event_item(event):
+        """Serialize an event without request metadata or unredacted snapshots."""
+        return {
+            "id": str(event.id),
+            "action": event.action,
+            "target": {"type": event.target_type, "id": event.target_id},
+            "reason": event.reason,
+            "actor": (
+                {"id": event.actor_id, "username": event.actor.username}
+                if event.actor_id else None
+            ),
+            "before": redact_platform_audit_value(event.before or {}),
+            "after": redact_platform_audit_value(event.after or {}),
+            "created_at": event.created_at,
+        }
+
+    def _limit(self, request):
+        raw_limit = request.query_params.get("limit", self._DEFAULT_LIMIT)
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            raise ValidationError({"limit": "Use a whole number between 1 and 100."})
+        if not 1 <= limit <= self._MAX_LIMIT:
+            raise ValidationError({"limit": "Use a whole number between 1 and 100."})
+        return limit
+
+    def _cursor(self, request):
+        cursor = request.query_params.get("cursor")
+        if not cursor:
+            return None
+        try:
+            payload = signing.loads(cursor, salt="platform-audit-events", max_age=60 * 60 * 24 * 30)
+            created_at = dateparse.parse_datetime(payload["created_at"])
+            event_id = payload["id"]
+        except (KeyError, TypeError, ValueError, signing.BadSignature):
+            raise ValidationError({"cursor": "Use a valid audit-event cursor."})
+        if not created_at:
+            raise ValidationError({"cursor": "Use a valid audit-event cursor."})
+        if timezone.is_naive(created_at):
+            created_at = timezone.make_aware(created_at, timezone.get_current_timezone())
+        return created_at, event_id
+
+    @staticmethod
+    def _next_cursor(event):
+        return signing.dumps(
+            {"created_at": event.created_at.isoformat(), "id": str(event.id)},
+            salt="platform-audit-events",
+        )
+
+    def list(self, request):
+        PlatformAuditEvent = apps.get_model("platform", "PlatformAuditEvent")
+        events = PlatformAuditEvent.objects.select_related("actor").order_by("-created_at", "-id")
+        for field, maximum in (("action", 100), ("target_type", 64), ("target_id", 255)):
+            value = (request.query_params.get(field) or "").strip()
+            if len(value) > maximum:
+                raise ValidationError({field: f"Use {maximum} characters or fewer."})
+            if value:
+                events = events.filter(**{field: value})
+
+        cursor = self._cursor(request)
+        if cursor:
+            created_at, event_id = cursor
+            events = events.filter(Q(created_at__lt=created_at) | Q(created_at=created_at, id__lt=event_id))
+
+        limit = self._limit(request)
+        page = list(events[:limit + 1])
+        has_next = len(page) > limit
+        page = page[:limit]
+        return Response({
+            "results": [self._event_item(event) for event in page],
+            "next": self._next_cursor(page[-1]) if has_next and page else None,
+        })

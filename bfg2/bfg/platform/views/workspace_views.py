@@ -109,6 +109,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             'is_platform_admin': is_platform_superuser,
             'platform_capabilities': {
                 'cluster_management': is_platform_superuser,
+                'audit_log': is_platform_superuser,
                 'configuration': False,
             },
         })

@@ -16,6 +16,7 @@ User = get_user_model()
 @pytest.mark.parametrize("path", [
     "/api/v1/platform/console/workspaces/",
     "/api/v1/platform/console/clusters/",
+    "/api/v1/platform/console/audit-events/",
 ])
 def test_platform_console_refuses_authenticated_non_superusers(path):
     tenant_admin = User.objects.create_user(
@@ -33,6 +34,7 @@ def test_platform_console_refuses_authenticated_non_superusers(path):
 @pytest.mark.parametrize("path", [
     "/api/v1/platform/console/workspaces/",
     "/api/v1/platform/console/clusters/",
+    "/api/v1/platform/console/audit-events/",
 ])
 def test_platform_console_allows_django_superusers(path):
     superuser = User.objects.create_superuser(
@@ -81,10 +83,12 @@ def test_workspace_membership_response_exposes_only_superuser_platform_access():
     assert superuser_response.data["is_platform_superuser"] is True
     assert staff_response.data["platform_capabilities"] == {
         "cluster_management": False,
+        "audit_log": False,
         "configuration": False,
     }
     assert superuser_response.data["platform_capabilities"] == {
         "cluster_management": True,
+        "audit_log": True,
         "configuration": False,
     }
 
@@ -261,6 +265,46 @@ def test_cluster_write_requires_confirmation_and_records_redacted_audit_event():
     assert event.reason == "Create UAT infrastructure"
     assert event.after["redis_configured"] is True
     assert "redis_url" not in event.after
+
+
+@pytest.mark.django_db
+def test_audit_events_are_paginated_filterable_and_redacted_for_superusers():
+    superuser = User.objects.create_superuser(
+        username="audit-reader", password="secret", email="reader@example.test",
+    )
+    older = PlatformAuditEvent.objects.create(
+        action="workspace.suspend",
+        target_type="workspace",
+        target_id="23",
+        reason="Investigate an incident",
+        actor=superuser,
+        after={"redis_url": "rediss://do-not-return", "nested": {"api_key": "private"}},
+    )
+    newer = PlatformAuditEvent.objects.create(
+        action="cluster.updated",
+        target_type="cluster",
+        target_id="uat-apac",
+        reason="Pause new allocations",
+        actor=superuser,
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    first = client.get("/api/v1/platform/console/audit-events/?limit=1")
+
+    assert first.status_code == 200
+    assert first.data["results"][0]["id"] == str(newer.id)
+    assert first.data["next"]
+    assert "source_ip" not in first.data["results"][0]
+    second = client.get(f"/api/v1/platform/console/audit-events/?cursor={first.data['next']}")
+    assert second.status_code == 200
+    assert second.data["results"][0]["id"] == str(older.id)
+    assert second.data["results"][0]["after"]["redis_url"] == "[redacted]"
+    assert second.data["results"][0]["after"]["nested"]["api_key"] == "[redacted]"
+
+    filtered = client.get("/api/v1/platform/console/audit-events/?target_type=workspace&target_id=23")
+    assert filtered.status_code == 200
+    assert [item["id"] for item in filtered.data["results"]] == [str(older.id)]
 
 
 @pytest.mark.django_db

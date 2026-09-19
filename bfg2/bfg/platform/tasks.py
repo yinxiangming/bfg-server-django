@@ -58,3 +58,22 @@ def issue_monthly_bills(month=None):
     from bfg.platform.services.billing import issue_monthly_bills as issue
 
     return [invoice.pk for invoice in issue(month)]
+
+
+@shared_task
+def expire_placement_reservations():
+    """Release due capacity reservations only when the deployment opts in.
+
+    The scheduler can run this task safely in every deployment. With the flag
+    off it reports a no-op, so enabling automatic capacity release remains an
+    explicit infrastructure decision rather than a side effect of installing a
+    code release.
+    """
+    from django.conf import settings
+
+    if not getattr(settings, "PLATFORM_PLACEMENT_EXPIRY_ENABLED", False):
+        return {"enabled": False, "expired": 0}
+    from bfg.platform.services.placement_queue import expire_due_reservations
+
+    expired = expire_due_reservations(limit=100)
+    return {"enabled": True, "expired": len(expired)}

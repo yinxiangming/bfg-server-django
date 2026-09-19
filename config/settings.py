@@ -412,6 +412,13 @@ if BFG_EXTENSION_ARCHIVE_BUCKET or BFG_EXTENSION_ARCHIVE_DIR:
         }
     BFG_EXTENSION_ARCHIVE_STORAGE = 'extension_archive'
 
+# Capacity reservations never affect routing, but an expired reservation still
+# consumes a slot until it is released. A deployment must opt in to the periodic
+# release task after confirming its Celery worker and audit retention are live.
+PLATFORM_PLACEMENT_EXPIRY_ENABLED = os.environ.get(
+    'PLATFORM_PLACEMENT_EXPIRY_ENABLED', 'false'
+).strip().lower() in ('1', 'true', 'yes')
+
 # REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
@@ -607,6 +614,10 @@ CELERY_BEAT_SCHEDULE = {
     'archive-unused-extensions': {
         'task': 'bfg.common.tasks.archive_unused_extensions',
         'schedule': crontab(hour=3, minute=0),
+    },
+    'expire-placement-reservations': {
+        'task': 'bfg.platform.tasks.expire_placement_reservations',
+        'schedule': crontab(hour=3, minute=10),
     },
 }
 

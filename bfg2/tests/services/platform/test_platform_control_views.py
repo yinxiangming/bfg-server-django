@@ -531,6 +531,14 @@ def test_expired_placement_reservation_is_released_fenced_and_audited():
     ).exists()
 
 
+def test_placement_expiry_task_is_disabled_until_the_deployment_opts_in(settings):
+    from bfg.platform.tasks import expire_placement_reservations
+
+    settings.PLATFORM_PLACEMENT_EXPIRY_ENABLED = False
+
+    assert expire_placement_reservations() == {"enabled": False, "expired": 0}
+
+
 def test_workspace_import_refuses_a_cluster_that_is_not_accepting_new_workspaces():
     owner = User.objects.create_user(username="import-owner", email="owner@example.test", password="secret")
     Cluster.objects.create(

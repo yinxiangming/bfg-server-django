@@ -110,9 +110,12 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             'platform_capabilities': {
                 'cluster_management': is_platform_superuser,
                 'audit_log': is_platform_superuser,
-                # The storage endpoints are intentionally not advertised until the
-                # metering and entitlement consumers enforce their policies.
-                'configuration': False,
+                # Meter pricing and caps now drive runtime metering, so their
+                # control panel is safe to advertise to Django superusers.
+                'configuration': is_platform_superuser,
+                # Rate storage exists, but no runtime conversion consumer has
+                # been registered yet. Do not offer a misleading UI control.
+                'exchange_rates': False,
             },
         })
 

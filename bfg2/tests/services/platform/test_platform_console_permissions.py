@@ -151,11 +151,13 @@ def test_workspace_membership_response_exposes_only_superuser_platform_access():
         "cluster_management": False,
         "audit_log": False,
         "configuration": False,
+        "exchange_rates": False,
     }
     assert superuser_response.data["platform_capabilities"] == {
         "cluster_management": True,
         "audit_log": True,
-        "configuration": False,
+        "configuration": True,
+        "exchange_rates": False,
     }
 
 

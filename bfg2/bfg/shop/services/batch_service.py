@@ -33,8 +33,16 @@ def is_batch_management_enabled(workspace=None) -> bool:
     # Check workspace settings
     if workspace and isinstance(workspace.settings, dict):
         features = workspace.settings.get('features', {})
-        return features.get('batch_management', False)
-    
+        if features.get('batch_management', False):
+            return True
+
+    # A Platform grant is an independently auditable way to make this optional
+    # feature available.  The lookup is intentionally here, at the feature's
+    # real runtime guard, rather than only in a console serializer.
+    if workspace:
+        from bfg.platform.services.entitlement_service import has_active_entitlement
+        return has_active_entitlement(workspace, 'batch_management')
+
     return False
 
 

@@ -14,6 +14,7 @@ from bfg.platform.models import Cluster, PlatformAuditEvent, PlatformMeterPrice,
 from bfg.platform.models import PlatformMembership, WorkspacePlatformProfile
 from bfg.platform.serializers.workspace import WorkspaceCreateSerializer
 from bfg.platform.services.workspace_service import is_platform_admin
+from bfg.shop.services.batch_service import is_batch_management_enabled
 
 
 User = get_user_model()
@@ -314,16 +315,69 @@ def test_superuser_can_set_workspace_usage_cap_and_grant_once():
 
     grant = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
-        {"key": "", "months": 12, "reason": "Migration support", "confirm": True}, format="json",
+        {"key": "batch_management", "months": 12, "reason": "Migration support", "confirm": True}, format="json",
     )
     assert grant.status_code == 201
-    assert grant.data["entitlement"]["key"] == ""
+    assert grant.data["entitlement"]["key"] == "batch_management"
+    assert grant.data["entitlement"]["is_effective"] is True
     duplicate = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
-        {"key": "", "months": 12, "reason": "Duplicate", "confirm": True}, format="json",
+        {"key": "batch_management", "months": 12, "reason": "Duplicate", "confirm": True}, format="json",
     )
     assert duplicate.status_code == 409
     assert duplicate.data["code"] == "already_entitled"
+
+
+@pytest.mark.django_db
+def test_runtime_entitlement_enables_batch_management_and_can_be_revoked(settings):
+    settings.BFG2_SETTINGS = {
+        **getattr(settings, "BFG2_SETTINGS", {}),
+        "ENABLE_BATCH_MANAGEMENT": False,
+    }
+    superuser = User.objects.create_superuser(
+        username="grant-root", password="secret", email="grant@example.test",
+    )
+    workspace = Workspace.objects.create(name="Granted Feature", slug="granted-feature", is_active=True)
+    WorkspacePlatformProfile.objects.create(workspace=workspace, region="apac")
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    assert is_batch_management_enabled(workspace) is False
+    unknown = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
+        {"key": "resale.pro", "months": 1, "reason": "Unsupported feature", "confirm": True}, format="json",
+    )
+    assert unknown.status_code == 400
+    assert unknown.data["code"] == "unknown_entitlement_feature"
+
+    granted = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
+        {"key": "batch_management", "never_expires": True, "reason": "Plan migration", "confirm": True}, format="json",
+    )
+    assert granted.status_code == 201
+    grant_id = granted.data["entitlement"]["id"]
+    assert is_batch_management_enabled(workspace) is True
+
+    listed = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/grants/")
+    assert listed.status_code == 200
+    assert listed.data == [granted.data["entitlement"]]
+
+    revoked = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/grants/{grant_id}/revoke/",
+        {"reason": "Plan migration rolled back", "confirm": True}, format="json",
+    )
+    assert revoked.status_code == 200
+    assert revoked.data["entitlement"]["status"] == "revoked"
+    assert revoked.data["entitlement"]["is_effective"] is False
+    assert is_batch_management_enabled(workspace) is False
+    assert PlatformAuditEvent.objects.filter(action="workspace.entitlement_revoked").count() == 1
+
+    repeated = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/grants/{grant_id}/revoke/",
+        {"reason": "Repeated revoke", "confirm": True}, format="json",
+    )
+    assert repeated.status_code == 200
+    assert PlatformAuditEvent.objects.filter(action="workspace.entitlement_revoked").count() == 1
 
 
 @pytest.mark.django_db

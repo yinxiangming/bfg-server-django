@@ -29,6 +29,11 @@ from bfg.platform.services.configuration_service import (
     platform_variable_item,
     validate_platform_variable,
 )
+from bfg.platform.services.entitlement_service import (
+    RUNTIME_ENTITLEMENT_KEYS,
+    has_active_entitlement,
+    is_runtime_entitlement_key,
+)
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
@@ -810,14 +815,26 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             )
         return Response(item(result))
 
-    @action(detail=True, methods=["post"], url_path="grants")
+    @action(detail=True, methods=["get", "post"], url_path="grants")
     def grants(self, request, pk=None):
-        """Grant a temporary or perpetual base-plan/extension entitlement."""
-        _confirmed(request)
+        """List or grant a temporary/perpetual runtime feature entitlement."""
         workspace = self._workspace(pk)
+        Entitlement = apps.get_model("platform", "WorkspaceEntitlement")
+        if request.method == "GET":
+            entitlements = Entitlement.objects.filter(workspace=workspace).order_by("-created_at", "-id")
+            return Response([
+                self._entitlement_item(entitlement)
+                for entitlement in entitlements
+            ])
+
+        _confirmed(request)
         key = str(request.data.get("key") or "").strip()
-        if len(key) > 255:
-            return Response({"detail": "Use an entitlement key of 255 characters or fewer.", "code": "invalid_grant"}, status=400)
+        if not is_runtime_entitlement_key(key):
+            return Response({
+                "detail": "Choose a feature with an active runtime entitlement gate.",
+                "code": "unknown_entitlement_feature",
+                "available_features": sorted(RUNTIME_ENTITLEMENT_KEYS),
+            }, status=status.HTTP_400_BAD_REQUEST)
         never_expires = request.data.get("never_expires") is True
         raw_months = request.data.get("months")
         if never_expires == (raw_months not in (None, "")):
@@ -832,7 +849,6 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             reason = _change_reason(request)
         except ValidationError:
             return Response({"detail": "Provide a grant reason.", "code": "invalid_grant"}, status=400)
-        Entitlement = apps.get_model("platform", "WorkspaceEntitlement")
         now = timezone.now()
         with transaction.atomic():
             Workspace = apps.get_model("common", "Workspace")
@@ -860,10 +876,44 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
                 request=request, action="workspace.entitlement_granted", target_type="workspace",
                 target_id=workspace.id, reason=reason, after={"entitlement": item},
             )
-        return Response({"workspace": workspace.id, "entitlement": item, "extension": None}, status=status.HTTP_201_CREATED)
+        return Response({"workspace": workspace.id, "entitlement": item}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path=r"grants/(?P<grant_id>[^/.]+)/revoke")
+    def revoke_grant(self, request, pk=None, grant_id=None):
+        """Revoke a granted runtime feature without deleting its audit trail."""
+        _confirmed(request)
+        reason = _change_reason(request)
+        workspace = self._workspace(pk)
+        try:
+            grant_id = int(grant_id)
+        except (TypeError, ValueError):
+            raise Http404
+
+        Entitlement = apps.get_model("platform", "WorkspaceEntitlement")
+        Workspace = apps.get_model("common", "Workspace")
+        with transaction.atomic():
+            locked_workspace = Workspace.objects.select_for_update().get(pk=workspace.pk)
+            try:
+                entitlement = Entitlement.objects.select_for_update().get(
+                    pk=grant_id, workspace=locked_workspace,
+                )
+            except Entitlement.DoesNotExist as exc:
+                raise Http404 from exc
+            before = self._entitlement_item(entitlement)
+            if entitlement.status != Entitlement.STATUS_REVOKED:
+                entitlement.status = Entitlement.STATUS_REVOKED
+                entitlement.save(update_fields=["status"])
+                record_platform_audit(
+                    request=request, action="workspace.entitlement_revoked", target_type="workspace",
+                    target_id=workspace.id, reason=reason, before={"entitlement": before},
+                    after={"entitlement": self._entitlement_item(entitlement)},
+                )
+            item = self._entitlement_item(entitlement)
+        return Response({"workspace": workspace.id, "entitlement": item})
 
     @staticmethod
     def _entitlement_item(entitlement):
+        effective = has_active_entitlement(entitlement.workspace, entitlement.key)
         return {
             "id": entitlement.id,
             "key": entitlement.key,
@@ -872,6 +922,7 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             "starts_at": entitlement.starts_at,
             "current_period_end": entitlement.current_period_end,
             "reason": entitlement.reason,
+            "is_effective": effective,
         }
 
 

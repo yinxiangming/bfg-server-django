@@ -7,6 +7,8 @@ credentials or allowing a hard delete from the web console.
 from calendar import monthrange
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
+from hashlib import sha256
+import json
 
 from django.apps import apps
 from django.core import signing
@@ -129,6 +131,27 @@ def _usage_period(value):
         return date(int(raw[:4]), int(raw[5:]), 1)
     except ValueError as exc:
         raise ValidationError({"month": "Use a reporting month in YYYY-MM format."}) from exc
+
+
+def _idempotency_key(request):
+    """Read an opaque, bounded retry key without logging or echoing it."""
+    key = str(request.headers.get("X-Idempotency-Key") or "").strip()
+    if not 8 <= len(key) <= 128:
+        raise ValidationError({"idempotency_key": "Provide X-Idempotency-Key with 8 to 128 characters."})
+    return key
+
+
+def _meter_price_payload_hash(*, meter, vendor_cost, unit_size, margin, effective_from):
+    """Hash normalized write inputs so one retry key cannot mean two prices."""
+    payload = {
+        "meter": meter,
+        "vendor_cost": _decimal_text(vendor_cost),
+        "unit_size": unit_size,
+        "margin": _decimal_text(margin) if margin is not None else None,
+        "effective_from": effective_from.isoformat() if effective_from else None,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256(encoded).hexdigest()
 
 
 def _automatic_reason(request, fallback):
@@ -268,6 +291,13 @@ class PlatformConsoleMeterPriceViewSet(viewsets.ViewSet):
 
     def create(self, request):
         _confirmed(request)
+        try:
+            idempotency_key = _idempotency_key(request)
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         meter = str(request.data.get("meter") or "").strip()
         if not meter or len(meter) > 100:
             return Response({"detail": "Use a meter key of 1 to 100 characters.", "code": "invalid_meter_price"}, status=400)
@@ -285,20 +315,56 @@ class PlatformConsoleMeterPriceViewSet(viewsets.ViewSet):
         except (ValidationError, TypeError, ValueError):
             return Response({"detail": "Check the cost, unit size, margin, and effective date.", "code": "invalid_meter_price"}, status=400)
         MeterPrice = apps.get_model("platform", "PlatformMeterPrice")
+        PriceRequest = apps.get_model("platform", "PlatformMeterPriceRequest")
         reason = _automatic_reason(request, f"Added a price for meter {meter}.")
+        payload_hash = _meter_price_payload_hash(
+            meter=meter,
+            vendor_cost=cost,
+            unit_size=unit_size,
+            margin=margin,
+            effective_from=effective_from,
+        )
         with transaction.atomic():
-            price = MeterPrice.objects.create(
-                meter=meter, vendor_cost=cost, unit_size=unit_size, margin=margin,
-                effective_from=effective_from, created_by=request.user,
+            price_request, created = PriceRequest.objects.get_or_create(
+                created_by=request.user,
+                idempotency_key=idempotency_key,
+                defaults={"payload_hash": payload_hash},
             )
-            record_platform_audit(
-                request=request, action="configuration.meter_price_added", target_type="meter",
-                target_id=meter, reason=reason,
-                after={"price_id": price.id, "vendor_cost": _decimal_text(cost), "unit_size": unit_size,
-                       "margin": _decimal_text(margin) if margin is not None else None,
-                       "effective_from": effective_from.isoformat() if effective_from else None},
-            )
-        return Response(self._group_items(list(MeterPrice.objects.filter(meter=meter)))[0], status=status.HTTP_201_CREATED)
+            if not created:
+                if price_request.payload_hash != payload_hash:
+                    return Response(
+                        {"detail": "This idempotency key was already used for a different meter price.", "code": "idempotency_key_reused"},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                price = price_request.price
+                if price is None:
+                    return Response(
+                        {"detail": "This idempotent meter-price request did not complete. Use a new key after checking the audit log.", "code": "idempotency_request_incomplete"},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                response_status = status.HTTP_200_OK
+            else:
+                price = MeterPrice.objects.create(
+                    meter=meter, vendor_cost=cost, unit_size=unit_size, margin=margin,
+                    effective_from=effective_from, created_by=request.user,
+                )
+                price_request.price = price
+                price_request.save(update_fields=["price"])
+                record_platform_audit(
+                    request=request, action="configuration.meter_price_added", target_type="meter",
+                    target_id=meter, reason=reason,
+                    after={"price_id": price.id, "vendor_cost": _decimal_text(cost), "unit_size": unit_size,
+                           "margin": _decimal_text(margin) if margin is not None else None,
+                           "effective_from": effective_from.isoformat() if effective_from else None},
+                )
+                response_status = status.HTTP_201_CREATED
+        response = Response(
+            self._group_items(list(MeterPrice.objects.filter(meter=price.meter)))[0],
+            status=response_status,
+        )
+        if response_status == status.HTTP_200_OK:
+            response["Idempotent-Replayed"] = "true"
+        return response
 
 
 class PlatformConsoleExchangeRateViewSet(viewsets.ViewSet):

@@ -69,6 +69,40 @@ class PlatformMeterPrice(models.Model):
         indexes = [models.Index(fields=["meter", "effective_from"], name="plat_meter_effective_idx")]
 
 
+class PlatformMeterPriceRequest(models.Model):
+    """One superuser's idempotent request to append a meter price.
+
+    Price history stays immutable and is allowed to contain equal rates entered at
+    different times. This separate record instead binds a client retry key to one
+    exact normalized request and the price it produced, without changing history.
+    """
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="platform_meter_price_requests",
+    )
+    idempotency_key = models.CharField(max_length=128)
+    payload_hash = models.CharField(max_length=64)
+    price = models.OneToOneField(
+        "platform.PlatformMeterPrice",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="idempotency_request",
+    )
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["created_by", "idempotency_key"],
+                name="platform_meter_price_request_key",
+            ),
+        ]
+
+
 class WorkspaceUsageCap(models.Model):
     """Optional monthly metered-usage cap selected by a Platform administrator."""
 

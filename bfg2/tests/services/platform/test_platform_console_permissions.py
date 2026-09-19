@@ -16,6 +16,7 @@ from bfg.platform.models import (
     Cluster,
     PlatformAuditEvent,
     PlatformMeterPrice,
+    PlatformMeterPriceRequest,
     WorkspaceMeterUsage,
     WorkspaceOperation,
     WorkspaceUsageCap,
@@ -198,7 +199,7 @@ def test_meter_prices_are_append_only_and_use_the_platform_margin():
 
     first = client.post("/api/v1/platform/console/meter-prices/", {
         "meter": "ai.tokens", "vendor_cost": "10", "unit_size": "100", "margin": "0.25", "confirm": True,
-    }, format="json")
+    }, format="json", HTTP_X_IDEMPOTENCY_KEY="meter-price-first-0001")
     assert first.status_code == 201
     assert first.data["meter"] == "ai.tokens"
     assert first.data["in_force"] == first.data["prices"][0]["id"]
@@ -206,7 +207,7 @@ def test_meter_prices_are_append_only_and_use_the_platform_margin():
 
     second = client.post("/api/v1/platform/console/meter-prices/", {
         "meter": "ai.tokens", "vendor_cost": "12", "unit_size": "100", "confirm": True,
-    }, format="json")
+    }, format="json", HTTP_X_IDEMPOTENCY_KEY="meter-price-second-001")
     assert second.status_code == 201
     assert len(second.data["prices"]) == 2
     assert any(price["uses_default_margin"] for price in second.data["prices"])
@@ -225,9 +226,10 @@ def test_meter_price_is_rolled_back_when_its_audit_write_fails():
         with pytest.raises(RuntimeError, match="audit unavailable"):
             client.post("/api/v1/platform/console/meter-prices/", {
                 "meter": "ai.tokens", "vendor_cost": "10", "unit_size": "100", "confirm": True,
-            }, format="json")
+            }, format="json", HTTP_X_IDEMPOTENCY_KEY="meter-price-audit-001")
 
     assert PlatformMeterPrice.objects.count() == 0
+    assert PlatformMeterPriceRequest.objects.count() == 0
 
 
 @pytest.mark.django_db
@@ -251,9 +253,55 @@ def test_platform_configuration_rejects_values_outside_model_precision(path, pay
     client = APIClient()
     client.force_authenticate(user=superuser)
 
-    response = client.post(path, payload, format="json")
+    response = client.post(path, payload, format="json", HTTP_X_IDEMPOTENCY_KEY="invalid-config-0001")
 
     assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_meter_price_write_is_persistently_idempotent():
+    superuser = User.objects.create_superuser(
+        username="meter-idempotency-root", password="secret", email="meter-idempotency@example.test",
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+    payload = {
+        "meter": "ai.agent_chat", "vendor_cost": "10", "unit_size": "100", "confirm": True,
+    }
+
+    missing_key = client.post("/api/v1/platform/console/meter-prices/", payload, format="json")
+    assert missing_key.status_code == 400
+    assert missing_key.data["code"] == "idempotency_key_required"
+
+    first = client.post(
+        "/api/v1/platform/console/meter-prices/", payload, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="meter-price-retry-001",
+    )
+    assert first.status_code == 201
+    first_price_id = first.data["prices"][0]["id"]
+    assert PlatformMeterPrice.objects.count() == 1
+    assert PlatformMeterPriceRequest.objects.filter(
+        created_by=superuser, idempotency_key="meter-price-retry-001", price_id=first_price_id,
+    ).exists()
+
+    replayed = client.post(
+        "/api/v1/platform/console/meter-prices/", payload, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="meter-price-retry-001",
+    )
+    assert replayed.status_code == 200
+    assert replayed["Idempotent-Replayed"] == "true"
+    assert replayed.data["prices"][0]["id"] == first_price_id
+    assert PlatformMeterPrice.objects.count() == 1
+    assert PlatformAuditEvent.objects.filter(action="configuration.meter_price_added").count() == 1
+
+    reused = client.post(
+        "/api/v1/platform/console/meter-prices/",
+        {**payload, "vendor_cost": "11"},
+        format="json", HTTP_X_IDEMPOTENCY_KEY="meter-price-retry-001",
+    )
+    assert reused.status_code == 409
+    assert reused.data["code"] == "idempotency_key_reused"
+    assert PlatformMeterPrice.objects.count() == 1
 
 
 @pytest.mark.django_db

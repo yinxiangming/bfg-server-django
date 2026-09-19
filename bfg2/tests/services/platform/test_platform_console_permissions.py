@@ -1019,7 +1019,10 @@ def test_workspace_configuration_export_import_maps_owner_cluster_and_pending_do
     payload["custom_domains"] = [{"hostname": "imported.example.test"}]
     payload.update({"confirm": True, "reason": "Move configuration template"})
 
-    imported = client.post("/api/v1/platform/console/workspaces/import-workspace/", payload, format="json")
+    imported = client.post(
+        "/api/v1/platform/console/workspaces/import-workspace/", payload, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="workspace-import-0001",
+    )
     assert imported.status_code == 201
     restored = Workspace.objects.get(slug="imported-workspace")
     restored_profile = WorkspacePlatformProfile.objects.get(workspace=restored)
@@ -1028,6 +1031,14 @@ def test_workspace_configuration_export_import_maps_owner_cluster_and_pending_do
     restored_domain = WorkspaceDomain.objects.get(workspace=restored, hostname="imported.example.test")
     assert restored_domain.verification_status == WorkspaceDomain.VERIFICATION_PENDING
     assert restored_domain.is_primary is False
+
+    replayed = client.post(
+        "/api/v1/platform/console/workspaces/import-workspace/", payload, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="workspace-import-0001",
+    )
+    assert replayed.status_code == 201
+    assert replayed["Idempotent-Replayed"] == "true"
+    assert Workspace.objects.filter(slug="imported-workspace").count() == 1
 
 
 @pytest.mark.django_db
@@ -1074,7 +1085,7 @@ def test_workspace_import_does_not_expose_cluster_capacity_failure_details():
             "owner_email": owner.email,
             "confirm": True,
             "reason": "Capacity import regression",
-        }, format="json")
+        }, format="json", HTTP_X_IDEMPOTENCY_KEY="workspace-import-capacity-001")
 
     assert response.status_code == 409
     assert response.data == {
@@ -1082,6 +1093,7 @@ def test_workspace_import_does_not_expose_cluster_capacity_failure_details():
         "code": "workspace_capacity_unavailable",
     }
     assert "internal Cluster allocator" not in response.data["detail"]
+    assert PlatformActionRequest.objects.get(action="workspace.imported").result == "failed"
 
 
 @pytest.mark.django_db

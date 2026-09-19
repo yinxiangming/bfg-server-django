@@ -829,8 +829,7 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             return Response({"detail": "workspace.name is required."}, status=status.HTTP_400_BAD_REQUEST)
         Workspace = apps.get_model("common", "Workspace")
         slug = source.get("slug") or None
-        if slug and Workspace.objects.filter(slug=slug).exists():
-            return Response({"detail": "A workspace with this slug already exists."}, status=status.HTTP_409_CONFLICT)
+        slug_conflict = bool(slug and Workspace.objects.filter(slug=slug).exists())
         User = apps.get_model("common", "User")
         owner_email = str(data.get("owner_email", "")).strip().lower()
         if not owner_email:
@@ -871,12 +870,50 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             return Response({"detail": "Custom domains must be unique."}, status=status.HTTP_400_BAD_REQUEST)
         WorkspaceDomain = apps.get_model("common", "WorkspaceDomain")
         conflicts = list(WorkspaceDomain.objects.filter(hostname__in=custom_domains).values_list("hostname", flat=True))
+
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="workspace.imported",
+                target_type="workspace",
+                target_id="new",
+                payload={
+                    "workspace": source,
+                    "owner_id": owner.id,
+                    "cluster_id": cluster.id if cluster else cluster_id or None,
+                    "custom_domains": custom_domains,
+                    "reason": reason,
+                },
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
+        if slug_conflict:
+            response_body = {"detail": "A workspace with this slug already exists."}
+            _complete_platform_action(
+                action_request,
+                result="failed",
+                response_status=status.HTTP_409_CONFLICT,
+                response_body=response_body,
+            )
+            return Response(response_body, status=status.HTTP_409_CONFLICT)
         if conflicts:
-            return Response({
+            response_body = {
                 "detail": "One or more custom domains are already assigned on this Platform.",
                 "code": "workspace_import_domain_conflict",
                 "domains": conflicts,
-            }, status=status.HTTP_409_CONFLICT)
+            }
+            _complete_platform_action(
+                action_request,
+                result="failed",
+                response_status=status.HTTP_409_CONFLICT,
+                response_body=response_body,
+            )
+            return Response(response_body, status=status.HTTP_409_CONFLICT)
 
         try:
             workspace = WorkspaceService(user=request.user).create_workspace(
@@ -886,13 +923,17 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
                 cluster=cluster,
             )
         except WorkspaceCapacityUnavailable:
-            return Response(
-                {
-                    "detail": WorkspaceCapacityUnavailable.default_message,
-                    "code": WorkspaceCapacityUnavailable.default_code,
-                },
-                status=status.HTTP_409_CONFLICT,
+            response_body = {
+                "detail": WorkspaceCapacityUnavailable.default_message,
+                "code": WorkspaceCapacityUnavailable.default_code,
+            }
+            _complete_platform_action(
+                action_request,
+                result="failed",
+                response_status=status.HTTP_409_CONFLICT,
+                response_body=response_body,
             )
+            return Response(response_body, status=status.HTTP_409_CONFLICT)
         WorkspaceDomain.objects.bulk_create([
             WorkspaceDomain(
                 workspace=workspace,
@@ -909,7 +950,14 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             target_id=workspace.id, reason=reason,
             after={"slug": workspace.slug, "cluster_id": workspace.platform_profile.cluster_id, "custom_domains": custom_domains},
         )
-        return Response(self._item(workspace), status=status.HTTP_201_CREATED)
+        response_body = self._item(workspace)
+        _complete_platform_action(
+            action_request,
+            result="succeeded",
+            response_status=status.HTTP_201_CREATED,
+            response_body=response_body,
+        )
+        return Response(response_body, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="reset-admin-password")
     def reset_admin_password(self, request, pk=None):

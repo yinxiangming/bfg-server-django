@@ -57,26 +57,79 @@ def _profile_for_update(workspace):
     return WorkspacePlatformProfile.objects.select_for_update().select_related("cluster").get(workspace=workspace)
 
 
-def _expire_reserved_for_target(target_cluster, now):
+def _expire_request(request):
+    """Expire one locked reservation and write its durable operation evidence."""
+    PlacementRequest = apps.get_model("platform", "WorkspacePlacementRequest")
+    PlatformAuditEvent = apps.get_model("platform", "PlatformAuditEvent")
+    profile = _profile_for_update(request.workspace)
+    # A late data-plane callback must not pass the request's original fence.
+    profile.placement_fence += 1
+    profile.save(update_fields=["placement_fence", "updated_at"])
+    request.status = PlacementRequest.STATUS_EXPIRED
+    request.save(update_fields=["status", "updated_at"])
+    _event(request, "reservation_expired", placement_fence=profile.placement_fence)
+    PlatformAuditEvent.objects.create(
+        action="workspace.placement_expired",
+        target_type="workspace",
+        target_id=str(request.workspace_id),
+        reason="Placement reservation TTL elapsed",
+        before={
+            "placement_request_id": str(request.id),
+            "status": PlacementRequest.STATUS_RESERVED,
+            "target_cluster_id": request.target_cluster_id,
+        },
+        after={"status": PlacementRequest.STATUS_EXPIRED, "placement_fence": profile.placement_fence},
+    )
+    return request
+
+
+def _expire_reserved_for_target(target_cluster, now, *, limit=None):
     """Release expired reservations while the target Cluster lock is held."""
     PlacementRequest = apps.get_model("platform", "WorkspacePlacementRequest")
-    rows = list(
-        PlacementRequest.objects.select_for_update()
-        .filter(
-            target_cluster=target_cluster,
+    queryset = PlacementRequest.objects.select_for_update().filter(
+        target_cluster=target_cluster,
+        status=PlacementRequest.STATUS_RESERVED,
+        reservation_expires_at__lte=now,
+    ).select_related("workspace").order_by("reservation_expires_at", "id")
+    rows = list(queryset[:limit] if limit is not None else queryset)
+    return [_expire_request(request) for request in rows]
+
+
+def expire_due_reservations(*, limit=100):
+    """Expire a bounded number of due reservations with the same locking as create.
+
+    This is intended for a scheduler or explicit management command. It never
+    changes a workspace's Cluster assignment; it only releases capacity and
+    fences out a delayed data-plane worker.
+    """
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("limit must be a positive whole number") from exc
+    if not 1 <= limit <= 1000:
+        raise ValueError("limit must be between 1 and 1000")
+
+    Cluster = apps.get_model("platform", "Cluster")
+    PlacementRequest = apps.get_model("platform", "WorkspacePlacementRequest")
+    now = timezone.now()
+    target_ids = list(
+        PlacementRequest.objects.filter(
             status=PlacementRequest.STATUS_RESERVED,
             reservation_expires_at__lte=now,
-        )
-        .select_related("workspace")
+        ).order_by("target_cluster_id").values_list("target_cluster_id", flat=True).distinct()
     )
-    for request in rows:
-        profile = _profile_for_update(request.workspace)
-        # A late data-plane callback must not pass the request's original fence.
-        profile.placement_fence += 1
-        profile.save(update_fields=["placement_fence", "updated_at"])
-        request.status = PlacementRequest.STATUS_EXPIRED
-        request.save(update_fields=["status", "updated_at"])
-        _event(request, "reservation_expired", placement_fence=profile.placement_fence)
+    expired = []
+    for target_id in target_ids:
+        if len(expired) >= limit:
+            break
+        with transaction.atomic():
+            target = Cluster.objects.select_for_update().filter(pk=target_id).first()
+            if target is None:
+                continue
+            # The query has an explicit cap so a maintenance invocation cannot
+            # turn into an unbounded write during an incident.
+            expired.extend(_expire_reserved_for_target(target, now, limit=limit - len(expired)))
+    return expired
 
 
 def create_reservation(*, workspace, target_cluster_id, expected_profile_fence, initiated_by):

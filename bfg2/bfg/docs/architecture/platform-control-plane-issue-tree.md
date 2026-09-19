@@ -103,12 +103,14 @@ rather than claim that the workspace moved.
 
 ### Verification record (2026-09-20)
 
-- Current local BFG suite: `2061 passed, 22 subtests passed`.
+- Current local BFG suite: `2062 passed, 22 subtests passed`.
 - Placement reservations are strict-superuser-only, reserve capacity without
   changing ``WorkspacePlatformProfile.cluster``, have idempotent rollback and
-  persist ordered progress events. Requests to move an already assigned
+  persist ordered progress events. An explicit preview-by-default maintenance
+  command releases expired reservations only with ``--apply`` and writes a
+  fencing event plus audit evidence. Requests to move an already assigned
   workspace return a clear data-plane-adapter refusal instead of changing
-  routing metadata. Focused control regressions: `23 passed`; client typecheck
+  routing metadata. Focused control regressions: `24 passed`; client typecheck
   and Webpack production build also pass.
 - UAT server-layer smoke used existing persisted accounts without changing data:
   the Django superuser received 200 from the workspace, Cluster, and audit

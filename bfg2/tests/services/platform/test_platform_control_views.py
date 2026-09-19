@@ -19,6 +19,7 @@ from bfg.platform.services.cluster_health import (
     ClusterHealthProbeResult,
     cluster_health_url,
 )
+from bfg.platform.services.placement_queue import expire_due_reservations
 
 
 pytestmark = pytest.mark.django_db
@@ -490,6 +491,43 @@ def test_live_migration_request_is_refused_without_data_plane_adapter():
     assert not WorkspacePlacementRequest.objects.exists()
     assert PlatformAuditEvent.objects.filter(
         action="workspace.placement_reserved", result="failed", target_id=str(workspace.id),
+    ).exists()
+
+
+def test_expired_placement_reservation_is_released_fenced_and_audited():
+    workspace = Workspace.objects.create(name="Expired Slot", slug="expired-slot", is_active=True)
+    target = _placement_cluster("target")
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+    client = client_for(superuser)
+    created = client.post(
+        f"{CONTROL}placement-requests/",
+        {
+            "confirm": True,
+            "reason": "Reserve a slot for placement verification",
+            "workspace_id": workspace.id,
+            "target_cluster_id": target.id,
+            "expected_placement_fence": 0,
+        },
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="placement-expiry-0001",
+    )
+    assert created.status_code == 202
+    placement = WorkspacePlacementRequest.objects.get()
+    placement.reservation_expires_at = timezone.now() - timedelta(seconds=1)
+    placement.save(update_fields=["reservation_expires_at"])
+
+    expired = expire_due_reservations(limit=10)
+
+    assert [item.pk for item in expired] == [placement.pk]
+    placement.refresh_from_db()
+    profile = WorkspacePlatformProfile.objects.get(workspace=workspace)
+    assert placement.status == "expired"
+    assert profile.placement_fence == 2
+    assert list(placement.events.values_list("event_type", flat=True)) == [
+        "requested", "capacity_reserved", "reservation_expired",
+    ]
+    assert PlatformAuditEvent.objects.filter(
+        action="workspace.placement_expired", target_id=str(workspace.id), result="succeeded",
     ).exists()
 
 

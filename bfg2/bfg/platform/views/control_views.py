@@ -25,6 +25,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from bfg.common.models import normalize_hostname
+from bfg.common.extensions import registry
 from bfg.common.services.user_service import UserService
 from bfg.common.services.workspace_service import WorkspaceService
 from bfg.platform.permissions import IsPlatformSuperuser
@@ -40,7 +41,7 @@ from bfg.platform.services.control_actions import (
 )
 from bfg.platform.services.control_audit import record_control_audit, redact_control_value
 from bfg.platform.services.provision_service import resume_workspace, suspend_workspace
-from bfg.platform.services import console_admin, exchange_rates, pricing
+from bfg.platform.services import console_admin, entitlements, exchange_rates, pricing, usage
 from bfg.platform.services import platform_variables as variables
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
 from bfg.platform.views.console_admin_views import _body, _day, _limit, _moment
@@ -290,6 +291,144 @@ class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
                 after={"is_active": workspace.is_active, "scheduled_deletion_at": None},
             )
         return Response(payload)
+
+    @action(detail=True, methods=["get", "patch"], url_path="usage-cap")
+    def usage_cap(self, request, pk=None):
+        """Read or change one Workspace's enforced monthly metering allowance."""
+        workspace = _workspace_or_404(pk)
+        if request.method == "GET":
+            return Response(console_admin.usage_cap_entry(workspace))
+        require_confirmation(request)
+        data = _body(request)
+        if "cap_points" not in data:
+            raise ValidationError({"code": usage.InvalidUsageCap.default_code, "detail": "Send cap_points or null to follow the default."})
+        reason = require_reason(request)
+        action_request, replay = claim_action(
+            request, action="workspace.usage_cap_updated", target_type="workspace", target_id=workspace.id,
+            payload={"cap_points": data["cap_points"], "reason": reason},
+        )
+        if replay is not None:
+            return replay
+        before = console_admin.usage_cap_entry(workspace)
+        try:
+            body = console_admin.set_usage_cap(workspace, data["cap_points"])
+        except usage.InvalidUsageCap as exc:
+            body = {"code": exc.code, "detail": exc.message}
+            complete_action(action_request, result="failed", response_status=status.HTTP_400_BAD_REQUEST, response_body=body)
+            return Response(body, status=status.HTTP_400_BAD_REQUEST)
+        complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
+        record_control_audit(
+            request=request, action="workspace.usage_cap_updated", target_type="workspace",
+            target_id=workspace.id, reason=reason, before=before, after=body,
+        )
+        return Response(body)
+
+    @staticmethod
+    def _entitlement_item(workspace, row):
+        return {
+            "id": row.pk,
+            "key": row.key,
+            "status": row.status,
+            "source": row.source,
+            "starts_at": row.starts_at,
+            "current_period_end": row.current_period_end,
+            "reason": row.reason,
+            "is_effective": entitlements.is_entitled(workspace, row.key),
+        }
+
+    @staticmethod
+    def _grant_key(data):
+        key = data.get("key")
+        if not isinstance(key, str):
+            raise ValidationError({"code": "invalid_grant", "detail": "Send an extension key, or an empty key for the base plan."})
+        key = key.strip()
+        if not console_admin.extension_key_exists(key):
+            raise ValidationError({"code": console_admin.UNKNOWN_EXTENSION, "detail": f"No extension named {key}."})
+        return key
+
+    @staticmethod
+    def _grant_months(data):
+        months, never = data.get("months"), data.get("never_expires")
+        if never not in (None, True, False) or bool(never) == (months is not None):
+            raise ValidationError({"code": "invalid_grant", "detail": "Choose a finite term or never expires."})
+        if never:
+            return None
+        if isinstance(months, bool) or not isinstance(months, int) or not 1 <= months <= 120:
+            raise ValidationError({"code": "invalid_grant", "detail": "months must be a whole number from 1 to 120."})
+        return months
+
+    @action(detail=True, methods=["get"], url_path="grants/available-features")
+    def available_grant_features(self, request, pk=None):
+        _workspace_or_404(pk)
+        return Response({"features": sorted(
+            manifest.key for manifest in registry.all_manifests()
+            if manifest.is_activatable and manifest.key
+        )})
+
+    @action(detail=True, methods=["get", "post"], url_path="grants")
+    def grants(self, request, pk=None):
+        workspace = _workspace_or_404(pk)
+        WorkspaceEntitlement = apps.get_model("platform", "WorkspaceEntitlement")
+        if request.method == "GET":
+            rows = WorkspaceEntitlement.all_objects.filter(workspace=workspace).order_by("-created_at", "-id")
+            return Response([self._entitlement_item(workspace, row) for row in rows])
+        require_confirmation(request)
+        data = _body(request)
+        key = self._grant_key(data)
+        months = self._grant_months(data)
+        reason = require_reason(request)
+        action_request, replay = claim_action(
+            request, action="workspace.entitlement_granted", target_type="workspace", target_id=workspace.id,
+            payload={"key": key, "months": months, "reason": reason},
+        )
+        if replay is not None:
+            return replay
+        try:
+            granted = console_admin.grant_entitlement(workspace, key, months=months, reason=reason, user=request.user)
+        except console_admin.AlreadyEntitled as exc:
+            body = {"code": exc.code, "detail": exc.message, **exc.details}
+            complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+            return Response(body, status=status.HTTP_409_CONFLICT)
+        entitlement = granted["entitlement"]
+        body = {"workspace": workspace.id, "entitlement": {**entitlement, "is_effective": True}}
+        complete_action(action_request, result="succeeded", response_status=status.HTTP_201_CREATED, response_body=body)
+        record_control_audit(
+            request=request, action="workspace.entitlement_granted", target_type="workspace",
+            target_id=workspace.id, reason=reason, after=body,
+        )
+        return Response(body, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path=r"grants/(?P<grant_id>[0-9]+)/revoke")
+    def revoke_grant(self, request, pk=None, grant_id=None):
+        """End a granted entitlement while preserving both it and its audit trail."""
+        require_confirmation(request)
+        reason = require_reason(request)
+        workspace = _workspace_or_404(pk)
+        WorkspaceEntitlement = apps.get_model("platform", "WorkspaceEntitlement")
+        try:
+            entitlement = WorkspaceEntitlement.all_objects.get(pk=grant_id, workspace=workspace)
+        except WorkspaceEntitlement.DoesNotExist as exc:
+            raise Http404 from exc
+        action_request, replay = claim_action(
+            request, action="workspace.entitlement_revoked", target_type="workspace_entitlement", target_id=entitlement.id,
+            payload={"workspace": workspace.id, "reason": reason},
+        )
+        if replay is not None:
+            return replay
+        with transaction.atomic():
+            entitlement = WorkspaceEntitlement.all_objects.select_for_update().get(pk=entitlement.pk)
+            before = self._entitlement_item(workspace, entitlement)
+            if entitlement.status != WorkspaceEntitlement.STATUS_ENDED:
+                entitlement.status = WorkspaceEntitlement.STATUS_ENDED
+                entitlement.ended_reason = reason
+                entitlement.save(update_fields=["status", "ended_reason", "updated_at"])
+            body = {"workspace": workspace.id, "entitlement": self._entitlement_item(workspace, entitlement)}
+            complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
+            record_control_audit(
+                request=request, action="workspace.entitlement_revoked", target_type="workspace",
+                target_id=workspace.id, reason=reason, before={"entitlement": before}, after=body,
+            )
+        return Response(body)
 
     @action(detail=True, methods=["post"])
     def export(self, request, pk=None):

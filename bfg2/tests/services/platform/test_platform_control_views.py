@@ -246,3 +246,40 @@ def test_control_meter_price_and_exchange_rate_writes_are_audited():
     )
     assert rate.status_code == 201
     assert PlatformAuditEvent.objects.filter(action="configuration.exchange_rate_set").exists()
+
+
+def test_control_usage_cap_and_base_plan_grant_are_audited_and_recoverable():
+    workspace = Workspace.objects.create(name="Controlled Shop", slug="controlled-shop", is_active=True)
+    WorkspacePlatformProfile.objects.create(workspace=workspace)
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+    client = client_for(superuser)
+
+    cap = client.patch(
+        f"{CONTROL}workspaces/{workspace.id}/usage-cap/",
+        {"confirm": True, "cap_points": "25", "reason": "Raise allowance for seasonal demand"},
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="cap-key-0001",
+    )
+    assert cap.status_code == 200
+    assert cap.data["cap_points"] == "25.00"
+    assert PlatformAuditEvent.objects.filter(action="workspace.usage_cap_updated").exists()
+
+    granted = client.post(
+        f"{CONTROL}workspaces/{workspace.id}/grants/",
+        {"confirm": True, "key": "", "months": 1, "reason": "Include the base plan during migration"},
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="grant-key-0001",
+    )
+    assert granted.status_code == 201
+    entitlement_id = granted.data["entitlement"]["id"]
+    assert client.get(f"{CONTROL}workspaces/{workspace.id}/grants/").status_code == 200
+
+    revoked = client.post(
+        f"{CONTROL}workspaces/{workspace.id}/grants/{entitlement_id}/revoke/",
+        {"confirm": True, "reason": "Migration plan was cancelled"},
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="revoke-key-0001",
+    )
+    assert revoked.status_code == 200
+    assert revoked.data["entitlement"]["status"] == "ended"
+    assert PlatformAuditEvent.objects.filter(action="workspace.entitlement_revoked").exists()

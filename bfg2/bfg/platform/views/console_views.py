@@ -996,6 +996,12 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             )
         return Response(item(result))
 
+    @action(detail=True, methods=["get"], url_path="grants/available-features")
+    def available_grant_features(self, request, pk=None):
+        """List feature keys with a verified runtime entitlement gate."""
+        self._workspace(pk)
+        return Response({"features": sorted(RUNTIME_ENTITLEMENT_KEYS)})
+
     @action(detail=True, methods=["get", "post"], url_path="grants")
     def grants(self, request, pk=None):
         """List or grant a temporary/perpetual runtime feature entitlement."""

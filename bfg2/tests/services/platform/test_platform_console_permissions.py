@@ -535,6 +535,12 @@ def test_superuser_can_set_workspace_usage_cap_and_grant_once():
     client = APIClient()
     client.force_authenticate(user=superuser)
 
+    available_features = client.get(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/grants/available-features/"
+    )
+    assert available_features.status_code == 200
+    assert available_features.data == {"features": ["batch_management"]}
+
     inherited = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/")
     assert inherited.status_code == 200
     assert inherited.data["source"] == "platform"

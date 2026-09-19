@@ -16,6 +16,9 @@ from bfg.platform.views.switch_workspace_view import switch_workspace
 from bfg.platform.views.console_views import (
     PlatformConsoleAuditEventViewSet,
     PlatformConsoleClusterViewSet,
+    PlatformConsoleExchangeRateViewSet,
+    PlatformConsoleMeterPriceViewSet,
+    PlatformConsoleVariableViewSet,
     PlatformConsoleWorkspaceViewSet,
 )
 
@@ -29,6 +32,9 @@ router.register(r'webhooks',   WebhookViewSet,   basename='platform-webhook')
 router.register(r'console/workspaces', PlatformConsoleWorkspaceViewSet, basename='platform-console-workspace')
 router.register(r'console/clusters', PlatformConsoleClusterViewSet, basename='platform-console-cluster')
 router.register(r'console/audit-events', PlatformConsoleAuditEventViewSet, basename='platform-console-audit-event')
+router.register(r'console/variables', PlatformConsoleVariableViewSet, basename='platform-console-variable')
+router.register(r'console/meter-prices', PlatformConsoleMeterPriceViewSet, basename='platform-console-meter-price')
+router.register(r'console/exchange-rates', PlatformConsoleExchangeRateViewSet, basename='platform-console-exchange-rate')
 
 urlpatterns = [
     path('', include(router.urls)),

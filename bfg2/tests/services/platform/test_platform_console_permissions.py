@@ -4,6 +4,7 @@ from unittest.mock import patch
 from rest_framework.test import APIClient
 
 from bfg.common.models import StaffMember, StaffRole, Workspace, WorkspaceDomain
+from bfg.finance.models import Currency, ExchangeRate
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
 from bfg.common.services.workspace_service import WorkspaceService
 from bfg.platform.models import Cluster, PlatformAuditEvent
@@ -20,6 +21,9 @@ User = get_user_model()
     "/api/v1/platform/console/workspaces/",
     "/api/v1/platform/console/clusters/",
     "/api/v1/platform/console/audit-events/",
+    "/api/v1/platform/console/variables/",
+    "/api/v1/platform/console/meter-prices/",
+    "/api/v1/platform/console/exchange-rates/",
 ])
 def test_platform_console_refuses_authenticated_non_superusers(path):
     tenant_admin = User.objects.create_user(
@@ -38,6 +42,9 @@ def test_platform_console_refuses_authenticated_non_superusers(path):
     "/api/v1/platform/console/workspaces/",
     "/api/v1/platform/console/clusters/",
     "/api/v1/platform/console/audit-events/",
+    "/api/v1/platform/console/variables/",
+    "/api/v1/platform/console/meter-prices/",
+    "/api/v1/platform/console/exchange-rates/",
 ])
 def test_platform_console_allows_django_superusers(path):
     superuser = User.objects.create_superuser(
@@ -134,8 +141,125 @@ def test_workspace_membership_response_exposes_only_superuser_platform_access():
     assert superuser_response.data["platform_capabilities"] == {
         "cluster_management": True,
         "audit_log": True,
-        "configuration": False,
+        "configuration": True,
     }
+
+
+@pytest.mark.django_db
+def test_superuser_can_change_typed_platform_variable_with_an_audit_reason():
+    superuser = User.objects.create_superuser(
+        username="variables-root", password="secret", email="variables@example.test",
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    listed = client.get("/api/v1/platform/console/variables/")
+    assert listed.status_code == 200
+    assert {item["key"] for item in listed.data} == {"default_meter_margin", "default_usage_cap_points"}
+
+    changed = client.patch(
+        "/api/v1/platform/console/variables/default_meter_margin/",
+        {"value": "0.35", "reason": "Vendor margin changed"}, format="json",
+    )
+    assert changed.status_code == 200
+    assert changed.data["value"] == "0.35"
+    assert changed.data["overridden"] is True
+    assert changed.data["last_change"]["reason"] == "Vendor margin changed"
+    assert PlatformAuditEvent.objects.filter(
+        action="configuration.variable_updated", target_id="default_meter_margin",
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_meter_prices_are_append_only_and_use_the_platform_margin():
+    superuser = User.objects.create_superuser(
+        username="meter-root", password="secret", email="meter@example.test",
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    first = client.post("/api/v1/platform/console/meter-prices/", {
+        "meter": "ai.tokens", "vendor_cost": "10", "unit_size": "100", "margin": "0.25",
+    }, format="json")
+    assert first.status_code == 201
+    assert first.data["meter"] == "ai.tokens"
+    assert first.data["in_force"] == first.data["prices"][0]["id"]
+    assert first.data["prices"][0]["points_per_unit"] == "0.1250000000"
+
+    second = client.post("/api/v1/platform/console/meter-prices/", {
+        "meter": "ai.tokens", "vendor_cost": "12", "unit_size": "100",
+    }, format="json")
+    assert second.status_code == 201
+    assert len(second.data["prices"]) == 2
+    assert any(price["uses_default_margin"] for price in second.data["prices"])
+    assert PlatformAuditEvent.objects.filter(action="configuration.meter_price_added", target_id="ai.tokens").count() == 2
+
+
+@pytest.mark.django_db
+def test_superuser_can_set_and_correct_platform_exchange_rate():
+    superuser = User.objects.create_superuser(
+        username="rate-root", password="secret", email="rates@example.test",
+    )
+    Currency.objects.create(code="NZD", name="New Zealand Dollar", symbol="$", is_active=True)
+    Currency.objects.create(code="USD", name="US Dollar", symbol="US$", is_active=True)
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    created = client.post("/api/v1/platform/console/exchange-rates/", {
+        "from": "NZD", "to": "USD", "rate": "0.600000", "effective_date": "2026-09-19",
+    }, format="json")
+    assert created.status_code == 201
+    assert created.data["source"] == "manual"
+    assert created.data["entered_by"]["id"] == superuser.id
+
+    corrected = client.post("/api/v1/platform/console/exchange-rates/", {
+        "from": "NZD", "to": "USD", "rate": "0.610000", "effective_date": "2026-09-19",
+    }, format="json")
+    assert corrected.status_code == 200
+    assert ExchangeRate.objects.filter(from_currency__code="NZD", to_currency__code="USD").count() == 1
+    assert corrected.data["rate"] == "0.610000"
+    assert PlatformAuditEvent.objects.filter(action="configuration.exchange_rate_set").count() == 2
+
+
+@pytest.mark.django_db
+def test_superuser_can_set_workspace_usage_cap_and_grant_once():
+    superuser = User.objects.create_superuser(
+        username="cap-root", password="secret", email="cap@example.test",
+    )
+    workspace = Workspace.objects.create(name="Cap Workspace", slug="cap-workspace", is_active=True)
+    WorkspacePlatformProfile.objects.create(workspace=workspace, region="apac")
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    inherited = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/")
+    assert inherited.status_code == 200
+    assert inherited.data["source"] == "platform"
+
+    own = client.patch(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/", {"cap_points": "0"}, format="json",
+    )
+    assert own.status_code == 200
+    assert own.data["source"] == "workspace"
+    assert own.data["effective_cap_points"] == "0.0000"
+
+    restored = client.patch(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/", {"cap_points": None}, format="json",
+    )
+    assert restored.status_code == 200
+    assert restored.data["source"] == "platform"
+
+    grant = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
+        {"key": "", "months": 12, "reason": "Migration support"}, format="json",
+    )
+    assert grant.status_code == 201
+    assert grant.data["entitlement"]["key"] == ""
+    duplicate = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/grants/",
+        {"key": "", "months": 12, "reason": "Duplicate"}, format="json",
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.data["code"] == "already_entitled"
 
 
 @pytest.mark.django_db

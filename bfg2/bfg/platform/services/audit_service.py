@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Small, shared audit boundary for Platform control-plane writes."""
 import uuid
+from datetime import date, datetime
+from decimal import Decimal
 
 from django.apps import apps
 
@@ -35,6 +37,12 @@ def redact_platform_audit_value(value):
         }
     if isinstance(value, (list, tuple)):
         return [redact_platform_audit_value(item) for item in value]
+    # Audit snapshots are JSONField values. Convert native ORM types here instead
+    # of making every call site remember which values cannot be JSON encoded.
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return format(value, "f")
     return value
 
 

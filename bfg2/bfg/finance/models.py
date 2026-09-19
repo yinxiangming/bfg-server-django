@@ -40,6 +40,18 @@ class ExchangeRate(models.Model):
     rate = models.DecimalField(_("Rate"), max_digits=12, decimal_places=6)
     
     effective_date = models.DateField(_("Effective Date"), default=timezone.now)
+    source = models.CharField(
+        _("Source"), max_length=20,
+        choices=(("feed", _("Reference feed")), ("manual", _("Manual"))),
+        default="feed",
+    )
+    entered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="entered_exchange_rates",
+    )
     
     class Meta:
         verbose_name = _("Exchange Rate")

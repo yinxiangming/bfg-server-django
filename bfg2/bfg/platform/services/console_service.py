@@ -47,7 +47,9 @@ class ConsoleViewer:
         if not getattr(user, "is_authenticated", False):
             return cls(is_platform_admin=False, owned_ids=frozenset())
         return cls(
-            is_platform_admin=workspace_service.is_platform_admin(user),
+            # Global console visibility is a deployment control-plane privilege.
+            # Non-superuser owners still see the workspaces they own below.
+            is_platform_admin=workspace_service.is_platform_superuser(user),
             owned_ids=frozenset(owned_workspace_ids(user)),
         )
 

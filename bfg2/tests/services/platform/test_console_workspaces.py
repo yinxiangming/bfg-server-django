@@ -164,7 +164,9 @@ def summary(user):
 
 @pytest.fixture
 def operator(platform_workspace):
-    return join(platform_workspace, _user('operator'), 'admin')
+    return User.objects.create_superuser(
+        username='operator', email='operator@example.com', password='x',
+    )
 
 
 @pytest.fixture
@@ -307,7 +309,9 @@ def test_the_list_shows_every_workspace_whoever_its_staff_are(operator, shop):
         'staff_count': 2,
         'active_extensions': ['review_insights', 'reviews'],
     }
-    assert (by_slug['platform']['is_platform'], by_slug['platform']['staff_count']) == (True, 1)
+    # A Django superuser does not need a tenant StaffMember row to operate the
+    # control plane, so it is intentionally not counted as platform workspace staff.
+    assert (by_slug['platform']['is_platform'], by_slug['platform']['staff_count']) == (True, 0)
     assert (by_slug['closed']['is_active'], by_slug['closed']['owner'], by_slug['closed']['domains']) == (
         False, None, [],
     )

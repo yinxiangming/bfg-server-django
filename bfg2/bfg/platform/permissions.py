@@ -49,6 +49,20 @@ class IsPlatformAdmin(BasePermission):
         return is_platform_admin(request.user)
 
 
+class IsPlatformSuperuser(BasePermission):
+    """Allow deployment control-plane access only to Django superusers."""
+
+    message = {
+        "detail": "Only a Django superuser can use the Platform control plane.",
+        "code": "platform_superuser_required",
+    }
+
+    def has_permission(self, request, view):
+        from bfg.platform.services.workspace_service import is_platform_superuser
+
+        return is_platform_superuser(request.user)
+
+
 class IsPlatformAPIKey(BasePermission):
     """
     Allow access via PLATFORM_API_KEY header.

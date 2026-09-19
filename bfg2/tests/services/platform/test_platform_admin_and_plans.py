@@ -11,7 +11,7 @@ from django.contrib.auth.models import AnonymousUser
 from rest_framework.test import APIClient
 
 from bfg.common.models import StaffMember, StaffRole, Workspace
-from bfg.platform.permissions import IsPlatformAdmin
+from bfg.platform.permissions import IsPlatformAdmin, IsPlatformSuperuser
 from bfg.shop.models import SubscriptionPlan
 
 User = get_user_model()
@@ -37,6 +37,10 @@ def _member(workspace, username, role_code, is_active=True):
 
 def _is_platform_admin(user):
     return IsPlatformAdmin().has_permission(SimpleNamespace(user=user), view=None)
+
+
+def _is_platform_superuser(user):
+    return IsPlatformSuperuser().has_permission(SimpleNamespace(user=user), view=None)
 
 
 def _plan_names(response):
@@ -101,18 +105,21 @@ def test_standalone_platform_admin_is_superuser_or_staff(db, settings):
     assert not _is_platform_admin(plain)
 
 
-def test_workspaces_me_reports_the_same_platform_admin_flag(db, settings):
+def test_workspaces_me_reports_only_the_django_superuser_for_control_plane_access(db, settings):
     _embedded(settings)
     platform = _workspace("platform")
     admin = _member(platform, "platform-admin", "admin")
     staff = _member(platform, "platform-staff", "staff")
+    superuser = User.objects.create_superuser(username="root", password="secret", email="root@example.test")
 
     client = APIClient()
-    for user, expected in ((admin, True), (staff, False)):
+    for user, expected in ((admin, False), (staff, False), (superuser, True)):
         client.force_authenticate(user=user)
         response = client.get("/api/v1/platform/workspaces/me/")
         assert response.status_code == 200
         assert response.data["is_platform_admin"] is expected
+        assert response.data["is_platform_superuser"] is expected
+        assert _is_platform_superuser(user) is expected
 
 
 def test_embedded_plans_list_only_the_platform_workspace_plans(db, settings):

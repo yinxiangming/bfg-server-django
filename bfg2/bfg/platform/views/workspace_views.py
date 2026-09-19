@@ -110,7 +110,9 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             'platform_capabilities': {
                 'cluster_management': is_platform_superuser,
                 'audit_log': is_platform_superuser,
-                'configuration': is_platform_superuser,
+                # The storage endpoints are intentionally not advertised until the
+                # metering and entitlement consumers enforce their policies.
+                'configuration': False,
             },
         })
 

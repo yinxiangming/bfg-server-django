@@ -7,7 +7,7 @@ from bfg.common.models import StaffMember, StaffRole, Workspace, WorkspaceDomain
 from bfg.finance.models import Currency, ExchangeRate
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
 from bfg.common.services.workspace_service import WorkspaceService
-from bfg.platform.models import Cluster, PlatformAuditEvent
+from bfg.platform.models import Cluster, PlatformAuditEvent, PlatformMeterPrice
 from bfg.platform.models import PlatformMembership, WorkspacePlatformProfile
 from bfg.platform.serializers.workspace import WorkspaceCreateSerializer
 from bfg.platform.services.workspace_service import is_platform_admin
@@ -141,7 +141,7 @@ def test_workspace_membership_response_exposes_only_superuser_platform_access():
     assert superuser_response.data["platform_capabilities"] == {
         "cluster_management": True,
         "audit_log": True,
-        "configuration": True,
+        "configuration": False,
     }
 
 
@@ -198,6 +198,62 @@ def test_meter_prices_are_append_only_and_use_the_platform_margin():
     assert len(second.data["prices"]) == 2
     assert any(price["uses_default_margin"] for price in second.data["prices"])
     assert PlatformAuditEvent.objects.filter(action="configuration.meter_price_added", target_id="ai.tokens").count() == 2
+
+
+@pytest.mark.django_db
+def test_meter_price_is_rolled_back_when_its_audit_write_fails():
+    superuser = User.objects.create_superuser(
+        username="meter-audit-root", password="secret", email="meter-audit@example.test",
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    with patch("bfg.platform.views.console_views.record_platform_audit", side_effect=RuntimeError("audit unavailable")):
+        with pytest.raises(RuntimeError, match="audit unavailable"):
+            client.post("/api/v1/platform/console/meter-prices/", {
+                "meter": "ai.tokens", "vendor_cost": "10", "unit_size": "100", "confirm": True,
+            }, format="json")
+
+    assert PlatformMeterPrice.objects.count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path,payload", [
+    ("/api/v1/platform/console/meter-prices/", {
+        "meter": "ai.tokens", "vendor_cost": "1e100", "unit_size": "100", "confirm": True,
+    }),
+    ("/api/v1/platform/console/meter-prices/", {
+        "meter": "ai.tokens", "vendor_cost": "1", "unit_size": True, "confirm": True,
+    }),
+    ("/api/v1/platform/console/exchange-rates/", {
+        "from": "NZD", "to": "USD", "rate": "1e100", "confirm": True,
+    }),
+])
+def test_platform_configuration_rejects_values_outside_model_precision(path, payload):
+    superuser = User.objects.create_superuser(
+        username=f"invalid-{len(payload)}-{path.split('/')[-2]}", password="secret", email=f"invalid-{len(payload)}@example.test",
+    )
+    Currency.objects.get_or_create(code="NZD", defaults={"name": "New Zealand Dollar", "symbol": "$", "is_active": True})
+    Currency.objects.get_or_create(code="USD", defaults={"name": "US Dollar", "symbol": "US$", "is_active": True})
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    response = client.post(path, payload, format="json")
+
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_platform_console_missing_workspace_returns_404_instead_of_server_error():
+    superuser = User.objects.create_superuser(
+        username="missing-workspace-root", password="secret", email="missing-workspace@example.test",
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    response = client.get("/api/v1/platform/console/workspaces/999999/usage-cap/")
+
+    assert response.status_code == 404
 
 
 @pytest.mark.django_db

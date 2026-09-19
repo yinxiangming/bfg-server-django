@@ -10,9 +10,9 @@ from decimal import Decimal, InvalidOperation
 
 from django.apps import apps
 from django.core import signing
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.utils import dateparse, timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -75,15 +75,30 @@ def _cluster_snapshot(cluster):
 
 def _decimal(value, *, minimum=None, maximum=None, places=None):
     """Parse a finite decimal without passing through floating-point JSON."""
+    if isinstance(value, bool):
+        raise ValidationError({"value": "Use a decimal number."})
     try:
         result = Decimal(str(value))
+        if not result.is_finite() or (minimum is not None and result < minimum) or (
+            maximum is not None and result > maximum
+        ):
+            raise ValidationError({"value": "Use a value in the permitted range."})
+        return result.quantize(Decimal(places)) if places is not None else result
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise ValidationError({"value": "Use a decimal number."}) from exc
-    if not result.is_finite() or (minimum is not None and result < minimum) or (
-        maximum is not None and result > maximum
-    ):
-        raise ValidationError({"value": "Use a value in the permitted range."})
-    return result.quantize(Decimal(places)) if places is not None else result
+
+
+def _positive_integer(value, *, maximum, field):
+    """Accept JSON whole numbers only, with a database-safe upper bound."""
+    if isinstance(value, bool):
+        raise ValidationError({field: "Use a whole number."})
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError) as exc:
+        raise ValidationError({field: "Use a whole number."}) from exc
+    if str(parsed) != str(value).strip() or not 1 <= parsed <= maximum:
+        raise ValidationError({field: f"Use a whole number between 1 and {maximum}."})
+    return parsed
 
 
 def _decimal_text(value):
@@ -146,24 +161,30 @@ class PlatformConsoleVariableViewSet(viewsets.ViewSet):
 
         Override = apps.get_model("platform", "PlatformVariableOverride")
         Change = apps.get_model("platform", "PlatformVariableChange")
-        with transaction.atomic():
-            current = Override.objects.select_for_update().filter(key=key).first()
-            old_value = current.value if current else PLATFORM_VARIABLES[key]["default"]
-            if old_value != value:
-                if current:
-                    current.value = value
-                    current.reason = reason
-                    current.updated_by = request.user
-                    current.save(update_fields=["value", "reason", "updated_by", "updated_at"])
-                else:
-                    Override.objects.create(key=key, value=value, reason=reason, updated_by=request.user)
-                Change.objects.create(
-                    key=key, old_value=old_value, new_value=value, reason=reason, changed_by=request.user,
-                )
-                record_platform_audit(
-                    request=request, action="configuration.variable_updated", target_type="platform_variable",
-                    target_id=key, reason=reason, before={"value": old_value}, after={"value": value},
-                )
+        try:
+            with transaction.atomic():
+                current = Override.objects.select_for_update().filter(key=key).first()
+                old_value = current.value if current else PLATFORM_VARIABLES[key]["default"]
+                if old_value != value:
+                    if current:
+                        current.value = value
+                        current.reason = reason
+                        current.updated_by = request.user
+                        current.save(update_fields=["value", "reason", "updated_by", "updated_at"])
+                    else:
+                        Override.objects.create(key=key, value=value, reason=reason, updated_by=request.user)
+                    Change.objects.create(
+                        key=key, old_value=old_value, new_value=value, reason=reason, changed_by=request.user,
+                    )
+                    record_platform_audit(
+                        request=request, action="configuration.variable_updated", target_type="platform_variable",
+                        target_id=key, reason=reason, before={"value": old_value}, after={"value": value},
+                    )
+        except IntegrityError:
+            return Response(
+                {"detail": "This variable was changed concurrently. Reload and try again.", "code": "configuration_conflict"},
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(platform_variable_item(key))
 
 
@@ -225,10 +246,11 @@ class PlatformConsoleMeterPriceViewSet(viewsets.ViewSet):
         if not meter or len(meter) > 100:
             return Response({"detail": "Use a meter key of 1 to 100 characters.", "code": "invalid_meter_price"}, status=400)
         try:
-            cost = _decimal(request.data.get("vendor_cost"), minimum=Decimal("0.00000001"), places="0.00000001")
-            unit_size = int(request.data.get("unit_size"))
-            if unit_size < 1:
-                raise ValueError
+            cost = _decimal(
+                request.data.get("vendor_cost"), minimum=Decimal("0.00000001"),
+                maximum=Decimal("999999999999.99999999"), places="0.00000001",
+            )
+            unit_size = _positive_integer(request.data.get("unit_size"), maximum=2147483647, field="unit_size")
             raw_margin = request.data.get("margin")
             margin = None if raw_margin in (None, "") else _decimal(
                 raw_margin, minimum=Decimal("0"), maximum=Decimal("1"), places="0.000001"
@@ -238,17 +260,18 @@ class PlatformConsoleMeterPriceViewSet(viewsets.ViewSet):
             return Response({"detail": "Check the cost, unit size, margin, and effective date.", "code": "invalid_meter_price"}, status=400)
         MeterPrice = apps.get_model("platform", "PlatformMeterPrice")
         reason = _automatic_reason(request, f"Added a price for meter {meter}.")
-        price = MeterPrice.objects.create(
-            meter=meter, vendor_cost=cost, unit_size=unit_size, margin=margin,
-            effective_from=effective_from, created_by=request.user,
-        )
-        record_platform_audit(
-            request=request, action="configuration.meter_price_added", target_type="meter",
-            target_id=meter, reason=reason,
-            after={"price_id": price.id, "vendor_cost": _decimal_text(cost), "unit_size": unit_size,
-                   "margin": _decimal_text(margin) if margin is not None else None,
-                   "effective_from": effective_from.isoformat() if effective_from else None},
-        )
+        with transaction.atomic():
+            price = MeterPrice.objects.create(
+                meter=meter, vendor_cost=cost, unit_size=unit_size, margin=margin,
+                effective_from=effective_from, created_by=request.user,
+            )
+            record_platform_audit(
+                request=request, action="configuration.meter_price_added", target_type="meter",
+                target_id=meter, reason=reason,
+                after={"price_id": price.id, "vendor_cost": _decimal_text(cost), "unit_size": unit_size,
+                       "margin": _decimal_text(margin) if margin is not None else None,
+                       "effective_from": effective_from.isoformat() if effective_from else None},
+            )
         return Response(self._group_items(list(MeterPrice.objects.filter(meter=meter)))[0], status=status.HTTP_201_CREATED)
 
 
@@ -302,7 +325,10 @@ class PlatformConsoleExchangeRateViewSet(viewsets.ViewSet):
             to_code = self._currency_code(request.data.get("to"), "to")
             if from_code == to_code:
                 raise ValidationError({"to": "Choose a different currency."})
-            rate_value = _decimal(request.data.get("rate"), minimum=Decimal("0.000001"), places="0.000001")
+            rate_value = _decimal(
+                request.data.get("rate"), minimum=Decimal("0.000001"),
+                maximum=Decimal("999999.999999"), places="0.000001",
+            )
             effective_date = date.fromisoformat(str(request.data.get("effective_date") or timezone.localdate().isoformat()))
         except (ValidationError, TypeError, ValueError):
             return Response({"detail": "Check the currencies, rate, and effective date.", "code": "invalid_exchange_rate"}, status=400)
@@ -352,7 +378,10 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
 
     def _workspace(self, pk):
         Workspace = apps.get_model("common", "Workspace")
-        return Workspace.objects.select_related("platform_profile__cluster").get(pk=pk)
+        try:
+            return Workspace.objects.select_related("platform_profile__cluster").get(pk=pk)
+        except Workspace.DoesNotExist as exc:
+            raise Http404 from exc
 
     def _administrator_users(self, workspace):
         """Return eligible reset recipients using the ownership model for this mode."""
@@ -728,12 +757,16 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             desired = None
         else:
             try:
-                desired = _decimal(raw, minimum=Decimal("0"), places="0.0001")
+                desired = _decimal(
+                    raw, minimum=Decimal("0"), maximum=Decimal("9999999999999999.9999"), places="0.0001",
+                )
             except ValidationError:
                 return Response({"detail": "Use a non-negative cap in points.", "code": "invalid_usage_cap"}, status=400)
         reason = _automatic_reason(request, "Changed a workspace metered-usage cap.")
         with transaction.atomic():
-            current, _ = UsageCap.objects.select_for_update().get_or_create(workspace=workspace)
+            Workspace = apps.get_model("common", "Workspace")
+            locked_workspace = Workspace.objects.select_for_update().get(pk=workspace.pk)
+            current, _ = UsageCap.objects.select_for_update().get_or_create(workspace=locked_workspace)
             before = item(current)
             if desired is None:
                 current.delete()
@@ -764,10 +797,8 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         months = None
         if not never_expires:
             try:
-                months = int(raw_months)
-            except (TypeError, ValueError):
-                months = 0
-            if not 1 <= months <= 120:
+                months = _positive_integer(raw_months, maximum=120, field="months")
+            except ValidationError:
                 return Response({"detail": "Use between 1 and 120 months.", "code": "invalid_grant"}, status=400)
         try:
             reason = _change_reason(request)
@@ -776,8 +807,10 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         Entitlement = apps.get_model("platform", "WorkspaceEntitlement")
         now = timezone.now()
         with transaction.atomic():
+            Workspace = apps.get_model("common", "Workspace")
+            locked_workspace = Workspace.objects.select_for_update().get(pk=workspace.pk)
             active = Entitlement.objects.select_for_update().filter(
-                workspace=workspace, key=key, status=Entitlement.STATUS_ACTIVE,
+                workspace=locked_workspace, key=key, status=Entitlement.STATUS_ACTIVE,
             ).filter(Q(current_period_end__isnull=True) | Q(current_period_end__gt=now)).first()
             if active:
                 return Response({
@@ -786,11 +819,11 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
                     "entitlement": self._entitlement_item(active),
                 }, status=status.HTTP_409_CONFLICT)
             Entitlement.objects.filter(
-                workspace=workspace, key=key, status=Entitlement.STATUS_ACTIVE,
+                workspace=locked_workspace, key=key, status=Entitlement.STATUS_ACTIVE,
                 current_period_end__lte=now,
             ).update(status=Entitlement.STATUS_EXPIRED)
             entitlement = Entitlement.objects.create(
-                workspace=workspace, key=key, status=Entitlement.STATUS_ACTIVE,
+                workspace=locked_workspace, key=key, status=Entitlement.STATUS_ACTIVE,
                 current_period_end=None if never_expires else _add_months(now, months),
                 reason=reason, created_by=request.user,
             )

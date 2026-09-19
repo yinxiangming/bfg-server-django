@@ -258,6 +258,33 @@ def test_configuration_only_workspace_import_creates_pending_domains():
     assert audit.after["custom_domains"] == ["restored.example.test"]
 
 
+def test_workspace_import_refuses_a_cluster_that_is_not_accepting_new_workspaces():
+    owner = User.objects.create_user(username="import-owner", email="owner@example.test", password="secret")
+    Cluster.objects.create(
+        id="closed", name="Closed", region="apac", api_base_url="https://api.example.test",
+        db_host="db.example.test", redis_url="redis://redis.example.test", s3_bucket="closed",
+        is_accepting_new=False,
+    )
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+
+    response = client_for(superuser).post(
+        f"{CONTROL}workspaces/import-workspace/",
+        {
+            "confirm": True,
+            "reason": "Reject an import into a closed cluster",
+            "workspace": {"name": "Closed Cluster Shop", "slug": "closed-cluster-shop"},
+            "owner_email": owner.email,
+            "cluster": {"id": "closed"},
+        },
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="import-key-closed",
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "workspace_cluster_unavailable"
+    assert not Workspace.objects.filter(slug="closed-cluster-shop").exists()
+
+
 def test_cluster_health_target_is_allowlisted_and_never_uses_an_ip_literal(settings):
     settings.CLUSTER_HEALTH_ALLOWED_HOSTS = ["api.uat.example.test"]
     cluster = Cluster(id="uat", name="UAT", region="apac", api_base_url="https://api.uat.example.test")

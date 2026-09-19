@@ -27,7 +27,7 @@ from rest_framework.response import Response
 from bfg.common.models import normalize_hostname
 from bfg.common.extensions import registry
 from bfg.common.services.user_service import UserService
-from bfg.common.services.workspace_service import WorkspaceService
+from bfg.common.services.workspace_service import WorkspaceClusterUnavailable, WorkspaceService
 from bfg.platform.permissions import IsPlatformSuperuser
 from bfg.platform.services.cluster_health import (
     ClusterHealthProbeConfigurationError,
@@ -553,16 +553,21 @@ class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
                 body = {"detail": "One or more custom domains are already assigned on this Platform.", "code": "workspace_import_domain_conflict", "domains": conflicts}
                 complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
                 return Response(body, status=status.HTTP_409_CONFLICT)
-            workspace = WorkspaceService(user=request.user).create_workspace(
-                name=name,
-                slug=slug,
-                owner_user=owner,
-                email=source.get("email", ""),
-                phone=source.get("phone", ""),
-                settings=source.get("settings") or {},
-                region=cluster.region if cluster else str(cluster_data.get("region") or "us"),
-                cluster=cluster,
-            )
+            try:
+                workspace = WorkspaceService(user=request.user).create_workspace(
+                    name=name,
+                    slug=slug,
+                    owner_user=owner,
+                    email=source.get("email", ""),
+                    phone=source.get("phone", ""),
+                    settings=source.get("settings") or {},
+                    region=cluster.region if cluster else str(cluster_data.get("region") or "us"),
+                    cluster=cluster,
+                )
+            except WorkspaceClusterUnavailable as exc:
+                body = {"detail": "The selected Cluster is not accepting new workspaces.", "code": exc.code}
+                complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+                return Response(body, status=status.HTTP_409_CONFLICT)
             WorkspaceDomain.objects.bulk_create([
                 WorkspaceDomain(
                     workspace=workspace, hostname=hostname, kind=WorkspaceDomain.KIND_CUSTOM,

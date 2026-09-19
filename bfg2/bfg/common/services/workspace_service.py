@@ -10,6 +10,7 @@ from django.apps import apps
 from django.utils.text import slugify
 from bfg.core.services import BaseService
 from bfg.common.exceptions import WorkspaceAlreadyExists
+from bfg.core.exceptions import BFGException
 from bfg.common.models import (
     Workspace,
     StaffRole,
@@ -18,6 +19,13 @@ from bfg.common.models import (
     ensure_system_default_workspace_domain,
     upsert_custom_workspace_domain,
 )
+
+
+class WorkspaceClusterUnavailable(BFGException):
+    """The requested Cluster cannot safely receive another Workspace."""
+
+    default_message = "The requested Cluster is not available for a new workspace."
+    default_code = "workspace_cluster_unavailable"
 
 
 class WorkspaceService(BaseService):
@@ -77,7 +85,7 @@ class WorkspaceService(BaseService):
                 profile.region = region
                 update_fields.append('region')
             if cluster and profile.cluster_id != getattr(cluster, 'id', cluster):
-                profile.cluster = cluster
+                profile.cluster = self._available_cluster(cluster)
                 update_fields.append('cluster')
             if update_fields:
                 update_fields.append('updated_at')
@@ -110,6 +118,21 @@ class WorkspaceService(BaseService):
             self._assign_workspace_owner(workspace, owner_user)
         
         return workspace
+
+    @staticmethod
+    def _available_cluster(cluster):
+        """Lock and validate a placement target before assigning a new profile."""
+        Cluster = apps.get_model('platform', 'Cluster')
+        WorkspacePlatformProfile = apps.get_model('platform', 'WorkspacePlatformProfile')
+        cluster_id = getattr(cluster, 'id', cluster)
+        try:
+            locked = Cluster.objects.select_for_update().get(pk=cluster_id)
+        except Cluster.DoesNotExist as exc:
+            raise WorkspaceClusterUnavailable() from exc
+        assigned = WorkspacePlatformProfile.objects.filter(cluster=locked).count()
+        if not locked.is_active or not locked.is_accepting_new or assigned >= locked.max_workspaces:
+            raise WorkspaceClusterUnavailable()
+        return locked
     
 
     def _assign_workspace_owner(self, workspace: Workspace, user: User) -> None:

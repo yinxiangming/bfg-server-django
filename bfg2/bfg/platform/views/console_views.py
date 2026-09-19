@@ -161,6 +161,64 @@ def _meter_price_payload_hash(*, meter, vendor_cost, unit_size, margin, effectiv
     return sha256(encoded).hexdigest()
 
 
+def _action_payload_hash(payload):
+    """Hash a public-safe normalized action payload for retry-key binding."""
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _claim_platform_action(request, *, action, target_type, target_id, payload):
+    """Reserve one external Platform action or return its durable replay."""
+    key = _idempotency_key(request)
+    payload_hash = _action_payload_hash(payload)
+    ActionRequest = apps.get_model("platform", "PlatformActionRequest")
+    try:
+        with transaction.atomic():
+            action_request, created = ActionRequest.objects.get_or_create(
+                created_by=request.user,
+                idempotency_key=key,
+                defaults={
+                    "action": action,
+                    "target_type": target_type,
+                    "target_id": str(target_id),
+                    "payload_hash": payload_hash,
+                },
+            )
+    except IntegrityError:
+        action_request = ActionRequest.objects.get(created_by=request.user, idempotency_key=key)
+        created = False
+
+    if created:
+        return action_request, None
+    if (
+        action_request.action != action
+        or action_request.target_type != target_type
+        or action_request.target_id != str(target_id)
+        or action_request.payload_hash != payload_hash
+    ):
+        return None, Response(
+            {"detail": "This idempotency key was already used for a different Platform action.", "code": "idempotency_key_reused"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    if action_request.response_status is None:
+        return None, Response(
+            {"detail": "This idempotent Platform action did not complete. Check the audit log before retrying with a new key.", "code": "idempotency_request_incomplete"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    replay = Response(action_request.response_body, status=action_request.response_status)
+    replay["Idempotent-Replayed"] = "true"
+    return None, replay
+
+
+def _complete_platform_action(action_request, *, result, response_status, response_body):
+    """Persist a safe outcome before returning it to a retrying caller."""
+    action_request.result = result
+    action_request.response_status = response_status
+    action_request.response_body = redact_platform_audit_value(response_body)
+    action_request.completed_at = timezone.now()
+    action_request.save(update_fields=["result", "response_status", "response_body", "completed_at"])
+
+
 def _automatic_reason(request, fallback):
     """Keep a useful audit reason for compact forms without a reason field."""
     reason = str(request.data.get("reason") or request.headers.get("X-Platform-Change-Reason") or "").strip()
@@ -875,16 +933,55 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
         frontend_url = (getattr(settings, "FRONTEND_URL", "") or getattr(cluster, "frontend_base_url", "")).rstrip("/")
         if not frontend_url:
             return Response({"detail": "Password reset frontend is not configured."}, status=status.HTTP_409_CONFLICT)
-        if not UserService.request_password_reset(recipient.email, frontend_url):
-            return Response(
-                {"detail": "The password reset email could not be sent. Check email delivery settings and try again."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="workspace.password_reset_requested",
+                target_type="workspace",
+                target_id=workspace.id,
+                payload={"administrator_id": recipient.id, "frontend_url": frontend_url, "reason": reason},
             )
-        record_platform_audit(
-            request=request, action="workspace.password_reset_requested", target_type="workspace",
-            target_id=workspace.id, reason=reason, after={"administrator_id": recipient.id},
-        )
-        return Response({"detail": "If the account exists, a password reset email has been sent."})
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
+
+        delivered = False
+        try:
+            delivered = UserService.request_password_reset(recipient.email, frontend_url)
+        except Exception:
+            delivered = False
+        if not delivered:
+            response_body = {"detail": "The password reset email could not be sent. Check email delivery settings and try again."}
+            with transaction.atomic():
+                _complete_platform_action(
+                    action_request,
+                    result="failed",
+                    response_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    response_body=response_body,
+                )
+                record_platform_audit(
+                    request=request, action="workspace.password_reset_requested", target_type="workspace",
+                    target_id=workspace.id, reason=reason, after={"administrator_id": recipient.id}, result="failed",
+                )
+            return Response(response_body, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        response_body = {"detail": "If the account exists, a password reset email has been sent."}
+        with transaction.atomic():
+            _complete_platform_action(
+                action_request,
+                result="succeeded",
+                response_status=status.HTTP_200_OK,
+                response_body=response_body,
+            )
+            record_platform_audit(
+                request=request, action="workspace.password_reset_requested", target_type="workspace",
+                target_id=workspace.id, reason=reason, after={"administrator_id": recipient.id},
+            )
+        return Response(response_body)
 
     @action(detail=True, methods=["get"])
     def usage(self, request, pk=None):

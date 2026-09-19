@@ -3,6 +3,7 @@ from bfg.platform.models.cluster import Cluster
 from bfg.platform.models.configuration import (
     PlatformMeterPrice,
     PlatformMeterPriceRequest,
+    PlatformActionRequest,
     PlatformVariableChange,
     PlatformVariableOverride,
     WorkspaceEntitlement,
@@ -18,6 +19,7 @@ __all__ = [
     "Cluster",
     "PlatformMeterPrice",
     "PlatformMeterPriceRequest",
+    "PlatformActionRequest",
     "PlatformVariableChange",
     "PlatformVariableOverride",
     "PlatformAuditEvent",

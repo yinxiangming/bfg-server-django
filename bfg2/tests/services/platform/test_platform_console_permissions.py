@@ -15,6 +15,7 @@ from bfg.common.services.workspace_service import WorkspaceService
 from bfg.platform.models import (
     Cluster,
     PlatformAuditEvent,
+    PlatformActionRequest,
     PlatformMeterPrice,
     PlatformMeterPriceRequest,
     WorkspaceMeterUsage,
@@ -1106,9 +1107,20 @@ def test_password_reset_uses_standalone_platform_owner_and_only_that_owner(mock_
     reset = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/reset-admin-password/",
         {"confirm": True, "reason": "Support request"}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="password-reset-0001",
     )
     assert reset.status_code == 200
     mock_reset.assert_called_once_with(owner.email, "https://console.example.test")
+
+    replayed = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/reset-admin-password/",
+        {"confirm": True, "reason": "Support request"}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="password-reset-0001",
+    )
+    assert replayed.status_code == 200
+    assert replayed["Idempotent-Replayed"] == "true"
+    assert mock_reset.call_count == 1
+    assert PlatformActionRequest.objects.filter(action="workspace.password_reset_requested").count() == 1
 
     refused = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/reset-admin-password/",
@@ -1133,9 +1145,12 @@ def test_password_reset_reports_delivery_failure_without_audit_event(mock_reset,
     response = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/reset-admin-password/",
         {"confirm": True, "reason": "Support request"}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="password-reset-failed-001",
     )
     assert response.status_code == 503
-    assert not PlatformAuditEvent.objects.filter(action="workspace.password_reset_requested").exists()
+    event = PlatformAuditEvent.objects.get(action="workspace.password_reset_requested")
+    assert event.result == "failed"
+    assert PlatformActionRequest.objects.get(action="workspace.password_reset_requested").result == "failed"
 
 
 @pytest.mark.django_db

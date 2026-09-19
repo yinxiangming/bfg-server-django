@@ -103,6 +103,50 @@ class PlatformMeterPriceRequest(models.Model):
         ]
 
 
+class PlatformActionRequest(models.Model):
+    """One durable retry boundary for a Platform action with external effects.
+
+    The stored response is deliberately a small, public-safe payload. It lets a
+    network retry return the original result without repeating email delivery or
+    other side effects, while keeping credentials and exception details out of
+    the database record and browser response.
+    """
+
+    RESULT_PENDING = "pending"
+    RESULT_SUCCEEDED = "succeeded"
+    RESULT_FAILED = "failed"
+    RESULT_CHOICES = [
+        (RESULT_PENDING, _("Pending")),
+        (RESULT_SUCCEEDED, _("Succeeded")),
+        (RESULT_FAILED, _("Failed")),
+    ]
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="platform_action_requests",
+    )
+    idempotency_key = models.CharField(max_length=128)
+    action = models.CharField(max_length=100)
+    target_type = models.CharField(max_length=64)
+    target_id = models.CharField(max_length=255)
+    payload_hash = models.CharField(max_length=64)
+    result = models.CharField(max_length=20, choices=RESULT_CHOICES, default=RESULT_PENDING)
+    response_status = models.PositiveSmallIntegerField(null=True, blank=True)
+    response_body = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["created_by", "idempotency_key"],
+                name="platform_action_request_key",
+            ),
+        ]
+
+
 class WorkspaceUsageCap(models.Model):
     """Optional monthly metered-usage cap selected by a Platform administrator."""
 

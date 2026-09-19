@@ -282,6 +282,22 @@ class PlatformConsoleVariableViewSet(PlatformConsoleAccessViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="configuration.variable_updated",
+                target_type="platform_variable",
+                target_id=key,
+                payload={"value": value, "reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
+
         Override = apps.get_model("platform", "PlatformVariableOverride")
         Change = apps.get_model("platform", "PlatformVariableChange")
         try:
@@ -303,12 +319,23 @@ class PlatformConsoleVariableViewSet(PlatformConsoleAccessViewSet):
                         request=request, action="configuration.variable_updated", target_type="platform_variable",
                         target_id=key, reason=reason, before={"value": old_value}, after={"value": value},
                     )
+                response_body = platform_variable_item(key)
+                _complete_platform_action(
+                    action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+                )
         except IntegrityError:
+            response_body = {"detail": "This variable was changed concurrently. Reload and try again.", "code": "configuration_conflict"}
+            _complete_platform_action(
+                action_request,
+                result="failed",
+                response_status=status.HTTP_409_CONFLICT,
+                response_body=response_body,
+            )
             return Response(
-                {"detail": "This variable was changed concurrently. Reload and try again.", "code": "configuration_conflict"},
+                response_body,
                 status=status.HTTP_409_CONFLICT,
             )
-        return Response(platform_variable_item(key))
+        return Response(response_body)
 
 
 class PlatformConsoleMeterPriceViewSet(PlatformConsoleAccessViewSet):
@@ -515,6 +542,22 @@ class PlatformConsoleExchangeRateViewSet(PlatformConsoleAccessViewSet):
         if not from_currency or not to_currency:
             return Response({"detail": "Both currencies must be active on this Platform.", "code": "unknown_currency"}, status=400)
         reason = _automatic_reason(request, f"Entered {from_code} to {to_code} exchange rate.")
+        target_id = f"{from_code}-{to_code}-{effective_date.isoformat()}"
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="configuration.exchange_rate_set",
+                target_type="exchange_rate",
+                target_id=target_id,
+                payload={"rate": _decimal_text(rate_value), "reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
         with transaction.atomic():
             existing = ExchangeRate.objects.select_for_update().filter(
                 from_currency=from_currency, to_currency=to_currency, effective_date=effective_date,
@@ -533,10 +576,15 @@ class PlatformConsoleExchangeRateViewSet(PlatformConsoleAccessViewSet):
                 )
             record_platform_audit(
                 request=request, action="configuration.exchange_rate_set", target_type="exchange_rate",
-                target_id=f"{from_code}-{to_code}-{effective_date.isoformat()}", reason=reason,
+                target_id=target_id, reason=reason,
                 before=before, after=self._item(stored),
             )
-        return Response(self._item(stored), status=status.HTTP_200_OK if existing else status.HTTP_201_CREATED)
+            response_status = status.HTTP_200_OK if existing else status.HTTP_201_CREATED
+            response_body = self._item(stored)
+            _complete_platform_action(
+                action_request, result="succeeded", response_status=response_status, response_body=response_body,
+            )
+        return Response(response_body, status=response_status)
 
 
 class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
@@ -1203,6 +1251,21 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             except ValidationError:
                 return Response({"detail": "Use a non-negative cap in points.", "code": "invalid_usage_cap"}, status=400)
         reason = _automatic_reason(request, "Changed a workspace metered-usage cap.")
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="workspace.usage_cap_updated",
+                target_type="workspace",
+                target_id=workspace.id,
+                payload={"cap_points": _decimal_text(desired) if desired is not None else None, "reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
         with transaction.atomic():
             Workspace = apps.get_model("common", "Workspace")
             locked_workspace = Workspace.objects.select_for_update().get(pk=workspace.pk)
@@ -1220,7 +1283,11 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
                 request=request, action="workspace.usage_cap_updated", target_type="workspace",
                 target_id=workspace.id, reason=reason, before=before, after=item(result),
             )
-        return Response(item(result))
+            response_body = item(result)
+            _complete_platform_action(
+                action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+            )
+        return Response(response_body)
 
     @action(detail=True, methods=["get"], url_path="grants/available-features")
     def available_grant_features(self, request, pk=None):

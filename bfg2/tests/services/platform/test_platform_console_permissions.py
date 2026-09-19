@@ -194,6 +194,7 @@ def test_superuser_can_change_typed_platform_variable_with_an_audit_reason():
     changed = client.patch(
         "/api/v1/platform/console/variables/default_meter_margin/",
         {"value": "0.35", "reason": "Vendor margin changed", "confirm": True}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="platform-variable-0001",
     )
     assert changed.status_code == 200
     assert changed.data["value"] == "0.35"
@@ -202,6 +203,16 @@ def test_superuser_can_change_typed_platform_variable_with_an_audit_reason():
     assert PlatformAuditEvent.objects.filter(
         action="configuration.variable_updated", target_id="default_meter_margin",
     ).exists()
+    replayed = client.patch(
+        "/api/v1/platform/console/variables/default_meter_margin/",
+        {"value": "0.35", "reason": "Vendor margin changed", "confirm": True}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="platform-variable-0001",
+    )
+    assert replayed.status_code == 200
+    assert replayed["Idempotent-Replayed"] == "true"
+    assert PlatformAuditEvent.objects.filter(
+        action="configuration.variable_updated", target_id="default_meter_margin",
+    ).count() == 1
     refused = client.patch(
         "/api/v1/platform/console/variables/default_meter_margin/",
         {"value": "0.40", "reason": "Missing explicit confirmation"}, format="json",
@@ -512,14 +523,14 @@ def test_superuser_can_set_and_correct_platform_exchange_rate():
 
     created = client.post("/api/v1/platform/console/exchange-rates/", {
         "from": "NZD", "to": "USD", "rate": "0.600000", "effective_date": "2026-09-19", "confirm": True,
-    }, format="json")
+    }, format="json", HTTP_X_IDEMPOTENCY_KEY="exchange-rate-create-001")
     assert created.status_code == 201
     assert created.data["source"] == "manual"
     assert created.data["entered_by"]["id"] == superuser.id
 
     corrected = client.post("/api/v1/platform/console/exchange-rates/", {
         "from": "NZD", "to": "USD", "rate": "0.610000", "effective_date": "2026-09-19", "confirm": True,
-    }, format="json")
+    }, format="json", HTTP_X_IDEMPOTENCY_KEY="exchange-rate-update-001")
     assert corrected.status_code == 200
     assert ExchangeRate.objects.filter(from_currency__code="NZD", to_currency__code="USD").count() == 1
     assert corrected.data["rate"] == "0.610000"
@@ -548,6 +559,7 @@ def test_superuser_can_set_workspace_usage_cap_and_grant_once():
 
     own = client.patch(
         f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/", {"cap_points": "0", "confirm": True}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="workspace-cap-set-0001",
     )
     assert own.status_code == 200
     assert own.data["source"] == "workspace"
@@ -555,6 +567,7 @@ def test_superuser_can_set_workspace_usage_cap_and_grant_once():
 
     restored = client.patch(
         f"/api/v1/platform/console/workspaces/{workspace.id}/usage-cap/", {"cap_points": None, "confirm": True}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="workspace-cap-reset-001",
     )
     assert restored.status_code == 200
     assert restored.data["source"] == "platform"

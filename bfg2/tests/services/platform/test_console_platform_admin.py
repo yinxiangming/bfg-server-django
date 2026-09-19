@@ -43,7 +43,7 @@ METER_PRICES = f'{CONSOLE}meter-prices/'
 RATES = f'{CONSOLE}exchange-rates/'
 REFUSED_TO_OWNERS = {
     'code': 'platform_admin_required',
-    'detail': 'Only platform administrators can use this part of the console.',
+    'detail': 'Only a Django superuser can use this part of the console.',
 }
 
 MANIFESTS = {
@@ -97,7 +97,9 @@ def join(workspace, user, role_code):
 
 @pytest.fixture
 def operator(platform_workspace):
-    return join(platform_workspace, _user('operator'), 'admin')
+    return User.objects.create_superuser(
+        username='operator', email='operator@example.com', password='x',
+    )
 
 
 @pytest.fixture

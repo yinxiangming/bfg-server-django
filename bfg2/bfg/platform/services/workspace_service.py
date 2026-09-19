@@ -79,6 +79,18 @@ def is_platform_admin(user) -> bool:
     return _is_platform_admin_standalone(user)
 
 
+def is_platform_superuser(user) -> bool:
+    """Return whether a user can operate the deployment control plane.
+
+    This is deliberately narrower than the historical ``is_platform_admin``
+    role. Workspace-owner and shared-console access remains a tenant concern;
+    cluster, lifecycle, policy, and audit controls are deployment operations
+    and require Django's durable superuser flag in both embedded and standalone
+    installations.
+    """
+    return bool(getattr(user, "is_authenticated", False) and getattr(user, "is_superuser", False))
+
+
 # ── Workspace listing ─────────────────────────────────────────────────────────
 
 class _MemberRole(NamedTuple):

@@ -19,6 +19,15 @@ from bfg.platform.views.console_admin_views import (
     ConsolePlatformVariableViewSet,
     ConsoleWorkspaceAdminViewSet,
 )
+from bfg.platform.views.control_views import (
+    PlatformControlAuditEventViewSet,
+    PlatformControlClusterViewSet,
+    PlatformControlExchangeRateViewSet,
+    PlatformControlMeterPriceViewSet,
+    PlatformControlStatusViewSet,
+    PlatformControlVariableViewSet,
+    PlatformControlWorkspaceViewSet,
+)
 
 router = DefaultRouter()
 router.register(r'workspaces', WorkspaceViewSet, basename='platform-workspace')
@@ -37,6 +46,17 @@ router.register(r'console/workspaces', ConsoleWorkspaceViewSet, basename='platfo
 router.register(r'console/variables', ConsolePlatformVariableViewSet, basename='platform-console-variable')
 router.register(r'console/meter-prices', ConsoleMeterPriceViewSet, basename='platform-console-meter-price')
 router.register(r'console/exchange-rates', ConsoleExchangeRateViewSet, basename='platform-console-exchange-rate')
+# The owner console stays under ``console/``. Deployment lifecycle, Cluster and
+# audit controls are a separate superuser-only contract under ``control/``.
+router.register(r'control/workspaces', PlatformControlWorkspaceViewSet, basename='platform-control-workspace')
+router.register(r'control/status', PlatformControlStatusViewSet, basename='platform-control-status')
+router.register(r'control/clusters', PlatformControlClusterViewSet, basename='platform-control-cluster')
+router.register(r'control/audit-events', PlatformControlAuditEventViewSet, basename='platform-control-audit-event')
+# Existing configuration resources are strict-superuser views. Publish their
+# control-plane aliases before clients migrate off the historical console path.
+router.register(r'control/variables', PlatformControlVariableViewSet, basename='platform-control-variable')
+router.register(r'control/meter-prices', PlatformControlMeterPriceViewSet, basename='platform-control-meter-price')
+router.register(r'control/exchange-rates', PlatformControlExchangeRateViewSet, basename='platform-control-exchange-rate')
 
 urlpatterns = [
     path('', include(router.urls)),

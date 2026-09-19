@@ -47,7 +47,14 @@ class ConsoleViewer:
         if not getattr(user, "is_authenticated", False):
             return cls(is_platform_admin=False, owned_ids=frozenset())
         return cls(
-            is_platform_admin=workspace_service.is_platform_admin(user),
+            # Workspace-console visibility retains historical management
+            # administrators and also admits a Django superuser even when that
+            # account has no tenant membership. The separate configuration and
+            # deployment-control routes make their stricter checks themselves.
+            is_platform_admin=(
+                workspace_service.is_platform_superuser(user)
+                or workspace_service.is_platform_admin(user)
+            ),
             owned_ids=frozenset(owned_workspace_ids(user)),
         )
 
@@ -111,6 +118,10 @@ def workspace_entries(workspaces, viewer: ConsoleViewer) -> list:
             "is_active": workspace.is_active,
             "is_platform": is_platform_workspace(workspace),
             "suspended_at": _suspended_at(workspace),
+            **(
+                {"scheduled_deletion_at": _scheduled_deletion_at(workspace)}
+                if _scheduled_deletion_at(workspace) is not None else {}
+            ),
             "created_at": workspace.created_at,
             "domains": hostnames.get(workspace.pk, []),
             "owner": user_summary(owners.get(workspace.pk)),
@@ -125,6 +136,11 @@ def workspace_entries(workspaces, viewer: ConsoleViewer) -> list:
 def _suspended_at(workspace):
     profile = getattr(workspace, "platform_profile", None)
     return profile.suspended_at if profile else None
+
+
+def _scheduled_deletion_at(workspace):
+    profile = getattr(workspace, "platform_profile", None)
+    return profile.scheduled_deletion_at if profile else None
 
 
 def _active_staff_counts(ids) -> dict:

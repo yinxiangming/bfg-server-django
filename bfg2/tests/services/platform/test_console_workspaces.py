@@ -11,12 +11,14 @@ Manifests are faked, as in ``test_workspace_extensions``.
 """
 
 from dataclasses import replace
+from datetime import timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
@@ -164,7 +166,9 @@ def summary(user):
 
 @pytest.fixture
 def operator(platform_workspace):
-    return join(platform_workspace, _user('operator'), 'admin')
+    return User.objects.create_superuser(
+        username='operator', email='operator@example.com', password='x',
+    )
 
 
 @pytest.fixture
@@ -230,6 +234,17 @@ def test_anonymous_callers_are_refused(shop):
 
     assert all(code in (401, 403) for code in statuses), statuses
     assert not WorkspaceExtension.all_objects.exists()
+
+
+def test_console_workspace_entry_includes_a_pending_deletion_deadline(operator, shop):
+    profile, _ = WorkspacePlatformProfile.objects.get_or_create(workspace=shop)
+    profile.scheduled_deletion_at = timezone.now() + timedelta(days=30)
+    profile.save(update_fields=['scheduled_deletion_at', 'updated_at'])
+
+    response = client_for(operator).get(detail_url(shop.id))
+
+    assert response.status_code == 200
+    assert response.data['scheduled_deletion_at'] == profile.scheduled_deletion_at
 
 
 @pytest.mark.parametrize(
@@ -307,7 +322,9 @@ def test_the_list_shows_every_workspace_whoever_its_staff_are(operator, shop):
         'staff_count': 2,
         'active_extensions': ['review_insights', 'reviews'],
     }
-    assert (by_slug['platform']['is_platform'], by_slug['platform']['staff_count']) == (True, 1)
+    # A Django superuser does not need a tenant StaffMember row to operate the
+    # control plane, so it is intentionally not counted as platform workspace staff.
+    assert (by_slug['platform']['is_platform'], by_slug['platform']['staff_count']) == (True, 0)
     assert (by_slug['closed']['is_active'], by_slug['closed']['owner'], by_slug['closed']['domains']) == (
         False, None, [],
     )

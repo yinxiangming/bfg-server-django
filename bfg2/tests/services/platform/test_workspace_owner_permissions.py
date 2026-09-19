@@ -204,7 +204,18 @@ class TestMe:
 
         body = get_me(member)
 
-        assert set(body) == {'is_platform_admin', 'workspaces', 'workspace_limit', 'create_blocked'}
+        assert set(body) == {
+            'is_platform_admin', 'is_platform_superuser', 'platform_capabilities',
+            'workspaces', 'workspace_limit', 'create_blocked',
+        }
+        assert body['is_platform_admin'] is False
+        assert body['is_platform_superuser'] is False
+        assert body['platform_capabilities'] == {
+            'cluster_management': False,
+            'audit_log': False,
+            'configuration': False,
+            'exchange_rates': False,
+        }
         by_slug = {item['slug']: item for item in body['workspaces']}
         assert set(by_slug) == {'shop', 'bare'}
         for item in by_slug.values():

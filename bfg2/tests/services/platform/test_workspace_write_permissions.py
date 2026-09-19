@@ -144,7 +144,7 @@ class TestCustomDomainIsNotWritable:
         assert_hostname_still_belongs_to(other_shop)
 
 
-class TestSuspendAndResumeArePlatformAdminOnly:
+class TestSuspendAndResumeArePlatformSuperuserOnly:
     @pytest.mark.parametrize('role_code', ['customer_service', 'admin'])
     def test_workspace_staff_cannot_suspend(self, own_shop, role_code):
         client = staff_client(own_shop, role_code, f'{role_code}-suspender')
@@ -166,12 +166,10 @@ class TestSuspendAndResumeArePlatformAdminOnly:
         own_shop.refresh_from_db()
         assert own_shop.is_active is False
 
-    def test_a_platform_admin_can_suspend_and_resume(self, own_shop, platform_workspace):
-        operator = User.objects.create_user(username='platform-operator', password='x')
-        join(platform_workspace, operator, 'admin')
-        # Being a platform admin does not widen the viewset's queryset: the operator
-        # still reaches a workspace only as its staff or its owner.
-        join(own_shop, operator, 'staff')
+    def test_a_platform_superuser_can_suspend_and_resume(self, own_shop, platform_workspace):
+        operator = User.objects.create_superuser(
+            username='platform-operator', email='platform-operator@example.test', password='x',
+        )
         client = client_for(operator)
 
         suspended = client.post(

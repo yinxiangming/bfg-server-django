@@ -12,6 +12,7 @@ from config.views import (
     forgot_password,
     reset_password_confirm,
     verify_email,
+    health,
     provision_user,
     provision_workspace,
 )
@@ -21,6 +22,7 @@ urlpatterns = [
     # frontend (config.account_adapter), and a placeholder here would hide one that does not.
     # BFG2 API v1 endpoints (matching main server structure)
     path('api/v1/', include([
+        path('health/', health, name='health'),
         path('internal/auth/provision-user/', provision_user, name='provision_user'),
         path('internal/auth/provision-workspace/', provision_workspace, name='provision_workspace'),
         path('auth/', include([
@@ -64,4 +66,3 @@ urlpatterns = [
         path('platform/', include('bfg.platform.urls')),
     ])),
 ]
-

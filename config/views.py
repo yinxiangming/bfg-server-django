@@ -71,6 +71,14 @@ def server_version(request):
     return Response(get_server_version_payload())
 
 
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def health(request):
+    """Return the deployment liveness document without resolving a workspace."""
+    return Response({'status': 'ok'})
+
+
 @api_view(['POST'])
 @authentication_classes([])  # Skip JWT auth — we verify PLATFORM_API_KEY manually
 @permission_classes([AllowAny])

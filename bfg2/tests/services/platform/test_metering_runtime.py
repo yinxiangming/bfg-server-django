@@ -9,6 +9,7 @@ from bfg.core.agent_views import AgentChatView
 from bfg.platform.models import PlatformMeterPrice, WorkspaceMeterUsage, WorkspaceUsageCap
 from bfg.platform.services.metering_service import (
     MeteringIdempotencyKeyRequired,
+    UnknownRuntimeMeter,
     WorkspaceUsageCapExceeded,
     record_meter_usage,
 )
@@ -45,6 +46,16 @@ def test_unpriced_meter_preserves_existing_behavior_without_an_idempotency_key()
     result = record_meter_usage(workspace, "ai.agent_chat", 1, idempotency_key=None)
 
     assert result.metered is False
+    assert WorkspaceMeterUsage.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_unregistered_meter_cannot_create_usage_records():
+    workspace = Workspace.objects.create(name="Unknown Meter", slug="unknown-meter", is_active=True)
+
+    with pytest.raises(UnknownRuntimeMeter):
+        record_meter_usage(workspace, "store.image", 1, idempotency_key="store-image-0001")
+
     assert WorkspaceMeterUsage.objects.count() == 0
 
 

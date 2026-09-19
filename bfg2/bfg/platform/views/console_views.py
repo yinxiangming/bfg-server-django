@@ -43,6 +43,7 @@ from bfg.platform.services.entitlement_service import (
     has_active_entitlement,
     is_runtime_entitlement_key,
 )
+from bfg.platform.services.metering_service import RUNTIME_METER_KEYS, is_runtime_meter_key
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
@@ -302,6 +303,11 @@ class PlatformConsoleMeterPriceViewSet(PlatformConsoleAccessViewSet):
         prices = MeterPrice.objects.filter(meter=meter) if meter else MeterPrice.objects.all()
         return Response(self._group_items(list(prices.order_by("meter", "-effective_from", "-created_at", "-id"))))
 
+    @action(detail=False, methods=["get"], url_path="available-meters")
+    def available_meters(self, request):
+        """List meter keys that have a real runtime enforcement point."""
+        return Response({"meters": sorted(RUNTIME_METER_KEYS)})
+
     def create(self, request):
         _confirmed(request)
         try:
@@ -314,6 +320,14 @@ class PlatformConsoleMeterPriceViewSet(PlatformConsoleAccessViewSet):
         meter = str(request.data.get("meter") or "").strip()
         if not meter or len(meter) > 100:
             return Response({"detail": "Use a meter key of 1 to 100 characters.", "code": "invalid_meter_price"}, status=400)
+        if not is_runtime_meter_key(meter):
+            return Response(
+                {
+                    "detail": "Choose a meter with an active runtime enforcement point.",
+                    "code": "unknown_runtime_meter",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             cost = _decimal(
                 request.data.get("vendor_cost"), minimum=Decimal("0.00000001"),

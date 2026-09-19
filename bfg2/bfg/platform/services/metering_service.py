@@ -12,12 +12,26 @@ from django.utils import timezone
 from bfg.platform.services.configuration_service import platform_variable_decimal
 
 
+# A meter is available to Platform operators only after a real runtime
+# consumer has been wired through ``record_meter_usage`` and tested.
+RUNTIME_METER_KEYS = frozenset({"ai.agent_chat"})
+
+
+def is_runtime_meter_key(key: str) -> bool:
+    """Return whether a meter has an enforced runtime consumer."""
+    return key in RUNTIME_METER_KEYS
+
+
 class MeteringError(Exception):
     """Base error for a rejected metered operation."""
 
 
 class MeteringIdempotencyKeyRequired(MeteringError):
     """A priced call needs a stable caller key before it can be charged."""
+
+
+class UnknownRuntimeMeter(MeteringError):
+    """A caller requested a meter without a registered runtime consumer."""
 
 
 class WorkspaceUsageCapExceeded(MeteringError):
@@ -72,6 +86,9 @@ def record_meter_usage(workspace, meter: str, units, *, idempotency_key: str | N
     compatibility.  Once an operator configures a price, every caller must
     supply a stable idempotency key so retries cannot produce duplicate charges.
     """
+    if not is_runtime_meter_key(meter):
+        raise UnknownRuntimeMeter
+
     moment = at or timezone.now()
     price = _current_price(meter, moment)
     if not price:

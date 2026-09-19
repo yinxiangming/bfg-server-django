@@ -216,21 +216,31 @@ def test_meter_prices_are_append_only_and_use_the_platform_margin():
     client = APIClient()
     client.force_authenticate(user=superuser)
 
+    available = client.get("/api/v1/platform/console/meter-prices/available-meters/")
+    assert available.status_code == 200
+    assert available.data == {"meters": ["ai.agent_chat"]}
+
     first = client.post("/api/v1/platform/console/meter-prices/", {
-        "meter": "ai.tokens", "vendor_cost": "10", "unit_size": "100", "margin": "0.25", "confirm": True,
+        "meter": "ai.agent_chat", "vendor_cost": "10", "unit_size": "100", "margin": "0.25", "confirm": True,
     }, format="json", HTTP_X_IDEMPOTENCY_KEY="meter-price-first-0001")
     assert first.status_code == 201
-    assert first.data["meter"] == "ai.tokens"
+    assert first.data["meter"] == "ai.agent_chat"
     assert first.data["in_force"] == first.data["prices"][0]["id"]
     assert first.data["prices"][0]["points_per_unit"] == "0.1250000000"
 
     second = client.post("/api/v1/platform/console/meter-prices/", {
-        "meter": "ai.tokens", "vendor_cost": "12", "unit_size": "100", "confirm": True,
+        "meter": "ai.agent_chat", "vendor_cost": "12", "unit_size": "100", "confirm": True,
     }, format="json", HTTP_X_IDEMPOTENCY_KEY="meter-price-second-001")
     assert second.status_code == 201
     assert len(second.data["prices"]) == 2
     assert any(price["uses_default_margin"] for price in second.data["prices"])
-    assert PlatformAuditEvent.objects.filter(action="configuration.meter_price_added", target_id="ai.tokens").count() == 2
+    assert PlatformAuditEvent.objects.filter(action="configuration.meter_price_added", target_id="ai.agent_chat").count() == 2
+
+    unknown = client.post("/api/v1/platform/console/meter-prices/", {
+        "meter": "store.image", "vendor_cost": "1", "unit_size": "1", "confirm": True,
+    }, format="json", HTTP_X_IDEMPOTENCY_KEY="meter-price-unknown-001")
+    assert unknown.status_code == 400
+    assert unknown.data["code"] == "unknown_runtime_meter"
 
 
 @pytest.mark.django_db
@@ -244,7 +254,7 @@ def test_meter_price_is_rolled_back_when_its_audit_write_fails():
     with patch("bfg.platform.views.console_views.record_platform_audit", side_effect=RuntimeError("audit unavailable")):
         with pytest.raises(RuntimeError, match="audit unavailable"):
             client.post("/api/v1/platform/console/meter-prices/", {
-                "meter": "ai.tokens", "vendor_cost": "10", "unit_size": "100", "confirm": True,
+                "meter": "ai.agent_chat", "vendor_cost": "10", "unit_size": "100", "confirm": True,
             }, format="json", HTTP_X_IDEMPOTENCY_KEY="meter-price-audit-001")
 
     assert PlatformMeterPrice.objects.count() == 0
@@ -254,10 +264,10 @@ def test_meter_price_is_rolled_back_when_its_audit_write_fails():
 @pytest.mark.django_db
 @pytest.mark.parametrize("path,payload", [
     ("/api/v1/platform/console/meter-prices/", {
-        "meter": "ai.tokens", "vendor_cost": "1e100", "unit_size": "100", "confirm": True,
+        "meter": "ai.agent_chat", "vendor_cost": "1e100", "unit_size": "100", "confirm": True,
     }),
     ("/api/v1/platform/console/meter-prices/", {
-        "meter": "ai.tokens", "vendor_cost": "1", "unit_size": True, "confirm": True,
+        "meter": "ai.agent_chat", "vendor_cost": "1", "unit_size": True, "confirm": True,
     }),
     ("/api/v1/platform/console/exchange-rates/", {
         "from": "NZD", "to": "USD", "rate": "1e100", "confirm": True,

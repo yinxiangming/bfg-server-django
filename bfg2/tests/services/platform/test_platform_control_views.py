@@ -61,6 +61,25 @@ def test_control_status_is_a_superuser_only_capability_document():
     }
 
 
+@pytest.mark.parametrize(
+    "path",
+    (
+        "variables/",
+        "meter-prices/",
+        "exchange-rates/",
+        "workspaces/1/usage-cap/",
+        "workspaces/1/grants/",
+    ),
+)
+def test_historical_privileged_console_routes_are_not_exposed(path):
+    """Only the audited control-plane contract may manage deployment settings."""
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+
+    response = client_for(superuser).get(f"/api/v1/platform/console/{path}")
+
+    assert response.status_code == 404
+
+
 def test_suspend_is_confirmed_idempotent_and_audited():
     workspace = Workspace.objects.create(name="Shop", slug="shop", is_active=True)
     WorkspacePlatformProfile.objects.create(workspace=workspace)

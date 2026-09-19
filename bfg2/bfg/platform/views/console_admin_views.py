@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-The part of the console only the people who run the deployment may use.
+Historical deployment-administration view helpers.
+
+The view classes in this module are intentionally no longer routed. Strict,
+audited superuser controls live in ``control_views`` under ``/platform/control/``.
+The parsing helpers remain shared to keep date and request-body validation
+consistent while the old implementation remains available for migration history.
 
 GET    /api/v1/platform/console/variables/                        every variable, with its default and what it is now
 PATCH  /api/v1/platform/console/variables/{key}/                  body: {"value": ..., "reason": "..."}

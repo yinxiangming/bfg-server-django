@@ -411,7 +411,13 @@ class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
             complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
             return Response(body, status=status.HTTP_409_CONFLICT)
         entitlement = granted["entitlement"]
-        body = {"workspace": workspace.id, "entitlement": {**entitlement, "is_effective": True}}
+        body = {
+            "workspace": workspace.id,
+            "entitlement": {**entitlement, "is_effective": True},
+            # Preserve the operational result of a grant without making the
+            # historical console route a second privileged write surface.
+            "extension": granted["extension"],
+        }
         complete_action(action_request, result="succeeded", response_status=status.HTTP_201_CREATED, response_body=body)
         record_control_audit(
             request=request, action="workspace.entitlement_granted", target_type="workspace",

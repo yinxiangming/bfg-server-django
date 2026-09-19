@@ -82,10 +82,10 @@ rather than claim that the workspace moved.
       entitlement data models rather than duplicating them.
 - [x] Publish strict-superuser control aliases for existing configuration
       endpoints while the client moves from the historical path.
-- [ ] Move all privileged configuration reads and writes to dedicated control
+- [x] Move all privileged configuration reads and writes to dedicated control
       view classes, then retire the historical privileged console aliases.
-- [ ] Add audit/idempotency coverage to the legacy configuration services before
-      removing their aliases.
+- [x] Retire legacy configuration routes after migrating their regression
+      coverage to the confirmed, idempotent and audited control contract.
 
 ## P4: User interface and release verification
 

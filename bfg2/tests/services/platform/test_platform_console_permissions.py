@@ -342,6 +342,43 @@ def test_workspace_create_returns_a_safe_capacity_error_instead_of_a_server_erro
 
 
 @pytest.mark.django_db
+def test_workspace_deletion_schedule_is_idempotent_and_can_be_explicitly_cancelled(settings):
+    settings.PLATFORM_EMBEDDED = True
+    superuser = User.objects.create_superuser(
+        username="lifecycle-root", password="secret", email="lifecycle@example.test",
+    )
+    workspace = _embedded_workspace_member(superuser, slug="recoverable-workspace")
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    deleted = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/delete/",
+        {"confirm": True, "reason": "Requested closure"}, format="json",
+    )
+    assert deleted.status_code == 200
+    scheduled_at = deleted.data["scheduled_deletion_at"]
+    assert scheduled_at
+    assert deleted.data["is_active"] is False
+
+    repeated = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/delete/",
+        {"confirm": True, "reason": "Duplicate request"}, format="json",
+    )
+    assert repeated.status_code == 200
+    assert repeated.data["scheduled_deletion_at"] == scheduled_at
+    assert PlatformAuditEvent.objects.filter(action="workspace.deletion_scheduled").count() == 1
+
+    restored = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/restore/",
+        {"confirm": True, "reason": "Keep the workspace"}, format="json",
+    )
+    assert restored.status_code == 200
+    assert restored.data["is_active"] is True
+    assert restored.data["scheduled_deletion_at"] is None
+    assert PlatformAuditEvent.objects.filter(action="workspace.deletion_cancelled").exists()
+
+
+@pytest.mark.django_db
 def test_audit_events_are_paginated_filterable_and_redacted_for_superusers():
     superuser = User.objects.create_superuser(
         username="audit-reader", password="secret", email="reader@example.test",

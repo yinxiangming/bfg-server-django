@@ -97,6 +97,10 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             "is_active": workspace.is_active,
             "is_platform": is_platform_workspace(workspace),
             "suspended_at": profile.suspended_at.isoformat() if profile and profile.suspended_at else None,
+            "scheduled_deletion_at": (
+                profile.scheduled_deletion_at.isoformat()
+                if profile and profile.scheduled_deletion_at else None
+            ),
             "created_at": workspace.created_at,
             "domains": domains,
             "owner": owner,
@@ -162,22 +166,65 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         _confirmed(request)
         reason = _change_reason(request)
         WorkspaceOperation = apps.get_model("platform", "WorkspaceOperation")
-        workspace = self._workspace(pk)
-        workspace.is_active = False
-        workspace.save(update_fields=["is_active"])
-        profile = getattr(workspace, "platform_profile", None)
-        if profile:
+        Workspace = apps.get_model("common", "Workspace")
+        WorkspacePlatformProfile = apps.get_model("platform", "WorkspacePlatformProfile")
+        with transaction.atomic():
+            try:
+                workspace = Workspace.objects.select_for_update().select_related(
+                    "platform_profile__cluster"
+                ).get(pk=pk)
+            except Workspace.DoesNotExist:
+                return Response({"detail": "Workspace not found."}, status=status.HTTP_404_NOT_FOUND)
+            profile, _ = WorkspacePlatformProfile.objects.get_or_create(workspace=workspace)
+            # A second submit must not silently extend the deletion window.
+            if profile.scheduled_deletion_at:
+                return Response(self._item(workspace))
+            before = {"is_active": workspace.is_active, "scheduled_deletion_at": None}
+            workspace.is_active = False
+            workspace.save(update_fields=["is_active"])
             profile.scheduled_deletion_at = timezone.now() + timedelta(days=30)
             profile.save(update_fields=["scheduled_deletion_at", "updated_at"])
-        WorkspaceOperation.objects.create(workspace=workspace, operation="delete", status="completed",
-                                          initiated_by=request.user, details={"soft": True, "reason": reason},
-                                          completed_at=timezone.now())
-        record_platform_audit(
-            request=request, action="workspace.deletion_scheduled", target_type="workspace",
-            target_id=workspace.id, reason=reason, before={"is_active": True},
-            after={"is_active": False, "scheduled_deletion": True},
-        )
-        return Response(self._item(workspace))
+            WorkspaceOperation.objects.create(workspace=workspace, operation="delete", status="completed",
+                                              initiated_by=request.user, details={"soft": True, "reason": reason},
+                                              completed_at=timezone.now())
+            record_platform_audit(
+                request=request, action="workspace.deletion_scheduled", target_type="workspace",
+                target_id=workspace.id, reason=reason, before=before,
+                after={"is_active": False, "scheduled_deletion_at": profile.scheduled_deletion_at.isoformat()},
+            )
+            # ``select_related`` can hold a stale one-to-one object when a profile was
+            # created through ``get_or_create`` above. Re-read before serializing the
+            # response so the UI receives the actual deletion deadline.
+            return Response(self._item(self._workspace(workspace.id)))
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        """Cancel a scheduled deletion and restore a workspace to active state."""
+        _confirmed(request)
+        reason = _change_reason(request)
+        Workspace = apps.get_model("common", "Workspace")
+        with transaction.atomic():
+            try:
+                workspace = Workspace.objects.select_for_update().select_related(
+                    "platform_profile__cluster"
+                ).get(pk=pk)
+            except Workspace.DoesNotExist:
+                return Response({"detail": "Workspace not found."}, status=status.HTTP_404_NOT_FOUND)
+            profile = getattr(workspace, "platform_profile", None)
+            if not profile or not profile.scheduled_deletion_at:
+                return Response({
+                    "detail": "This workspace is not scheduled for deletion.",
+                    "code": "workspace_not_scheduled_for_deletion",
+                }, status=status.HTTP_409_CONFLICT)
+            scheduled_at = profile.scheduled_deletion_at
+            resume_workspace(workspace, initiated_by=request.user)
+            record_platform_audit(
+                request=request, action="workspace.deletion_cancelled", target_type="workspace",
+                target_id=workspace.id, reason=reason,
+                before={"is_active": False, "scheduled_deletion_at": scheduled_at.isoformat()},
+                after={"is_active": True, "scheduled_deletion_at": None},
+            )
+            return Response(self._item(workspace))
 
     @action(detail=True, methods=["get"])
     def export(self, request, pk=None):

@@ -133,7 +133,7 @@ def suspend_workspace(workspace, initiated_by=None, reason: str = "") -> None:
 
 
 def resume_workspace(workspace, initiated_by=None) -> None:
-    """Resume a suspended workspace."""
+    """Resume a suspended workspace and cancel any pending soft deletion."""
     WorkspaceOperation = apps.get_model("platform", "WorkspaceOperation")
 
     workspace.is_active = True
@@ -141,14 +141,18 @@ def resume_workspace(workspace, initiated_by=None) -> None:
 
     profile = getattr(workspace, "platform_profile", None)
     if profile:
+        cancelled_deletion = profile.scheduled_deletion_at is not None
         profile.suspended_at = None
-        profile.save(update_fields=["suspended_at"])
+        profile.scheduled_deletion_at = None
+        profile.save(update_fields=["suspended_at", "scheduled_deletion_at", "updated_at"])
+    else:
+        cancelled_deletion = False
 
     WorkspaceOperation.objects.create(
         workspace=workspace,
         operation="resume",
         status="completed",
         initiated_by=initiated_by,
-        details={},
+        details={"cancelled_scheduled_deletion": cancelled_deletion},
         completed_at=timezone.now(),
     )

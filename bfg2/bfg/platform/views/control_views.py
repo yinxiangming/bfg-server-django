@@ -13,7 +13,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core import signing
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, OuterRef, Q, Subquery
 from django.http import Http404, HttpResponse
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -709,6 +709,75 @@ class PlatformControlClusterViewSet(PlatformControlAccessViewSet):
     def list(self, request):
         Cluster = apps.get_model("platform", "Cluster")
         return Response([self._item(cluster) for cluster in Cluster.objects.all()])
+
+    @action(detail=False, methods=["get"], url_path="health-summary")
+    def health_summary(self, request):
+        """Summarize stored probe observations without reaching any Cluster."""
+        window_hours = 24
+        generated_at = timezone.now()
+        cutoff = generated_at - timedelta(hours=window_hours)
+        Cluster = apps.get_model("platform", "Cluster")
+        Observation = apps.get_model("platform", "ClusterHealthObservation")
+        latest = Observation.objects.filter(cluster_id=OuterRef("pk")).order_by("-observed_at", "-id")
+        clusters = Cluster.objects.all().annotate(
+            observation_count=Count(
+                "health_observations",
+                filter=Q(health_observations__observed_at__gte=cutoff),
+            ),
+            last_observed_at=Subquery(latest.values("observed_at")[:1]),
+            last_observed_status=Subquery(latest.values("health_status")[:1]),
+            last_observed_outcome=Subquery(latest.values("outcome")[:1]),
+            last_observed_http_status=Subquery(latest.values("http_status")[:1]),
+        )
+        summary = {
+            "active_clusters": 0,
+            "inactive_clusters": 0,
+            "checked_within_window": 0,
+            "stale_or_unchecked": 0,
+            "healthy": 0,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+        }
+        items = []
+        for cluster in clusters:
+            is_fresh = bool(cluster.last_observed_at and cluster.last_observed_at >= cutoff)
+            displayed_status = cluster.last_observed_status if is_fresh else "unknown"
+            if displayed_status not in {"healthy", "degraded", "down", "unknown"}:
+                displayed_status = "unknown"
+            if cluster.is_active:
+                summary["active_clusters"] += 1
+                if is_fresh:
+                    summary["checked_within_window"] += 1
+                else:
+                    summary["stale_or_unchecked"] += 1
+                summary[displayed_status] += 1
+            else:
+                summary["inactive_clusters"] += 1
+            items.append({
+                "id": cluster.id,
+                "name": cluster.name,
+                "region": cluster.region,
+                "is_active": cluster.is_active,
+                "is_accepting_new": cluster.is_accepting_new,
+                "observations_within_window": cluster.observation_count,
+                "is_stale_or_unchecked": not is_fresh,
+                "last_observation": (
+                    {
+                        "health_status": cluster.last_observed_status,
+                        "http_status": cluster.last_observed_http_status,
+                        "outcome": cluster.last_observed_outcome,
+                        "observed_at": cluster.last_observed_at,
+                    }
+                    if cluster.last_observed_at else None
+                ),
+            })
+        return Response({
+            "generated_at": generated_at,
+            "window_hours": window_hours,
+            "summary": summary,
+            "clusters": items,
+        })
 
     def retrieve(self, request, pk=None):
         return Response(self._item(self._cluster(pk)))

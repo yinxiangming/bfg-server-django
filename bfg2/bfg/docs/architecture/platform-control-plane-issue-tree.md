@@ -46,7 +46,7 @@ turning an ordinary workspace owner into a deployment administrator.
       literals, credentials, or response-body disclosure.
 - [ ] Provide a controlled assignment/migration queue with capacity reservation,
       rollback, and progress events.
-- [ ] Add a deployment health dashboard based on stored observations, rather
+- [x] Add a deployment health dashboard based on stored observations, rather
       than browser-side probes.
 
 ### Placement implementation gate
@@ -86,15 +86,15 @@ rather than claim that the workspace moved.
 
 ### Verification record (2026-09-20)
 
-- Current local BFG suite: `2046 passed, 22 subtests passed`.
+- Current local BFG suite: `2050 passed, 22 subtests passed`.
 - UAT server-layer smoke used existing persisted accounts without changing data:
   the Django superuser received 200 from the workspace, Cluster, and audit
   control reads; an existing workspace owner received 200 from the established
   owner console and 403 from the control route.
 - The public UAT health document returns `{"status":"ok"}`, and UAT reports no
-  pending migrations. The Cluster health UI route is covered by a local
-  route-level regression and remains in the next batched release until its PR
-  is merged.
+  pending migrations. The Cluster health UI route and its stored-observation
+  dashboard are covered by local route-level regressions and remain in the next
+  batched release until their PRs are merged.
 - These checks do not replace a browser-login E2E path. Keep the two UAT
   smoke items above open until that final UI-level verification is performed.
 

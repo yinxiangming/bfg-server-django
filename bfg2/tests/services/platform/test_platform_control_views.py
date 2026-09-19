@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from bfg.common.models import Workspace
@@ -199,6 +202,65 @@ def test_cluster_health_check_is_registered_on_the_cluster_route(monkeypatch):
     history = client_for(superuser).get(f"{CONTROL}clusters/{cluster.id}/health-observations/?limit=5")
     assert history.status_code == 200
     assert history.data[0]["outcome"] == "checked"
+
+
+def test_cluster_health_summary_is_superuser_only_and_marks_stale_observations():
+    healthy = Cluster.objects.create(
+        id="healthy", name="Healthy", region="apac", api_base_url="https://healthy.example.test",
+        db_host="db.example.test", redis_url="rediss://redis.example.test", s3_bucket="healthy",
+    )
+    stale = Cluster.objects.create(
+        id="stale", name="Stale", region="apac", api_base_url="https://stale.example.test",
+        db_host="db.example.test", redis_url="rediss://redis.example.test", s3_bucket="stale",
+    )
+    malformed = Cluster.objects.create(
+        id="malformed", name="Malformed", region="apac", api_base_url="https://malformed.example.test",
+        db_host="db.example.test", redis_url="rediss://redis.example.test", s3_bucket="malformed",
+    )
+    inactive = Cluster.objects.create(
+        id="inactive", name="Inactive", region="apac", api_base_url="https://inactive.example.test",
+        db_host="db.example.test", redis_url="rediss://redis.example.test", s3_bucket="inactive",
+        is_active=False, is_accepting_new=False,
+    )
+    observed_at = timezone.now()
+    ClusterHealthObservation.objects.create(
+        cluster=healthy, health_status="healthy", http_status=200, observed_at=observed_at,
+    )
+    ClusterHealthObservation.objects.create(
+        cluster=stale, health_status="down", observed_at=observed_at - timedelta(hours=25),
+    )
+    ClusterHealthObservation.objects.create(
+        cluster=malformed, health_status="unexpected", observed_at=observed_at,
+    )
+    ClusterHealthObservation.objects.create(
+        cluster=inactive, health_status="down", observed_at=observed_at,
+    )
+    regular = User.objects.create_user(username="regular", password="secret")
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+
+    assert client_for(regular).get(f"{CONTROL}clusters/health-summary/").status_code == 403
+    response = client_for(superuser).get(f"{CONTROL}clusters/health-summary/")
+
+    assert response.status_code == 200
+    assert response.data["window_hours"] == 24
+    assert response.data["summary"] == {
+        "active_clusters": 3,
+        "inactive_clusters": 1,
+        "checked_within_window": 2,
+        "stale_or_unchecked": 1,
+        "healthy": 1,
+        "degraded": 0,
+        "down": 0,
+        "unknown": 2,
+    }
+    rows = {row["id"]: row for row in response.data["clusters"]}
+    assert rows["healthy"]["is_stale_or_unchecked"] is False
+    assert rows["healthy"]["last_observation"]["http_status"] == 200
+    assert rows["stale"]["is_stale_or_unchecked"] is True
+    assert rows["stale"]["last_observation"]["health_status"] == "down"
+    assert rows["malformed"]["is_stale_or_unchecked"] is False
+    assert "api_base_url" not in rows["healthy"]
+    assert "redis_url" not in rows["healthy"]
 
 
 def test_cluster_health_configuration_refusal_is_observed_and_audited(settings):

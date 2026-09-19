@@ -687,28 +687,66 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
         _confirmed(request)
         reason = _change_reason(request)
         workspace = self._workspace(pk)
-        before = {"is_active": workspace.is_active}
-        suspend_workspace(workspace, initiated_by=request.user, reason=reason)
-        record_platform_audit(
-            request=request, action="workspace.suspend", target_type="workspace",
-            target_id=workspace.id, reason=reason, before=before,
-            after={"is_active": workspace.is_active},
-        )
-        return Response(self._item(workspace))
+        try:
+            action_request, replay = _claim_platform_action(
+                request, action="workspace.suspend", target_type="workspace", target_id=workspace.id,
+                payload={"reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
+        Workspace = apps.get_model("common", "Workspace")
+        with transaction.atomic():
+            workspace = Workspace.objects.select_for_update().select_related("platform_profile__cluster").get(pk=workspace.pk)
+            before = {"is_active": workspace.is_active}
+            suspend_workspace(workspace, initiated_by=request.user, reason=reason)
+            response_body = self._item(workspace)
+            _complete_platform_action(
+                action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+            )
+            record_platform_audit(
+                request=request, action="workspace.suspend", target_type="workspace",
+                target_id=workspace.id, reason=reason, before=before,
+                after={"is_active": workspace.is_active},
+            )
+        return Response(response_body)
 
     @action(detail=True, methods=["post"])
     def resume(self, request, pk=None):
         _confirmed(request)
         reason = _change_reason(request)
         workspace = self._workspace(pk)
-        before = {"is_active": workspace.is_active}
-        resume_workspace(workspace, initiated_by=request.user)
-        record_platform_audit(
-            request=request, action="workspace.resume", target_type="workspace",
-            target_id=workspace.id, reason=reason, before=before,
-            after={"is_active": workspace.is_active},
-        )
-        return Response(self._item(workspace))
+        try:
+            action_request, replay = _claim_platform_action(
+                request, action="workspace.resume", target_type="workspace", target_id=workspace.id,
+                payload={"reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
+        Workspace = apps.get_model("common", "Workspace")
+        with transaction.atomic():
+            workspace = Workspace.objects.select_for_update().select_related("platform_profile__cluster").get(pk=workspace.pk)
+            before = {"is_active": workspace.is_active}
+            resume_workspace(workspace, initiated_by=request.user)
+            response_body = self._item(workspace)
+            _complete_platform_action(
+                action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+            )
+            record_platform_audit(
+                request=request, action="workspace.resume", target_type="workspace",
+                target_id=workspace.id, reason=reason, before=before,
+                after={"is_active": workspace.is_active},
+            )
+        return Response(response_body)
 
     @action(detail=True, methods=["post"])
     def delete(self, request, pk=None):
@@ -718,6 +756,18 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
         WorkspaceOperation = apps.get_model("platform", "WorkspaceOperation")
         Workspace = apps.get_model("common", "Workspace")
         WorkspacePlatformProfile = apps.get_model("platform", "WorkspacePlatformProfile")
+        try:
+            action_request, replay = _claim_platform_action(
+                request, action="workspace.deletion_scheduled", target_type="workspace", target_id=pk,
+                payload={"reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
         with transaction.atomic():
             try:
                 workspace = Workspace.objects.select_for_update().select_related(
@@ -728,7 +778,11 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             profile, _ = WorkspacePlatformProfile.objects.get_or_create(workspace=workspace)
             # A second submit must not silently extend the deletion window.
             if profile.scheduled_deletion_at:
-                return Response(self._item(workspace))
+                response_body = self._item(self._workspace(workspace.id))
+                _complete_platform_action(
+                    action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+                )
+                return Response(response_body)
             before = {"is_active": workspace.is_active, "scheduled_deletion_at": None}
             workspace.is_active = False
             workspace.save(update_fields=["is_active"])
@@ -745,7 +799,11 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             # ``select_related`` can hold a stale one-to-one object when a profile was
             # created through ``get_or_create`` above. Re-read before serializing the
             # response so the UI receives the actual deletion deadline.
-            return Response(self._item(self._workspace(workspace.id)))
+            response_body = self._item(self._workspace(workspace.id))
+            _complete_platform_action(
+                action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+            )
+            return Response(response_body)
 
     @action(detail=True, methods=["post"], url_path="restore")
     def restore(self, request, pk=None):
@@ -753,6 +811,18 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
         _confirmed(request)
         reason = _change_reason(request)
         Workspace = apps.get_model("common", "Workspace")
+        try:
+            action_request, replay = _claim_platform_action(
+                request, action="workspace.deletion_cancelled", target_type="workspace", target_id=pk,
+                payload={"reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
         with transaction.atomic():
             try:
                 workspace = Workspace.objects.select_for_update().select_related(
@@ -762,10 +832,17 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
                 return Response({"detail": "Workspace not found."}, status=status.HTTP_404_NOT_FOUND)
             profile = getattr(workspace, "platform_profile", None)
             if not profile or not profile.scheduled_deletion_at:
-                return Response({
+                response_body = {
                     "detail": "This workspace is not scheduled for deletion.",
                     "code": "workspace_not_scheduled_for_deletion",
-                }, status=status.HTTP_409_CONFLICT)
+                }
+                _complete_platform_action(
+                    action_request,
+                    result="failed",
+                    response_status=status.HTTP_409_CONFLICT,
+                    response_body=response_body,
+                )
+                return Response(response_body, status=status.HTTP_409_CONFLICT)
             scheduled_at = profile.scheduled_deletion_at
             resume_workspace(workspace, initiated_by=request.user)
             record_platform_audit(
@@ -774,7 +851,11 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
                 before={"is_active": False, "scheduled_deletion_at": scheduled_at.isoformat()},
                 after={"is_active": True, "scheduled_deletion_at": None},
             )
-            return Response(self._item(workspace))
+            response_body = self._item(workspace)
+            _complete_platform_action(
+                action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+            )
+            return Response(response_body)
 
     @action(detail=True, methods=["post"])
     def export(self, request, pk=None):

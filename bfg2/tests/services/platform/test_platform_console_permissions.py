@@ -950,6 +950,7 @@ def test_workspace_deletion_schedule_is_idempotent_and_can_be_explicitly_cancell
     deleted = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/delete/",
         {"confirm": True, "reason": "Requested closure"}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="workspace-delete-0001",
     )
     assert deleted.status_code == 200
     scheduled_at = deleted.data["scheduled_deletion_at"]
@@ -958,15 +959,18 @@ def test_workspace_deletion_schedule_is_idempotent_and_can_be_explicitly_cancell
 
     repeated = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/delete/",
-        {"confirm": True, "reason": "Duplicate request"}, format="json",
+        {"confirm": True, "reason": "Requested closure"}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="workspace-delete-0001",
     )
     assert repeated.status_code == 200
+    assert repeated["Idempotent-Replayed"] == "true"
     assert repeated.data["scheduled_deletion_at"] == scheduled_at
     assert PlatformAuditEvent.objects.filter(action="workspace.deletion_scheduled").count() == 1
 
     restored = client.post(
         f"/api/v1/platform/console/workspaces/{workspace.id}/restore/",
         {"confirm": True, "reason": "Keep the workspace"}, format="json",
+        HTTP_X_IDEMPOTENCY_KEY="workspace-restore-0001",
     )
     assert restored.status_code == 200
     assert restored.data["is_active"] is True

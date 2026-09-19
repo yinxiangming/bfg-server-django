@@ -9,7 +9,7 @@ from django.db import transaction
 from django.apps import apps
 from django.utils.text import slugify
 from bfg.core.services import BaseService
-from bfg.common.exceptions import WorkspaceAlreadyExists
+from bfg.common.exceptions import WorkspaceAlreadyExists, WorkspaceCapacityUnavailable
 from bfg.common.models import (
     Workspace,
     StaffRole,
@@ -27,6 +27,49 @@ class WorkspaceService(BaseService):
     Handles workspace creation, updates, and initialization
     """
     
+    def _select_cluster_for_workspace(self, *, cluster, region):
+        """Lock and validate a Cluster before a new profile is assigned to it.
+
+        Allocation is deliberately serialized per eligible Cluster row. Every writer
+        enters through this service, reads the real profile count while the row is
+        locked, then creates its profile in the same transaction. This avoids relying
+        on the legacy ``current_workspaces`` counter for admission decisions.
+        """
+        try:
+            Cluster = apps.get_model('platform', 'Cluster')
+            WorkspacePlatformProfile = apps.get_model('platform', 'WorkspacePlatformProfile')
+        except LookupError:
+            return None
+
+        def has_capacity(candidate):
+            assigned = WorkspacePlatformProfile.objects.filter(cluster_id=candidate.id).count()
+            return candidate.is_active and candidate.is_accepting_new and assigned < candidate.max_workspaces
+
+        if cluster:
+            cluster_id = getattr(cluster, 'id', cluster)
+            try:
+                selected = Cluster.objects.select_for_update().get(pk=cluster_id)
+            except Cluster.DoesNotExist:
+                raise WorkspaceCapacityUnavailable("The requested Cluster does not exist.")
+            if not has_capacity(selected):
+                raise WorkspaceCapacityUnavailable("The requested Cluster is not accepting new workspaces.")
+            return selected
+
+        configured = Cluster.objects.filter(region=region)
+        candidates = Cluster.objects.select_for_update().filter(
+            region=region, is_active=True, is_accepting_new=True,
+        ).order_by('current_workspaces', 'id')
+        for candidate in candidates:
+            if has_capacity(candidate):
+                return candidate
+
+        # Existing embedded/legacy installations can have no Cluster rows at all.
+        # Keep that mode working, but once a region is configured, never bypass a
+        # stopped or full Cluster by creating an unassigned workspace.
+        if configured.exists():
+            raise WorkspaceCapacityUnavailable("No active Cluster in this region has capacity.")
+        return None
+
     @transaction.atomic
     def create_workspace(
         self, 
@@ -60,8 +103,9 @@ class WorkspaceService(BaseService):
         
         # Create workspace
         region = kwargs.pop('region', None)
-        cluster = kwargs.pop('cluster', None)
+        requested_cluster = kwargs.pop('cluster', None)
         legacy_domain = (kwargs.pop('domain', None) or '').strip()[:255]
+        cluster = self._select_cluster_for_workspace(cluster=requested_cluster, region=region)
         workspace = Workspace.objects.create(
             name=name,
             slug=slug,
@@ -94,6 +138,11 @@ class WorkspaceService(BaseService):
             if update_fields:
                 update_fields.append('updated_at')
                 profile.save(update_fields=update_fields)
+            if cluster:
+                # Keep the old display counter in sync, while capacity decisions above
+                # always use the authoritative profile relation.
+                cluster.current_workspaces = WorkspacePlatformProfile.objects.filter(cluster_id=cluster.id).count()
+                cluster.save(update_fields=['current_workspaces', 'updated_at'])
         except LookupError:
             pass
 

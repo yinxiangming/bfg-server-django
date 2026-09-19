@@ -5,6 +5,7 @@ Workspace serializers for Platform views.
 from rest_framework import serializers
 from django.apps import apps
 
+from bfg.common.exceptions import WorkspaceCapacityUnavailable
 from bfg.common.models import normalize_hostname, resolve_workspace_public_frontend_base_url
 
 
@@ -104,12 +105,19 @@ class WorkspaceCreateSerializer(serializers.Serializer):
         from bfg.common.services.workspace_service import WorkspaceService
         service = WorkspaceService(user=user)
 
-        workspace = service.create_workspace(
-            name=validated_data.get('name'),
-            slug=validated_data.get('slug'),
-            owner_user=user,
-            region=region,
-        )
+        try:
+            workspace = service.create_workspace(
+                name=validated_data.get('name'),
+                slug=validated_data.get('slug'),
+                owner_user=user,
+                region=region,
+            )
+        except WorkspaceCapacityUnavailable as exc:
+            # This is expected operational state, not an unhandled service error.
+            raise serializers.ValidationError({
+                'code': exc.default_code,
+                'detail': str(exc),
+            }) from exc
 
         hostname = validated_data.get('domain', '')
         if hostname:

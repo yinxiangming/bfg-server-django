@@ -3,6 +3,8 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 from bfg.common.models import StaffMember, StaffRole, Workspace, WorkspaceDomain
+from bfg.common.exceptions import WorkspaceCapacityUnavailable
+from bfg.common.services.workspace_service import WorkspaceService
 from bfg.platform.models import Cluster, PlatformAuditEvent
 from bfg.platform.models import PlatformMembership, WorkspacePlatformProfile
 from bfg.platform.serializers.workspace import WorkspaceCreateSerializer
@@ -265,6 +267,78 @@ def test_cluster_write_requires_confirmation_and_records_redacted_audit_event():
     assert event.reason == "Create UAT infrastructure"
     assert event.after["redis_configured"] is True
     assert "redis_url" not in event.after
+
+
+@pytest.mark.django_db
+def test_cluster_update_uses_configuration_version_and_stops_allocation_when_inactive():
+    superuser = User.objects.create_superuser(
+        username="cluster-version-root", password="secret", email="root@example.test",
+    )
+    cluster = Cluster.objects.create(
+        id="versioned-cluster", name="Versioned", region="apac",
+        api_base_url="https://api.example.test", db_host="db.example.test",
+        redis_url="rediss://private.example.test/0", s3_bucket="versioned",
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    changed = client.patch(
+        f"/api/v1/platform/console/clusters/{cluster.id}/",
+        {"is_active": False, "expected_version": 1, "confirm": True, "reason": "Maintenance window"},
+        format="json",
+    )
+    assert changed.status_code == 200
+    assert changed.data["config_version"] == 2
+    assert changed.data["is_accepting_new"] is False
+
+    stale = client.patch(
+        f"/api/v1/platform/console/clusters/{cluster.id}/",
+        {"name": "Stale write", "expected_version": 1, "confirm": True, "reason": "Outdated browser tab"},
+        format="json",
+    )
+    assert stale.status_code == 409
+    assert stale.data["code"] == "cluster_version_conflict"
+
+
+@pytest.mark.django_db
+def test_workspace_service_assigns_only_an_eligible_cluster_and_enforces_capacity():
+    user = User.objects.create_user(username="capacity-owner", password="secret")
+    cluster = Cluster.objects.create(
+        id="capacity-cluster", name="Capacity", region="apac",
+        api_base_url="https://api.example.test", frontend_base_url="https://shops.example.test",
+        db_host="db.example.test", redis_url="rediss://private.example.test/0", s3_bucket="capacity",
+        max_workspaces=1,
+    )
+    service = WorkspaceService(workspace=None, user=user)
+
+    first = service.create_workspace(name="Capacity One", slug="capacity-one", owner_user=user, region="apac")
+    first_profile = WorkspacePlatformProfile.objects.get(workspace=first)
+    cluster.refresh_from_db()
+    assert first_profile.cluster_id == cluster.id
+    assert cluster.current_workspaces == 1
+
+    with pytest.raises(WorkspaceCapacityUnavailable):
+        service.create_workspace(name="Capacity Two", slug="capacity-two", owner_user=user, region="apac")
+
+
+@pytest.mark.django_db
+def test_workspace_create_returns_a_safe_capacity_error_instead_of_a_server_error():
+    user = User.objects.create_user(username="capacity-api-owner", password="secret")
+    Cluster.objects.create(
+        id="stopped-cluster", name="Stopped", region="apac",
+        api_base_url="https://api.example.test", db_host="db.example.test",
+        redis_url="rediss://private.example.test/0", s3_bucket="stopped",
+        is_active=False, is_accepting_new=False,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.post("/api/v1/platform/workspaces/", {
+        "name": "Blocked workspace", "slug": "blocked-workspace", "region": "apac",
+    }, format="json")
+
+    assert response.status_code == 400
+    assert response.data["code"] == "workspace_capacity_unavailable"
 
 
 @pytest.mark.django_db

@@ -22,6 +22,7 @@ from bfg.platform.permissions import IsPlatformSuperuser
 from bfg.platform.services.audit_service import record_platform_audit, redact_platform_audit_value
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
 from bfg.platform.utils import is_platform_workspace
+from bfg.common.exceptions import WorkspaceCapacityUnavailable
 from bfg.common.services.workspace_service import WorkspaceService
 from bfg.common.services.user_service import UserService
 
@@ -58,6 +59,7 @@ def _cluster_snapshot(cluster):
         "max_workspaces": cluster.max_workspaces,
         "is_accepting_new": cluster.is_accepting_new,
         "is_active": cluster.is_active,
+        "config_version": cluster.config_version,
     }
 
 
@@ -219,11 +221,17 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         owner_email = str(data.get("owner_email", "")).strip().lower()
         if owner_email:
             owner = User.objects.filter(email__iexact=owner_email).first()
-        workspace = WorkspaceService(user=request.user).create_workspace(
-            name=name, slug=slug, owner_user=owner, email=source.get("email", ""),
-            phone=source.get("phone", ""), settings=source.get("settings") or {},
-            region=(data.get("cluster") or {}).get("region") or "us",
-        )
+        try:
+            workspace = WorkspaceService(user=request.user).create_workspace(
+                name=name, slug=slug, owner_user=owner, email=source.get("email", ""),
+                phone=source.get("phone", ""), settings=source.get("settings") or {},
+                region=(data.get("cluster") or {}).get("region") or "us",
+            )
+        except WorkspaceCapacityUnavailable as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.default_code},
+                status=status.HTTP_409_CONFLICT,
+            )
         record_platform_audit(
             request=request, action="workspace.imported", target_type="workspace",
             target_id=workspace.id, reason=reason, after={"slug": workspace.slug},
@@ -290,6 +298,7 @@ class PlatformConsoleClusterViewSet(viewsets.ViewSet):
             "redis_configured": bool(cluster.redis_url),
             "s3_bucket": cluster.s3_bucket,
             "max_workspaces": max_workspaces,
+            "config_version": cluster.config_version,
             "workspace_count": workspace_count,
             "capacity_percentage": capacity_percentage,
             "is_accepting_new": cluster.is_accepting_new,
@@ -384,25 +393,44 @@ class PlatformConsoleClusterViewSet(viewsets.ViewSet):
         _confirmed(request)
         reason = _change_reason(request)
         try:
-            cluster = self._cluster(pk)
+            expected_version = int(request.data.get("expected_version"))
+        except (TypeError, ValueError):
+            raise ValidationError({"expected_version": "Provide the configuration version you read."})
+        if expected_version < 1:
+            raise ValidationError({"expected_version": "Use a positive configuration version."})
+        try:
+            with transaction.atomic():
+                Cluster = apps.get_model("platform", "Cluster")
+                cluster = Cluster.objects.select_for_update().get(pk=pk)
+                if cluster.config_version != expected_version:
+                    return Response({
+                        "detail": "This Cluster changed while you were editing it. Reload and review the latest configuration.",
+                        "code": "cluster_version_conflict",
+                        "current_version": cluster.config_version,
+                    }, status=status.HTTP_409_CONFLICT)
+                values = self._validated_values(request.data, creating=False)
+                if values.get("is_accepting_new") is True and values.get("is_active", cluster.is_active) is False:
+                    raise ValidationError({"is_accepting_new": "An inactive Cluster cannot accept new workspaces."})
+                if values.get("is_active") is False:
+                    values["is_accepting_new"] = False
+                if "max_workspaces" in values and values["max_workspaces"] < self._workspace_count(cluster):
+                    return Response(
+                        {"detail": "Capacity cannot be below the number of assigned workspaces."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                before = _cluster_snapshot(cluster)
+                for field, value in values.items():
+                    setattr(cluster, field, value)
+                if values:
+                    cluster.config_version += 1
+                    cluster.save(update_fields=[*values.keys(), "config_version", "updated_at"])
+                    record_platform_audit(
+                        request=request, action="cluster.updated", target_type="cluster", target_id=cluster.id,
+                        reason=reason, before=before, after=_cluster_snapshot(cluster),
+                    )
+                return Response(self._item(cluster))
         except apps.get_model("platform", "Cluster").DoesNotExist:
             return Response({"detail": "Cluster not found."}, status=status.HTTP_404_NOT_FOUND)
-        values = self._validated_values(request.data, creating=False)
-        if "max_workspaces" in values and values["max_workspaces"] < self._workspace_count(cluster):
-            return Response(
-                {"detail": "Capacity cannot be below the number of assigned workspaces."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        before = _cluster_snapshot(cluster)
-        for field, value in values.items():
-            setattr(cluster, field, value)
-        if values:
-            cluster.save(update_fields=[*values.keys(), "updated_at"])
-            record_platform_audit(
-                request=request, action="cluster.updated", target_type="cluster", target_id=cluster.id,
-                reason=reason, before=before, after=_cluster_snapshot(cluster),
-            )
-        return Response(self._item(cluster))
 
 
 class PlatformConsoleAuditEventViewSet(viewsets.ViewSet):

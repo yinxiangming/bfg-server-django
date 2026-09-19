@@ -39,6 +39,9 @@ class Cluster(models.Model):
     max_workspaces = models.IntegerField(_("Max Workspaces"), default=500)
     current_workspaces = models.IntegerField(_("Current Workspaces"), default=0)
     is_accepting_new = models.BooleanField(_("Accepting New Workspaces"), default=True)
+    # Bumped for every control-plane configuration mutation. Browser clients submit
+    # the version they read so one administrator cannot silently overwrite another.
+    config_version = models.PositiveIntegerField(_("Configuration Version"), default=1)
 
     # Status
     is_active = models.BooleanField(_("Active"), default=True)

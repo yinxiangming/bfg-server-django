@@ -52,6 +52,48 @@ def test_platform_console_allows_django_superusers(path):
 
 
 @pytest.mark.django_db
+def test_platform_workspace_inventory_is_paginated_and_filterable(settings):
+    settings.PLATFORM_EMBEDDED = True
+    superuser = User.objects.create_superuser(
+        username="inventory-root", password="secret", email="inventory@example.test",
+    )
+    cluster = Cluster.objects.create(
+        id="inventory-cluster", name="Inventory", region="apac",
+        api_base_url="https://api.example.test", db_host="db.example.test",
+        redis_url="rediss://private.example.test/0", s3_bucket="inventory",
+    )
+    active = _embedded_workspace_member(superuser, slug="inventory-active")
+    active_second = _embedded_workspace_member(superuser, slug="inventory-active-second")
+    suspended = _embedded_workspace_member(superuser, slug="inventory-suspended")
+    inactive = _embedded_workspace_member(superuser, slug="inventory-inactive")
+    for workspace in (active, active_second, suspended, inactive):
+        profile = WorkspacePlatformProfile.objects.get(workspace=workspace)
+        profile.cluster = cluster
+        profile.save(update_fields=["cluster", "updated_at"])
+    suspended_profile = WorkspacePlatformProfile.objects.get(workspace=suspended)
+    from django.utils import timezone
+    suspended_profile.suspended_at = timezone.now()
+    suspended_profile.save(update_fields=["suspended_at", "updated_at"])
+    inactive.is_active = False
+    inactive.save(update_fields=["is_active"])
+
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+    first = client.get("/api/v1/platform/console/workspaces/?page_size=1&status=active&cluster=inventory-cluster")
+
+    assert first.status_code == 200
+    assert first.data["count"] == 2
+    assert len(first.data["results"]) == 1
+    assert first.data["next"]
+    second = client.get(first.data["next"])
+    assert second.status_code == 200
+    assert len(second.data["results"]) == 1
+    assert {first.data["results"][0]["id"], second.data["results"][0]["id"]} == {active.id, active_second.id}
+    assert second.data["next"] is None
+    assert client.get("/api/v1/platform/console/workspaces/?status=unknown").status_code == 400
+
+
+@pytest.mark.django_db
 def test_platform_console_capability_is_not_granted_by_staff_flag():
     staff_user = User.objects.create_user(
         username="staff-only", password="secret", is_staff=True,

@@ -15,6 +15,7 @@ from django.utils import dateparse, timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -68,6 +69,14 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
     """Cross-workspace management for platform administrators only."""
 
     permission_classes = [IsAuthenticated, IsPlatformSuperuser]
+
+    class Pagination(LimitOffsetPagination):
+        """Bounded, explicit pagination for the cross-tenant inventory."""
+        default_limit = 100
+        max_limit = 500
+        limit_query_param = "page_size"
+
+    _STATUS_FILTERS = {"active", "suspended", "inactive"}
 
     def _workspace(self, pk):
         Workspace = apps.get_model("common", "Workspace")
@@ -130,9 +139,26 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         queryset = Workspace.objects.select_related("platform_profile__cluster").order_by("-created_at")
         term = (request.query_params.get("search") or "").strip()
         if term:
-            from django.db.models import Q
             queryset = queryset.filter(Q(name__icontains=term) | Q(slug__icontains=term))
-        return Response([self._item(workspace) for workspace in queryset[:500]])
+        status_filter = (request.query_params.get("status") or "").strip()
+        if status_filter:
+            if status_filter not in self._STATUS_FILTERS:
+                raise ValidationError({"status": "Use active, suspended, or inactive."})
+            if status_filter == "active":
+                queryset = queryset.filter(is_active=True, platform_profile__suspended_at__isnull=True)
+            elif status_filter == "suspended":
+                queryset = queryset.filter(platform_profile__suspended_at__isnull=False)
+            else:
+                queryset = queryset.filter(is_active=False, platform_profile__suspended_at__isnull=True)
+        cluster_id = (request.query_params.get("cluster") or "").strip()
+        if len(cluster_id) > 32:
+            raise ValidationError({"cluster": "Use a Cluster ID of 32 characters or fewer."})
+        if cluster_id:
+            queryset = queryset.filter(platform_profile__cluster_id=cluster_id)
+
+        paginator = self.Pagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        return paginator.get_paginated_response([self._item(workspace) for workspace in page])
 
     def retrieve(self, request, pk=None):
         try:

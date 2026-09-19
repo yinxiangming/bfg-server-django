@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from unittest.mock import patch
@@ -644,6 +645,27 @@ def test_runtime_entitlement_enables_batch_management_and_can_be_revoked(setting
     assert repeated.status_code == 200
     assert repeated["Idempotent-Replayed"] == "true"
     assert PlatformAuditEvent.objects.filter(action="workspace.entitlement_revoked").count() == 1
+
+
+@pytest.mark.django_db
+def test_expired_runtime_entitlement_no_longer_enables_batch_management(settings):
+    settings.BFG2_SETTINGS = {
+        **getattr(settings, "BFG2_SETTINGS", {}),
+        "ENABLE_BATCH_MANAGEMENT": False,
+    }
+    workspace = Workspace.objects.create(
+        name="Expired Grant", slug="expired-grant", is_active=True,
+    )
+    WorkspacePlatformProfile.objects.create(workspace=workspace, region="apac")
+    Entitlement = apps.get_model("platform", "WorkspaceEntitlement")
+    Entitlement.objects.create(
+        workspace=workspace,
+        key="batch_management",
+        current_period_end=timezone.now() - timedelta(seconds=1),
+        reason="Expired migration allowance",
+    )
+
+    assert is_batch_management_enabled(workspace) is False
 
 
 @pytest.mark.django_db

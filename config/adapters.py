@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
 from allauth.account.adapter import DefaultAccountAdapter
-from allauth.account.utils import get_current_site
 from django.conf import settings
+from django.contrib.sites.shortcuts import get_current_site
 
 
 class ClusterAccountAdapter(DefaultAccountAdapter):

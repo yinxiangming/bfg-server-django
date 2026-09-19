@@ -49,6 +49,17 @@ turning an ordinary workspace owner into a deployment administrator.
 - [ ] Add a deployment health dashboard based on stored observations, rather
       than browser-side probes.
 
+### Placement implementation gate
+
+Do not represent a live workspace migration as a direct update of
+`WorkspacePlatformProfile.cluster`. The current deployment has no authenticated,
+phase-idempotent data-plane adapter for copying, verifying, cutting over, and
+compensating tenant data between Clusters. A safe implementation must first add
+a superuser-only placement operation with capacity reservations, ordered progress
+events, a fencing version on the workspace profile, and an explicit rollback
+window. Until that adapter exists, a requested live migration must fail clearly
+rather than claim that the workspace moved.
+
 ## P3: Policy, billing, and extensions
 
 - [x] Preserve existing variable, meter-price, exchange-rate, cap, and runtime
@@ -72,6 +83,20 @@ turning an ordinary workspace owner into a deployment administrator.
       works, but every `/control/` endpoint returns 403.
 - [ ] Run and verify database migrations from the current deployment schema.
 - [ ] Promote only as part of the agreed larger production release.
+
+### Verification record (2026-09-20)
+
+- Current local BFG suite: `2046 passed, 22 subtests passed`.
+- UAT server-layer smoke used existing persisted accounts without changing data:
+  the Django superuser received 200 from the workspace, Cluster, and audit
+  control reads; an existing workspace owner received 200 from the established
+  owner console and 403 from the control route.
+- The public UAT health document returns `{"status":"ok"}`, and UAT reports no
+  pending migrations. The Cluster health UI route is covered by a local
+  route-level regression and remains in the next batched release until its PR
+  is merged.
+- These checks do not replace a browser-login E2E path. Keep the two UAT
+  smoke items above open until that final UI-level verification is performed.
 
 ## Non-goals
 

@@ -994,6 +994,37 @@ def test_workspace_import_requires_an_active_owner_and_supported_format():
 
 
 @pytest.mark.django_db
+def test_workspace_import_does_not_expose_cluster_capacity_failure_details():
+    superuser = User.objects.create_superuser(
+        username="import-capacity-root", password="secret", email="root-capacity@example.test",
+    )
+    owner = User.objects.create_user(
+        username="import-capacity-owner", password="secret", email="owner-capacity@example.test",
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    with patch(
+        "bfg.platform.views.console_views.WorkspaceService.create_workspace",
+        side_effect=WorkspaceCapacityUnavailable("The internal Cluster allocator is unavailable."),
+    ):
+        response = client.post("/api/v1/platform/console/workspaces/import-workspace/", {
+            "format": "idlevo-workspace-v1",
+            "workspace": {"name": "Capacity import", "slug": "capacity-import"},
+            "owner_email": owner.email,
+            "confirm": True,
+            "reason": "Capacity import regression",
+        }, format="json")
+
+    assert response.status_code == 409
+    assert response.data == {
+        "detail": "No Cluster has capacity for this workspace",
+        "code": "workspace_capacity_unavailable",
+    }
+    assert "internal Cluster allocator" not in response.data["detail"]
+
+
+@pytest.mark.django_db
 @patch("bfg.platform.views.console_views.UserService.request_password_reset", return_value=True)
 def test_password_reset_uses_standalone_platform_owner_and_only_that_owner(mock_reset, settings):
     settings.PLATFORM_EMBEDDED = False

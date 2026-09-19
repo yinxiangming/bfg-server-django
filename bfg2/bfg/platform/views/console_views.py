@@ -805,9 +805,12 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
                 region=(cluster.region if cluster else cluster_data.get("region")) or "us",
                 cluster=cluster,
             )
-        except WorkspaceCapacityUnavailable as exc:
+        except WorkspaceCapacityUnavailable:
             return Response(
-                {"detail": str(exc), "code": exc.default_code},
+                {
+                    "detail": WorkspaceCapacityUnavailable.default_message,
+                    "code": WorkspaceCapacityUnavailable.default_code,
+                },
                 status=status.HTTP_409_CONFLICT,
             )
         WorkspaceDomain.objects.bulk_create([

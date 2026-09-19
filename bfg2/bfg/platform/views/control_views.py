@@ -704,6 +704,29 @@ class PlatformControlClusterViewSet(PlatformControlAccessViewSet):
     def retrieve(self, request, pk=None):
         return Response(self._item(self._cluster(pk)))
 
+    @action(detail=True, methods=["get"], url_path="health-observations")
+    def health_observations(self, request, pk=None):
+        """Return recent server-side probe results without response bodies."""
+        try:
+            limit = int(request.query_params.get("limit", 20))
+        except (TypeError, ValueError) as exc:
+            raise ValidationError({"limit": "Use a whole number between 1 and 100."}) from exc
+        if not 1 <= limit <= 100:
+            raise ValidationError({"limit": "Use a whole number between 1 and 100."})
+        cluster = self._cluster(pk)
+        Observation = apps.get_model("platform", "ClusterHealthObservation")
+        rows = Observation.objects.filter(cluster=cluster).select_related("observed_by")[:limit]
+        return Response([
+            {
+                "id": row.id,
+                "health_status": row.health_status,
+                "http_status": row.http_status,
+                "outcome": row.outcome,
+                "observed_at": row.observed_at,
+            }
+            for row in rows
+        ])
+
     def create(self, request):
         require_confirmation(request)
         reason = require_reason(request)
@@ -793,19 +816,44 @@ class PlatformControlClusterViewSet(PlatformControlAccessViewSet):
             probe = probe_cluster_health(cluster)
         except ClusterHealthProbeConfigurationError:
             body = {"detail": "Cluster health probes are not configured for this endpoint.", "code": "cluster_health_probe_unavailable"}
-            complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+            Cluster = apps.get_model("platform", "Cluster")
+            Observation = apps.get_model("platform", "ClusterHealthObservation")
+            with transaction.atomic():
+                locked = Cluster.objects.select_for_update().get(pk=cluster.pk)
+                Observation.objects.create(
+                    cluster=locked, health_status="unknown", outcome="configuration_unavailable",
+                    observed_by=request.user,
+                )
+                complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+                record_control_audit(
+                    request=request, action="cluster.health_checked", target_type="cluster", target_id=locked.id,
+                    reason=reason, after={"outcome": "configuration_unavailable"}, result="failed",
+                )
             return Response(body, status=status.HTTP_409_CONFLICT)
         Cluster = apps.get_model("platform", "Cluster")
+        Observation = apps.get_model("platform", "ClusterHealthObservation")
         with transaction.atomic():
             locked = Cluster.objects.select_for_update().get(pk=cluster.pk)
             if locked.config_version != cluster.config_version:
                 body = {"detail": "This Cluster changed while its health check was running. Reload and try again.", "code": "cluster_version_conflict", "current_version": locked.config_version}
+                Observation.objects.create(
+                    cluster=locked, health_status=probe.health_status, http_status=probe.http_status,
+                    outcome="configuration_changed", observed_by=request.user,
+                )
                 complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+                record_control_audit(
+                    request=request, action="cluster.health_checked", target_type="cluster", target_id=locked.id,
+                    reason=reason, after={"outcome": "configuration_changed"}, result="failed",
+                )
                 return Response(body, status=status.HTTP_409_CONFLICT)
             before = {"health_status": locked.health_status, "last_health_check": locked.last_health_check}
             locked.health_status = probe.health_status
             locked.last_health_check = timezone.now()
             locked.save(update_fields=["health_status", "last_health_check", "updated_at"])
+            Observation.objects.create(
+                cluster=locked, health_status=probe.health_status, http_status=probe.http_status,
+                observed_by=request.user,
+            )
             body = self._item(locked)
             complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
             record_control_audit(

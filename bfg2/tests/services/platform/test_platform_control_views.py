@@ -4,7 +4,7 @@ from rest_framework.test import APIClient
 
 from bfg.common.models import Workspace
 from bfg.finance.models import Currency
-from bfg.platform.models import Cluster, PlatformAuditEvent
+from bfg.platform.models import Cluster, ClusterHealthObservation, PlatformAuditEvent
 from bfg.platform.models.workspace_profile import WorkspacePlatformProfile
 from bfg.platform.services.cluster_health import (
     ClusterHealthProbeConfigurationError,
@@ -193,6 +193,38 @@ def test_cluster_health_check_is_registered_on_the_cluster_route(monkeypatch):
     cluster.refresh_from_db()
     assert cluster.health_status == "healthy"
     assert PlatformAuditEvent.objects.filter(action="cluster.health_checked", target_id=cluster.id).exists()
+    observation = ClusterHealthObservation.objects.get(cluster=cluster)
+    assert observation.health_status == "healthy"
+    assert observation.http_status == 200
+    history = client_for(superuser).get(f"{CONTROL}clusters/{cluster.id}/health-observations/?limit=5")
+    assert history.status_code == 200
+    assert history.data[0]["outcome"] == "checked"
+
+
+def test_cluster_health_configuration_refusal_is_observed_and_audited(settings):
+    settings.CLUSTER_HEALTH_ALLOWED_HOSTS = []
+    cluster = Cluster.objects.create(
+        id="unavailable",
+        name="Unavailable",
+        region="apac",
+        api_base_url="https://api-uat.example.test",
+        db_host="db.example.test",
+        redis_url="rediss://platform-secret@example.test:6379/0",
+        s3_bucket="uat-workspaces",
+    )
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+
+    response = client_for(superuser).post(
+        f"{CONTROL}clusters/{cluster.id}/health-check/",
+        {"confirm": True, "reason": "The health allowlist has not been configured"},
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="health-key-0002",
+    )
+
+    assert response.status_code == 409
+    assert response.data["code"] == "cluster_health_probe_unavailable"
+    assert ClusterHealthObservation.objects.get(cluster=cluster).outcome == "configuration_unavailable"
+    assert PlatformAuditEvent.objects.filter(action="cluster.health_checked", result="failed").exists()
 
 
 def test_configuration_only_workspace_import_creates_pending_domains():

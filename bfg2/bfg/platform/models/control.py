@@ -74,3 +74,39 @@ class PlatformControlActionRequest(models.Model):
                 name="platform_control_request_key",
             ),
         ]
+
+
+class ClusterHealthObservation(models.Model):
+    """One redaction-safe result from a server-side Cluster health probe."""
+
+    OUTCOME_CHECKED = "checked"
+    OUTCOME_CONFIGURATION_UNAVAILABLE = "configuration_unavailable"
+    OUTCOME_CONFIGURATION_CHANGED = "configuration_changed"
+    OUTCOME_CHOICES = [
+        (OUTCOME_CHECKED, "Checked"),
+        (OUTCOME_CONFIGURATION_UNAVAILABLE, "Configuration unavailable"),
+        (OUTCOME_CONFIGURATION_CHANGED, "Configuration changed"),
+    ]
+
+    cluster = models.ForeignKey(
+        "platform.Cluster",
+        on_delete=models.PROTECT,
+        related_name="health_observations",
+    )
+    health_status = models.CharField(max_length=20)
+    http_status = models.PositiveSmallIntegerField(null=True, blank=True)
+    outcome = models.CharField(max_length=32, choices=OUTCOME_CHOICES, default=OUTCOME_CHECKED)
+    observed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="cluster_health_observations",
+    )
+    observed_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        ordering = ["-observed_at", "-id"]
+        indexes = [
+            models.Index(fields=["cluster", "-observed_at"], name="plat_cluster_health_obs_idx"),
+        ]

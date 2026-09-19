@@ -128,11 +128,22 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
         search = self.request.query_params.get('search', '') if self.action == 'list' else ''
         status = (self.request.query_params.get('status', '') if self.action == 'list' else '').strip()
         cluster = (self.request.query_params.get('cluster', '') if self.action == 'list' else '').strip()
+        unassigned = (self.request.query_params.get('unassigned', '') if self.action == 'list' else '').strip()
         if status and status not in CONSOLE_WORKSPACE_STATUSES:
             raise ValidationError({'status': 'Use active, suspended, inactive, or scheduled_for_deletion.'})
         if len(cluster) > 32:
             raise ValidationError({'cluster': 'Use a Cluster ID of 32 characters or fewer.'})
-        return console_workspaces(self.viewer, search, status=status, cluster=cluster)
+        if unassigned not in ('', 'true', 'false'):
+            raise ValidationError({'unassigned': 'Use true or false.'})
+        if cluster and unassigned == 'true':
+            raise ValidationError({'cluster': 'Choose a Cluster or unassigned workspaces, not both.'})
+        return console_workspaces(
+            self.viewer,
+            search,
+            status=status,
+            cluster=cluster,
+            unassigned=unassigned == 'true',
+        )
 
     def get_object(self):
         # The queryset holds only what the caller reaches, so a workspace outside it

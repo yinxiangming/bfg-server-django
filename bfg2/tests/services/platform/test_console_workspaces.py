@@ -248,7 +248,7 @@ def test_console_workspace_entry_includes_a_pending_deletion_deadline(operator, 
     assert response.data['scheduled_deletion_at'] == profile.scheduled_deletion_at
 
 
-def test_platform_workspace_list_filters_scheduled_deletion_and_cluster(operator, shop):
+def test_platform_workspace_list_filters_scheduled_deletion_and_cluster(operator, shop, platform_workspace):
     cluster = Cluster.objects.create(
         id='apac-1', name='APAC 1', region='apac', api_base_url='https://api.example.test',
         db_host='db.example.test', redis_url='rediss://redis.example.test', s3_bucket='apac-1',
@@ -268,6 +268,19 @@ def test_platform_workspace_list_filters_scheduled_deletion_and_cluster(operator
     assert [row['id'] for row in rows(by_status)] == [scheduled.id]
     assert by_cluster.status_code == 200
     assert {row['id'] for row in rows(by_cluster)} == {scheduled.id, shop.id}
+    assert all(row['cluster'] == {
+        'id': 'apac-1', 'name': 'APAC 1', 'region': 'apac', 'is_active': True,
+    } for row in rows(by_cluster))
+
+    unassigned = client_for(operator).get(f'{CONSOLE}?unassigned=true')
+
+    assert unassigned.status_code == 200
+    assert {row['id'] for row in rows(unassigned)} == {platform_workspace.id}
+    assert rows(unassigned)[0]['cluster'] is None
+
+    invalid = client_for(operator).get(f'{CONSOLE}?cluster=apac-1&unassigned=true')
+
+    assert invalid.status_code == 400
 
 
 @pytest.mark.parametrize(
@@ -344,6 +357,7 @@ def test_the_list_shows_every_workspace_whoever_its_staff_are(operator, shop):
         'owned_by_viewer': False,
         'staff_count': 2,
         'active_extensions': ['review_insights', 'reviews'],
+        'cluster': None,
     }
     # A Django superuser does not need a tenant StaffMember row to operate the
     # control plane, so it is intentionally not counted as platform workspace staff.

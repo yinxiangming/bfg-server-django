@@ -82,15 +82,24 @@ class ConsoleViewer:
 CONSOLE_WORKSPACE_STATUSES = frozenset({"active", "suspended", "inactive", "scheduled_for_deletion"})
 
 
-def console_workspaces(viewer: ConsoleViewer, search: str = "", *, status: str = "", cluster: str = ""):
+def console_workspaces(
+    viewer: ConsoleViewer,
+    search: str = "",
+    *,
+    status: str = "",
+    cluster: str = "",
+    unassigned: bool = False,
+):
     """The workspaces *viewer* reaches, newest first.
 
     Every workspace for a platform administrator, and the ones they own for anyone
     else. *search* keeps those whose name or slug contains it, in any case.
-    *status* and *cluster* only narrow that already-authorized set.
+    *status*, *cluster*, and *unassigned* only narrow that already-authorized
+    set. An unassigned filter includes legacy workspaces without a profile as
+    well as profiles whose Cluster is empty.
     """
     Workspace = apps.get_model("common", "Workspace")
-    workspaces = Workspace.objects.select_related("platform_profile").order_by("-created_at", "-id")
+    workspaces = Workspace.objects.select_related("platform_profile__cluster").order_by("-created_at", "-id")
     if not viewer.is_platform_admin:
         workspaces = workspaces.filter(pk__in=viewer.owned_ids)
     search = (search or "").strip()
@@ -117,6 +126,8 @@ def console_workspaces(viewer: ConsoleViewer, search: str = "", *, status: str =
         )
     if cluster:
         workspaces = workspaces.filter(platform_profile__cluster_id=cluster)
+    elif unassigned:
+        workspaces = workspaces.filter(platform_profile__cluster__isnull=True)
     return workspaces
 
 
@@ -153,6 +164,7 @@ def workspace_entries(workspaces, viewer: ConsoleViewer) -> list:
             "owned_by_viewer": workspace.pk in viewer.owned_ids,
             "staff_count": staff_counts.get(workspace.pk, 0),
             "active_extensions": extension_keys.get(workspace.pk, []),
+            "cluster": _cluster_summary(workspace),
         }
         for workspace in workspaces
     ]
@@ -166,6 +178,19 @@ def _suspended_at(workspace):
 def _scheduled_deletion_at(workspace):
     profile = getattr(workspace, "platform_profile", None)
     return profile.scheduled_deletion_at if profile else None
+
+
+def _cluster_summary(workspace):
+    profile = getattr(workspace, "platform_profile", None)
+    cluster = getattr(profile, "cluster", None) if profile else None
+    if not cluster:
+        return None
+    return {
+        "id": cluster.id,
+        "name": cluster.name,
+        "region": cluster.region,
+        "is_active": cluster.is_active,
+    }
 
 
 def _active_staff_counts(ids) -> dict:

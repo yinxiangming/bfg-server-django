@@ -283,6 +283,7 @@ def test_workspace_import_refuses_a_cluster_that_is_not_accepting_new_workspaces
     assert response.status_code == 409
     assert response.data["code"] == "workspace_cluster_unavailable"
     assert not Workspace.objects.filter(slug="closed-cluster-shop").exists()
+    assert PlatformAuditEvent.objects.filter(action="workspace.imported", result="failed").exists()
 
 
 def test_cluster_health_target_is_allowlisted_and_never_uses_an_ip_literal(settings):

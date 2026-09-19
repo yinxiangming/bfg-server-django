@@ -567,6 +567,10 @@ class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
             except WorkspaceClusterUnavailable as exc:
                 body = {"detail": "The selected Cluster is not accepting new workspaces.", "code": exc.code}
                 complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+                record_control_audit(
+                    request=request, action="workspace.imported", target_type="workspace", target_id="new",
+                    reason=reason, after={"cluster_id": cluster_id or None, "code": exc.code}, result="failed",
+                )
                 return Response(body, status=status.HTTP_409_CONFLICT)
             WorkspaceDomain.objects.bulk_create([
                 WorkspaceDomain(

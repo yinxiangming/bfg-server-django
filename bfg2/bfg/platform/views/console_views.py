@@ -473,6 +473,34 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         payload["extensions"] = []
         return Response(payload)
 
+    @action(detail=True, methods=["get"])
+    def operations(self, request, pk=None):
+        """Return recent lifecycle operations without leaking worker exception text."""
+        workspace = self._workspace(pk)
+        try:
+            limit = int(request.query_params.get("limit", 20))
+        except (TypeError, ValueError):
+            raise ValidationError({"limit": "Use a whole number between 1 and 100."})
+        if not 1 <= limit <= 100:
+            raise ValidationError({"limit": "Use a whole number between 1 and 100."})
+        WorkspaceOperation = apps.get_model("platform", "WorkspaceOperation")
+        operations = WorkspaceOperation.objects.filter(workspace=workspace).select_related("initiated_by")[:limit]
+        return Response([
+            {
+                "id": str(operation.id),
+                "operation": operation.operation,
+                "status": operation.status,
+                "initiated_by": _changer(operation.initiated_by),
+                "details": redact_platform_audit_value(operation.details or {}),
+                # Background task exceptions can carry infrastructure values; leave the
+                # detailed diagnosis to secured server logs rather than a browser API.
+                "error": "Operation failed. Inspect secured server logs." if operation.status == "failed" else None,
+                "started_at": operation.started_at,
+                "completed_at": operation.completed_at,
+            }
+            for operation in operations
+        ])
+
     @action(detail=True, methods=["post"])
     def suspend(self, request, pk=None):
         _confirmed(request)

@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from unittest.mock import patch
 from rest_framework.test import APIClient
 
@@ -7,7 +10,7 @@ from bfg.common.models import StaffMember, StaffRole, Workspace, WorkspaceDomain
 from bfg.finance.models import Currency, ExchangeRate
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
 from bfg.common.services.workspace_service import WorkspaceService
-from bfg.platform.models import Cluster, PlatformAuditEvent, PlatformMeterPrice
+from bfg.platform.models import Cluster, PlatformAuditEvent, PlatformMeterPrice, WorkspaceOperation
 from bfg.platform.models import PlatformMembership, WorkspacePlatformProfile
 from bfg.platform.serializers.workspace import WorkspaceCreateSerializer
 from bfg.platform.services.workspace_service import is_platform_admin
@@ -321,6 +324,54 @@ def test_superuser_can_set_workspace_usage_cap_and_grant_once():
     )
     assert duplicate.status_code == 409
     assert duplicate.data["code"] == "already_entitled"
+
+
+@pytest.mark.django_db
+def test_platform_superuser_can_read_workspace_operations_without_worker_error_text():
+    superuser = User.objects.create_superuser(
+        username="operations-root", password="secret", email="operations@example.test",
+    )
+    workspace = Workspace.objects.create(name="Operations Workspace", slug="operations-workspace", is_active=True)
+    WorkspacePlatformProfile.objects.create(workspace=workspace, region="apac")
+    failed = WorkspaceOperation.objects.create(
+        workspace=workspace, operation="migrate", status="failed", initiated_by=superuser,
+        details={"target_cluster": "uat-apac", "redis_url": "rediss://private.example.test/0"},
+        error_message="Could not reach redis://private.example.test/0 with secret=sensitive",
+        started_at=timezone.now() - timedelta(minutes=1),
+    )
+    completed = WorkspaceOperation.objects.create(
+        workspace=workspace, operation="suspend", status="completed", initiated_by=superuser,
+        details={"reason": "Maintenance window"},
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    response = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/operations/?limit=1")
+
+    assert response.status_code == 200
+    assert response.data[0]["id"] == str(completed.id)
+    assert response.data[0]["error"] is None
+    all_operations = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/operations/?limit=2")
+    assert all_operations.status_code == 200
+    failed_item = next(item for item in all_operations.data if item["id"] == str(failed.id))
+    assert failed_item["details"]["redis_url"] == "[redacted]"
+    assert failed_item["error"] == "Operation failed. Inspect secured server logs."
+    assert "secret" not in str(failed_item)
+
+
+@pytest.mark.django_db
+def test_platform_workspace_operations_refuse_non_superusers():
+    superuser = User.objects.create_superuser(
+        username="operations-owner", password="secret", email="operations-owner@example.test",
+    )
+    workspace = _embedded_workspace_member(superuser, slug="operations-private")
+    tenant_admin = User.objects.create_user(username="operations-tenant", password="secret", is_staff=True)
+    client = APIClient()
+    client.force_authenticate(user=tenant_admin)
+
+    response = client.get(f"/api/v1/platform/console/workspaces/{workspace.id}/operations/")
+
+    assert response.status_code == 403
 
 
 @pytest.mark.django_db

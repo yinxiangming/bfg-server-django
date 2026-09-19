@@ -38,6 +38,9 @@ turning an ordinary workspace owner into a deployment administrator.
 
 ### Deletion retention implementation gate
 
+The required archive, restore, and purge adapter contract is documented in
+[`platform-data-plane-adapter-contract.md`](platform-data-plane-adapter-contract.md).
+
 Do not implement this worker as ``workspace.delete()``. A scheduled deletion is
 recoverable until the Platform has a complete per-workspace archive: database
 rows, private media inventory, a versioned manifest, a verified read-back, and
@@ -67,6 +70,10 @@ and verification boundary; it must not be inferred from database cascades.
       than browser-side probes.
 
 ### Placement implementation gate
+
+The required data-plane migration phases, fencing semantics, and release gates
+are documented in
+[`platform-data-plane-adapter-contract.md`](platform-data-plane-adapter-contract.md).
 
 Do not represent a live workspace migration as a direct update of
 `WorkspacePlatformProfile.cluster`. The current deployment has no authenticated,

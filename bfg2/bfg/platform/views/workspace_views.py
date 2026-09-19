@@ -7,12 +7,15 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.exceptions import ValidationError
 from django.apps import apps
 
 from bfg.platform.services.workspace_service import get_user_workspaces, is_platform_admin
 from bfg.platform.services.provision_service import provision_workspace, suspend_workspace, resume_workspace
 from bfg.platform.services.subscription_service import SubscriptionService
-from bfg.platform.permissions import IsWorkspaceOwner, IsPlatformAdmin
+from bfg.platform.permissions import IsPlatformSuperuser
+from bfg.platform.services.audit_service import record_platform_audit
+from bfg.platform.utils import is_embedded_mode
 from bfg.platform.serializers.workspace import (
     WorkspaceListSerializer,
     WorkspaceCreateSerializer,
@@ -32,14 +35,19 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     update: PATCH /api/v1/platform/workspaces/{id}/
 
     @actions:
-      POST /api/v1/platform/workspaces/{id}/suspend/
-      POST /api/v1/platform/workspaces/{id}/resume/
+      POST /api/v1/platform/workspaces/{id}/suspend/  — Django superuser only
+      POST /api/v1/platform/workspaces/{id}/resume/   — Django superuser only
       GET  /api/v1/platform/workspaces/{id}/subscription/
       POST /api/v1/platform/workspaces/{id}/checkout/
       GET  /api/v1/platform/me/                        — my workspaces + platform admin flag
     """
     permission_classes = [IsAuthenticated]
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
+
+    def get_permissions(self):
+        if self.action in ('suspend', 'resume'):
+            return [IsAuthenticated(), IsPlatformSuperuser()]
+        return super().get_permissions()
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -49,14 +57,21 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         return WorkspaceListSerializer
 
     def get_queryset(self):
-        StaffMember = apps.get_model('common', 'StaffMember')
         Workspace = apps.get_model('common', 'Workspace')
-        # Cross-workspace lookup — must use ``all_objects`` so the platform
-        # endpoint sees every workspace the user belongs to, not just the
-        # one bound to the current request.
-        workspace_ids = StaffMember.all_objects.filter(
-            user=self.request.user, is_active=True,
-        ).values_list('workspace_id', flat=True)
+        if is_embedded_mode():
+            StaffMember = apps.get_model('common', 'StaffMember')
+            # Cross-workspace lookup — use the unscoped manager so membership
+            # is independent of the tenant currently bound to the request.
+            workspace_ids = StaffMember.all_objects.filter(
+                user=self.request.user, is_active=True,
+            ).values_list('workspace_id', flat=True)
+        else:
+            PlatformMembership = apps.get_model('platform', 'PlatformMembership')
+            workspace_ids = PlatformMembership.objects.filter(
+                user=self.request.user,
+                is_active=True,
+                profile__workspace__isnull=False,
+            ).values_list('profile__workspace_id', flat=True)
         # Newest first so freshly-provisioned workspaces appear on page 1
         # without the caller having to paginate or sort. The Workspace
         # model defaults to ordering by ``name`` (alphabetical) which is
@@ -73,30 +88,61 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
     # ── Custom actions ───────────────────────────────────────────────────
 
+    @staticmethod
+    def _control_reason(request):
+        if request.data.get('confirm') is not True:
+            raise ValidationError({'confirm': 'confirm=true is required.'})
+        reason = str(request.data.get('reason') or '').strip()
+        if len(reason) < 3:
+            raise ValidationError({'reason': 'Provide a change reason of at least 3 characters.'})
+        return reason[:500]
+
     @action(detail=False, methods=['get'], url_path='me')
     def me(self, request):
         """GET /api/v1/platform/workspaces/me/ — current user's workspace list."""
+        is_platform_superuser = is_platform_admin(request.user)
         return Response({
             'workspaces': get_user_workspaces(request.user),
-            'is_platform_admin': is_platform_admin(request.user),
+            # Keep the former field for deployed clients while they migrate. Both values
+            # deliberately mean Django-superuser control-plane access, not a tenant role.
+            'is_platform_superuser': is_platform_superuser,
+            'is_platform_admin': is_platform_superuser,
+            'platform_capabilities': {
+                'cluster_management': is_platform_superuser,
+                'configuration': False,
+            },
         })
 
     @action(detail=True, methods=['post'])
     def suspend(self, request, pk=None):
         """POST /api/v1/platform/workspaces/{id}/suspend/"""
+        reason = self._control_reason(request)
         workspace = self.get_object()
+        before = {'is_active': workspace.is_active}
         suspend_workspace(
             workspace,
             initiated_by=request.user,
-            reason=request.data.get('reason', ''),
+            reason=reason,
+        )
+        record_platform_audit(
+            request=request, action='workspace.suspend', target_type='workspace',
+            target_id=workspace.id, reason=reason, before=before,
+            after={'is_active': workspace.is_active},
         )
         return Response({'status': 'suspended'})
 
     @action(detail=True, methods=['post'])
     def resume(self, request, pk=None):
         """POST /api/v1/platform/workspaces/{id}/resume/"""
+        reason = self._control_reason(request)
         workspace = self.get_object()
+        before = {'is_active': workspace.is_active}
         resume_workspace(workspace, initiated_by=request.user)
+        record_platform_audit(
+            request=request, action='workspace.resume', target_type='workspace',
+            target_id=workspace.id, reason=reason, before=before,
+            after={'is_active': workspace.is_active},
+        )
         return Response({'status': 'active'})
 
     @action(detail=True, methods=['get'])

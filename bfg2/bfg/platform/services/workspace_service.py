@@ -33,10 +33,13 @@ def get_user_workspaces(user) -> list:
 
 
 def is_platform_admin(user) -> bool:
-    """Check if a user has platform admin access."""
-    if is_embedded_mode():
-        return _is_platform_admin_embedded(user)
-    return _is_platform_admin_standalone(user)
+    """Compatibility name for the console capability exposed to the client.
+
+    The Platform console is an infrastructure control plane, so this must never
+    inherit a tenant-level role. Keep the public response name stable while the
+    frontend migrates from ``is_platform_admin`` to ``is_platform_superuser``.
+    """
+    return bool(getattr(user, "is_superuser", False))
 
 
 # ── Embedded mode ─────────────────────────────────────────────────────────────
@@ -72,23 +75,12 @@ def _get_user_workspaces_embedded(user) -> list:
             "status": "active" if ws.is_active else "suspended",
             "region": None,
             "cluster": None,
+            "capabilities": {
+                "extension_management": False,
+                "usage": False,
+            },
         })
     return result
-
-
-def _is_platform_admin_embedded(user) -> bool:
-    """Embedded: user is admin of the management Workspace."""
-    from bfg.platform.utils import get_platform_workspace
-
-    platform_ws = get_platform_workspace()
-    if not platform_ws:
-        return False
-    StaffMember = apps.get_model("common", "StaffMember")
-    # Cross-workspace: use unscoped manager so the answer doesn't depend on
-    # whichever tenant the request happens to be bound to.
-    return StaffMember.all_objects.filter(
-        user=user, workspace=platform_ws, is_active=True
-    ).exists()
 
 
 # ── Standalone mode ───────────────────────────────────────────────────────────
@@ -124,6 +116,10 @@ def _get_user_workspaces_standalone(user) -> list:
             "status": _get_workspace_status(ws, profile),
             "region": profile.region,
             "cluster": profile.cluster.id if profile.cluster else None,
+            "capabilities": {
+                "extension_management": False,
+                "usage": False,
+            },
         })
     return result
 
@@ -136,8 +132,3 @@ def _get_workspace_status(workspace, profile) -> str:
     if profile and profile.is_suspended:
         return "suspended"
     return "active"
-
-
-def _is_platform_admin_standalone(user) -> bool:
-    """Standalone: superuser or staff flag."""
-    return getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)

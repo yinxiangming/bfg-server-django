@@ -7,25 +7,62 @@ credentials or allowing a hard delete from the web console.
 from datetime import timedelta
 
 from django.apps import apps
-from django.contrib.auth.forms import PasswordResetForm
 from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from bfg.platform.permissions import IsPlatformAdmin
+from bfg.platform.permissions import IsPlatformSuperuser
+from bfg.platform.services.audit_service import record_platform_audit
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
 from bfg.platform.utils import is_platform_workspace
 from bfg.common.services.workspace_service import WorkspaceService
+from bfg.common.services.user_service import UserService
+
+
+def _change_reason(request):
+    """Require an operator explanation for every state-changing console request."""
+    reason = str(
+        request.data.get("reason")
+        or request.headers.get("X-Platform-Change-Reason")
+        or ""
+    ).strip()
+    if len(reason) < 3:
+        raise ValidationError({"reason": "Provide a change reason of at least 3 characters."})
+    return reason[:500]
+
+
+def _confirmed(request):
+    if request.data.get("confirm") is not True:
+        raise ValidationError({"confirm": "confirm=true is required."})
+
+
+def _cluster_snapshot(cluster):
+    """Return auditable cluster state without connection secrets."""
+    return {
+        "id": cluster.id,
+        "name": cluster.name,
+        "region": cluster.region,
+        "api_base_url": cluster.api_base_url,
+        "frontend_base_url": cluster.frontend_base_url,
+        "db_host": cluster.db_host,
+        "db_port": cluster.db_port,
+        "redis_configured": bool(cluster.redis_url),
+        "s3_bucket": cluster.s3_bucket,
+        "max_workspaces": cluster.max_workspaces,
+        "is_accepting_new": cluster.is_accepting_new,
+        "is_active": cluster.is_active,
+    }
 
 
 class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
     """Cross-workspace management for platform administrators only."""
 
-    permission_classes = [IsAuthenticated, IsPlatformAdmin]
+    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
 
     def _workspace(self, pk):
         Workspace = apps.get_model("common", "Workspace")
@@ -89,21 +126,37 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=["post"])
     def suspend(self, request, pk=None):
+        _confirmed(request)
+        reason = _change_reason(request)
         workspace = self._workspace(pk)
-        suspend_workspace(workspace, initiated_by=request.user, reason=request.data.get("reason", ""))
+        before = {"is_active": workspace.is_active}
+        suspend_workspace(workspace, initiated_by=request.user, reason=reason)
+        record_platform_audit(
+            request=request, action="workspace.suspend", target_type="workspace",
+            target_id=workspace.id, reason=reason, before=before,
+            after={"is_active": workspace.is_active},
+        )
         return Response(self._item(workspace))
 
     @action(detail=True, methods=["post"])
     def resume(self, request, pk=None):
+        _confirmed(request)
+        reason = _change_reason(request)
         workspace = self._workspace(pk)
+        before = {"is_active": workspace.is_active}
         resume_workspace(workspace, initiated_by=request.user)
+        record_platform_audit(
+            request=request, action="workspace.resume", target_type="workspace",
+            target_id=workspace.id, reason=reason, before=before,
+            after={"is_active": workspace.is_active},
+        )
         return Response(self._item(workspace))
 
     @action(detail=True, methods=["post"])
     def delete(self, request, pk=None):
         """Schedule a recoverable deletion; never remove tenant data here."""
-        if request.data.get("confirm") is not True:
-            return Response({"detail": "confirm=true is required."}, status=status.HTTP_400_BAD_REQUEST)
+        _confirmed(request)
+        reason = _change_reason(request)
         WorkspaceOperation = apps.get_model("platform", "WorkspaceOperation")
         workspace = self._workspace(pk)
         workspace.is_active = False
@@ -113,8 +166,13 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             profile.scheduled_deletion_at = timezone.now() + timedelta(days=30)
             profile.save(update_fields=["scheduled_deletion_at", "updated_at"])
         WorkspaceOperation.objects.create(workspace=workspace, operation="delete", status="completed",
-                                          initiated_by=request.user, details={"soft": True},
+                                          initiated_by=request.user, details={"soft": True, "reason": reason},
                                           completed_at=timezone.now())
+        record_platform_audit(
+            request=request, action="workspace.deletion_scheduled", target_type="workspace",
+            target_id=workspace.id, reason=reason, before={"is_active": True},
+            after={"is_active": False, "scheduled_deletion": True},
+        )
         return Response(self._item(workspace))
 
     @action(detail=True, methods=["get"])
@@ -130,14 +188,21 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             "cluster": {"id": cluster.id, "name": cluster.name, "region": cluster.region} if cluster else None,
             "exported_at": timezone.now().isoformat(),
         }
+        record_platform_audit(
+            request=request, action="workspace.exported", target_type="workspace",
+            target_id=workspace.id, reason="Workspace configuration export downloaded.",
+            after={"format": data["format"]},
+        )
         import json
         response = HttpResponse(json.dumps(data, indent=2, default=str), content_type="application/json")
         response["Content-Disposition"] = f'attachment; filename="workspace-{workspace.slug}.json"'
         return response
 
-    @action(detail=False, methods=["post"])
+    @action(detail=False, methods=["post"], url_path="import-workspace")
     @transaction.atomic
     def import_workspace(self, request):
+        _confirmed(request)
+        reason = _change_reason(request)
         data = request.data if isinstance(request.data, dict) else {}
         source = data.get("workspace", data)
         name = str(source.get("name", "")).strip()
@@ -157,17 +222,182 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
             phone=source.get("phone", ""), settings=source.get("settings") or {},
             region=(data.get("cluster") or {}).get("region") or "us",
         )
+        record_platform_audit(
+            request=request, action="workspace.imported", target_type="workspace",
+            target_id=workspace.id, reason=reason, after={"slug": workspace.slug},
+        )
         return Response(self._item(workspace), status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="reset-admin-password")
     def reset_admin_password(self, request, pk=None):
+        _confirmed(request)
+        reason = _change_reason(request)
         workspace = self._workspace(pk)
         owner = self._owner(workspace)
         email = str(request.data.get("email") or (owner or {}).get("email") or "").strip()
-        if email:
-            form = PasswordResetForm({"email": email})
-            if form.is_valid():
-                form.save(request=request, use_https=request.is_secure(),
-                          subject_template_name="registration/password_reset_subject.txt",
-                          email_template_name="registration/password_reset_email.html")
+        if not email:
+            return Response({"detail": "The workspace owner has no email address."}, status=status.HTTP_400_BAD_REQUEST)
+        profile = getattr(workspace, "platform_profile", None)
+        cluster = getattr(profile, "cluster", None) if profile else None
+        from django.conf import settings
+        frontend_url = (getattr(settings, "FRONTEND_URL", "") or getattr(cluster, "frontend_base_url", "")).rstrip("/")
+        if not frontend_url:
+            return Response({"detail": "Password reset frontend is not configured."}, status=status.HTTP_409_CONFLICT)
+        UserService.request_password_reset(email, frontend_url)
+        record_platform_audit(
+            request=request, action="workspace.password_reset_requested", target_type="workspace",
+            target_id=workspace.id, reason=reason, after={"owner_email": email},
+        )
         return Response({"detail": "If the account exists, a password reset email has been sent."})
+
+
+class PlatformConsoleClusterViewSet(viewsets.ViewSet):
+    """Platform-owned cluster inventory and safe operational settings."""
+
+    permission_classes = [IsAuthenticated, IsPlatformSuperuser]
+
+    _WRITABLE_FIELDS = {
+        "name", "region", "api_base_url", "frontend_base_url", "db_host", "db_port",
+        "redis_url", "s3_bucket", "max_workspaces", "is_accepting_new", "is_active",
+    }
+
+    def _cluster(self, pk):
+        Cluster = apps.get_model("platform", "Cluster")
+        return Cluster.objects.get(pk=pk)
+
+    def _workspace_count(self, cluster):
+        return cluster.workspaces.count()
+
+    def _item(self, cluster):
+        workspace_count = self._workspace_count(cluster)
+        max_workspaces = cluster.max_workspaces
+        capacity_percentage = 100 if max_workspaces == 0 else min(
+            100, int((workspace_count / max_workspaces) * 100)
+        )
+        return {
+            "id": cluster.id,
+            "name": cluster.name,
+            "region": cluster.region,
+            "api_base_url": cluster.api_base_url,
+            "frontend_base_url": cluster.frontend_base_url,
+            "db_host": cluster.db_host,
+            "db_port": cluster.db_port,
+            # Connection credentials remain write-only even for a superuser browser
+            # session. A replacement can be submitted, but a stored secret is never
+            # sent back over the API or copied into an audit/client cache.
+            "redis_configured": bool(cluster.redis_url),
+            "s3_bucket": cluster.s3_bucket,
+            "max_workspaces": max_workspaces,
+            "workspace_count": workspace_count,
+            "capacity_percentage": capacity_percentage,
+            "is_accepting_new": cluster.is_accepting_new,
+            "is_active": cluster.is_active,
+            "health_status": cluster.health_status,
+            "last_health_check": cluster.last_health_check,
+            "created_at": cluster.created_at,
+            "updated_at": cluster.updated_at,
+        }
+
+    def _validated_values(self, data, *, creating):
+        from rest_framework import serializers
+
+        fields = {key: data[key] for key in self._WRITABLE_FIELDS if key in data}
+        if creating:
+            fields["id"] = data.get("id")
+            required = {
+                "id", "name", "region", "api_base_url", "db_host", "redis_url", "s3_bucket",
+            }
+            missing = sorted(key for key in required if not fields.get(key))
+            if missing:
+                raise serializers.ValidationError({key: "This field is required." for key in missing})
+
+        if "id" in fields:
+            fields["id"] = str(fields["id"]).strip()
+            if not fields["id"] or len(fields["id"]) > 32:
+                raise serializers.ValidationError({"id": "Use a non-empty identifier of 32 characters or fewer."})
+
+        if "name" in fields:
+            fields["name"] = str(fields["name"]).strip()
+            if not fields["name"]:
+                raise serializers.ValidationError({"name": "This field may not be blank."})
+
+        if "region" in fields and fields["region"] not in {"us", "eu", "apac"}:
+            raise serializers.ValidationError({"region": "Choose us, eu, or apac."})
+
+        for key in ("api_base_url", "frontend_base_url"):
+            if key in fields and fields[key]:
+                value = str(fields[key]).strip()
+                if not value.startswith(("http://", "https://")):
+                    raise serializers.ValidationError({key: "Use an http:// or https:// URL."})
+                fields[key] = value
+
+        if "redis_url" in fields:
+            value = str(fields["redis_url"]).strip()
+            # Existing deployments historically stored an HTTP health endpoint here.
+            # Keep those clusters editable while accepting native Redis URLs for new ones.
+            if not value.startswith(("redis://", "rediss://", "http://", "https://")):
+                raise serializers.ValidationError({"redis_url": "Use a Redis or HTTP URL."})
+            fields["redis_url"] = value
+
+        for key in ("db_port", "max_workspaces"):
+            if key in fields:
+                try:
+                    fields[key] = int(fields[key])
+                except (TypeError, ValueError):
+                    raise serializers.ValidationError({key: "Use a whole number."})
+                if fields[key] < (1 if key == "db_port" else 0):
+                    raise serializers.ValidationError({key: "Use a positive value." if key == "db_port" else "Use zero or more."})
+
+        for key in ("is_accepting_new", "is_active"):
+            if key in fields and not isinstance(fields[key], bool):
+                raise serializers.ValidationError({key: "Use true or false."})
+
+        return fields
+
+    def list(self, request):
+        Cluster = apps.get_model("platform", "Cluster")
+        return Response([self._item(cluster) for cluster in Cluster.objects.all()])
+
+    def retrieve(self, request, pk=None):
+        try:
+            return Response(self._item(self._cluster(pk)))
+        except apps.get_model("platform", "Cluster").DoesNotExist:
+            return Response({"detail": "Cluster not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    def create(self, request):
+        _confirmed(request)
+        reason = _change_reason(request)
+        values = self._validated_values(request.data, creating=True)
+        Cluster = apps.get_model("platform", "Cluster")
+        if Cluster.objects.filter(pk=values["id"]).exists():
+            return Response({"detail": "A cluster with this identifier already exists."}, status=status.HTTP_409_CONFLICT)
+        cluster = Cluster.objects.create(**values)
+        record_platform_audit(
+            request=request, action="cluster.created", target_type="cluster", target_id=cluster.id,
+            reason=reason, after=_cluster_snapshot(cluster),
+        )
+        return Response(self._item(cluster), status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, pk=None):
+        _confirmed(request)
+        reason = _change_reason(request)
+        try:
+            cluster = self._cluster(pk)
+        except apps.get_model("platform", "Cluster").DoesNotExist:
+            return Response({"detail": "Cluster not found."}, status=status.HTTP_404_NOT_FOUND)
+        values = self._validated_values(request.data, creating=False)
+        if "max_workspaces" in values and values["max_workspaces"] < self._workspace_count(cluster):
+            return Response(
+                {"detail": "Capacity cannot be below the number of assigned workspaces."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        before = _cluster_snapshot(cluster)
+        for field, value in values.items():
+            setattr(cluster, field, value)
+        if values:
+            cluster.save(update_fields=[*values.keys(), "updated_at"])
+            record_platform_audit(
+                request=request, action="cluster.updated", target_type="cluster", target_id=cluster.id,
+                reason=reason, before=before, after=_cluster_snapshot(cluster),
+            )
+        return Response(self._item(cluster))

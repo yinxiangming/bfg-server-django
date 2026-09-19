@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 from bfg.platform.models.cluster import Cluster
+from bfg.platform.models.audit import PlatformAuditEvent
 from bfg.platform.models.feature import FeatureDefinition
 from bfg.platform.models.operations import WorkspaceOperation
 from bfg.platform.models.workspace_profile import WorkspacePlatformProfile, WorkspaceSSOConfig, PlatformMembership, PlatformSSOCode
 
 __all__ = [
     "Cluster",
+    "PlatformAuditEvent",
     "FeatureDefinition",
     "PlatformMembership",
     "PlatformSSOCode",

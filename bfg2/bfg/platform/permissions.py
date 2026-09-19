@@ -63,6 +63,24 @@ class IsPlatformAdmin(BasePermission):
             return request.user.is_superuser or request.user.is_staff
 
 
+class IsPlatformSuperuser(BasePermission):
+    """Gate the infrastructure control plane to Django superusers only.
+
+    Platform Workspace membership and ``is_staff`` are intentionally insufficient:
+    those roles may administer a tenant, but they must never gain access to all
+    tenants, cluster configuration, exports, or platform-wide billing controls.
+    """
+
+    message = "A Django superuser account is required for Platform administration."
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.is_superuser
+        )
+
+
 class IsPlatformAPIKey(BasePermission):
     """
     Allow access via PLATFORM_API_KEY header.

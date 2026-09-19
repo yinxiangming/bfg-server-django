@@ -777,6 +777,44 @@ class PlatformControlClusterViewSet(PlatformControlAccessViewSet):
             complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
         return Response(body)
 
+    @action(detail=True, methods=["post"], url_path="health-check")
+    def health_check(self, request, pk=None):
+        """Run the restricted server-side probe for this Cluster."""
+        require_confirmation(request)
+        reason = require_reason(request)
+        cluster = self._cluster(pk)
+        action_request, replay = claim_action(
+            request, action="cluster.health_checked", target_type="cluster", target_id=cluster.id,
+            payload={"config_version": cluster.config_version, "reason": reason},
+        )
+        if replay is not None:
+            return replay
+        try:
+            probe = probe_cluster_health(cluster)
+        except ClusterHealthProbeConfigurationError:
+            body = {"detail": "Cluster health probes are not configured for this endpoint.", "code": "cluster_health_probe_unavailable"}
+            complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+            return Response(body, status=status.HTTP_409_CONFLICT)
+        Cluster = apps.get_model("platform", "Cluster")
+        with transaction.atomic():
+            locked = Cluster.objects.select_for_update().get(pk=cluster.pk)
+            if locked.config_version != cluster.config_version:
+                body = {"detail": "This Cluster changed while its health check was running. Reload and try again.", "code": "cluster_version_conflict", "current_version": locked.config_version}
+                complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+                return Response(body, status=status.HTTP_409_CONFLICT)
+            before = {"health_status": locked.health_status, "last_health_check": locked.last_health_check}
+            locked.health_status = probe.health_status
+            locked.last_health_check = timezone.now()
+            locked.save(update_fields=["health_status", "last_health_check", "updated_at"])
+            body = self._item(locked)
+            complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
+            record_control_audit(
+                request=request, action="cluster.health_checked", target_type="cluster", target_id=locked.id,
+                reason=reason, before=before,
+                after={"health_status": locked.health_status, "last_health_check": locked.last_health_check, "http_status": probe.http_status},
+            )
+        return Response(body)
+
 
 class PlatformControlVariableViewSet(PlatformControlAccessViewSet):
     """Audited deployment variables, without reusing the historical console route."""
@@ -898,44 +936,6 @@ class PlatformControlExchangeRateViewSet(PlatformControlAccessViewSet):
             reason=reason, before={"rates": before}, after=entry,
         )
         return Response(entry, status=status.HTTP_201_CREATED)
-
-    @action(detail=True, methods=["post"], url_path="health-check")
-    def health_check(self, request, pk=None):
-        require_confirmation(request)
-        reason = require_reason(request)
-        cluster = self._cluster(pk)
-        action_request, replay = claim_action(
-            request, action="cluster.health_checked", target_type="cluster", target_id=cluster.id,
-            payload={"config_version": cluster.config_version, "reason": reason},
-        )
-        if replay is not None:
-            return replay
-        try:
-            probe = probe_cluster_health(cluster)
-        except ClusterHealthProbeConfigurationError:
-            body = {"detail": "Cluster health probes are not configured for this endpoint.", "code": "cluster_health_probe_unavailable"}
-            complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
-            return Response(body, status=status.HTTP_409_CONFLICT)
-        Cluster = apps.get_model("platform", "Cluster")
-        with transaction.atomic():
-            locked = Cluster.objects.select_for_update().get(pk=cluster.pk)
-            if locked.config_version != cluster.config_version:
-                body = {"detail": "This Cluster changed while its health check was running. Reload and try again.", "code": "cluster_version_conflict", "current_version": locked.config_version}
-                complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
-                return Response(body, status=status.HTTP_409_CONFLICT)
-            before = {"health_status": locked.health_status, "last_health_check": locked.last_health_check}
-            locked.health_status = probe.health_status
-            locked.last_health_check = timezone.now()
-            locked.save(update_fields=["health_status", "last_health_check", "updated_at"])
-            body = self._item(locked)
-            complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
-            record_control_audit(
-                request=request, action="cluster.health_checked", target_type="cluster", target_id=locked.id,
-                reason=reason, before=before,
-                after={"health_status": locked.health_status, "last_health_check": locked.last_health_check, "http_status": probe.http_status},
-            )
-        return Response(body)
-
 
 class PlatformControlAuditEventViewSet(PlatformControlAccessViewSet):
     """A bounded, cursor-paginated read of redacted control-plane events."""

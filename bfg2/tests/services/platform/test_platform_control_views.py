@@ -8,6 +8,7 @@ from bfg.platform.models import Cluster, PlatformAuditEvent
 from bfg.platform.models.workspace_profile import WorkspacePlatformProfile
 from bfg.platform.services.cluster_health import (
     ClusterHealthProbeConfigurationError,
+    ClusterHealthProbeResult,
     cluster_health_url,
 )
 
@@ -162,6 +163,36 @@ def test_cluster_create_keeps_redis_secret_out_of_response_and_audit():
     event = PlatformAuditEvent.objects.get(action="cluster.created")
     assert event.after["redis_configured"] is True
     assert "redis_url" not in event.after
+
+
+def test_cluster_health_check_is_registered_on_the_cluster_route(monkeypatch):
+    cluster = Cluster.objects.create(
+        id="uat",
+        name="UAT",
+        region="apac",
+        api_base_url="https://api-uat.example.test",
+        db_host="db.example.test",
+        redis_url="rediss://platform-secret@example.test:6379/0",
+        s3_bucket="uat-workspaces",
+    )
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+    monkeypatch.setattr(
+        "bfg.platform.views.control_views.probe_cluster_health",
+        lambda _cluster: ClusterHealthProbeResult(health_status="healthy", http_status=200),
+    )
+
+    response = client_for(superuser).post(
+        f"{CONTROL}clusters/{cluster.id}/health-check/",
+        {"confirm": True, "reason": "Verify the UAT deployment health"},
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="health-key-0001",
+    )
+
+    assert response.status_code == 200
+    assert response.data["health_status"] == "healthy"
+    cluster.refresh_from_db()
+    assert cluster.health_status == "healthy"
+    assert PlatformAuditEvent.objects.filter(action="cluster.health_checked", target_id=cluster.id).exists()
 
 
 def test_configuration_only_workspace_import_creates_pending_domains():

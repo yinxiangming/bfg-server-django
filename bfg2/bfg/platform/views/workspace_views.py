@@ -20,9 +20,14 @@ from bfg.platform.services.workspace_creation import (
     max_owned_workspaces,
     workspace_create_blocked,
 )
-from bfg.platform.services.workspace_service import get_user_workspace, get_user_workspaces, is_platform_superuser
+from bfg.platform.services.workspace_service import (
+    get_user_workspace,
+    get_user_workspaces,
+    is_platform_admin,
+    is_platform_superuser,
+)
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
-from bfg.platform.permissions import IsWorkspaceOwner, IsPlatformSuperuser
+from bfg.platform.permissions import IsWorkspaceOwner, IsPlatformAdmin
 from bfg.platform.utils import get_platform_workspace, is_embedded_mode
 from bfg.platform.serializers.workspace import (
     WorkspaceListSerializer,
@@ -149,21 +154,12 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='me')
     def me(self, request):
         """GET /api/v1/platform/workspaces/me/ — current user's workspaces and whether they may create one."""
-        is_superuser = is_platform_superuser(request.user)
         return Response({
             'workspaces': get_user_workspaces(request.user),
-            # Keep the legacy key for existing clients, but do not make a staff
-            # account look like it may access the deployment control plane.
-            'is_platform_superuser': is_superuser,
-            'is_platform_admin': is_superuser,
-            # The browser uses these only for navigation. Every matching API
-            # endpoint independently verifies the Django superuser permission.
-            'platform_capabilities': {
-                'cluster_management': is_superuser,
-                'audit_log': is_superuser,
-                'configuration': is_superuser,
-                'exchange_rates': is_superuser,
-            },
+            # Preserve the established ``me/`` response contract. The browser
+            # discovers deployment-control access through its separate,
+            # superuser-protected ``/control/status/`` endpoint.
+            'is_platform_admin': is_platform_admin(request.user),
             'workspace_limit': max_owned_workspaces(),
             # Asked without a lock: what a create request would meet right now.
             'create_blocked': workspace_create_blocked(request.user),
@@ -172,7 +168,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
     # Suspending takes a workspace offline for its staff and its customers alike,
     # and resuming undoes a suspension whoever made it, so neither is a workspace
     # staff action: the viewset-wide IsAuthenticated would let any staff role in.
-    @action(detail=True, methods=['post'], permission_classes=[IsPlatformSuperuser])
+    @action(detail=True, methods=['post'], permission_classes=[IsPlatformAdmin])
     def suspend(self, request, pk=None):
         """POST /api/v1/platform/workspaces/{id}/suspend/ — platform admins only."""
         workspace = self.get_object()
@@ -183,7 +179,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
         )
         return Response({'status': 'suspended'})
 
-    @action(detail=True, methods=['post'], permission_classes=[IsPlatformSuperuser])
+    @action(detail=True, methods=['post'], permission_classes=[IsPlatformAdmin])
     def resume(self, request, pk=None):
         """POST /api/v1/platform/workspaces/{id}/resume/ — platform admins only."""
         workspace = self.get_object()

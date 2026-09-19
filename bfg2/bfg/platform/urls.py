@@ -24,6 +24,7 @@ from bfg.platform.views.control_views import (
     PlatformControlClusterViewSet,
     PlatformControlExchangeRateViewSet,
     PlatformControlMeterPriceViewSet,
+    PlatformControlStatusViewSet,
     PlatformControlVariableViewSet,
     PlatformControlWorkspaceViewSet,
 )
@@ -48,6 +49,7 @@ router.register(r'console/exchange-rates', ConsoleExchangeRateViewSet, basename=
 # The owner console stays under ``console/``. Deployment lifecycle, Cluster and
 # audit controls are a separate superuser-only contract under ``control/``.
 router.register(r'control/workspaces', PlatformControlWorkspaceViewSet, basename='platform-control-workspace')
+router.register(r'control/status', PlatformControlStatusViewSet, basename='platform-control-status')
 router.register(r'control/clusters', PlatformControlClusterViewSet, basename='platform-control-cluster')
 router.register(r'control/audit-events', PlatformControlAuditEventViewSet, basename='platform-control-audit-event')
 # Existing configuration resources are strict-superuser views. Publish their

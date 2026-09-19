@@ -39,6 +39,24 @@ def test_control_plane_requires_a_django_superuser():
     assert allowed.data["count"] == 1
 
 
+def test_control_status_is_a_superuser_only_capability_document():
+    regular = User.objects.create_user(username="regular", password="secret")
+    superuser = User.objects.create_superuser(username="root", email="root@example.test", password="secret")
+
+    assert client_for(regular).get(f"{CONTROL}status/").status_code == 403
+    response = client_for(superuser).get(f"{CONTROL}status/")
+    assert response.status_code == 200
+    assert response.data == {
+        "is_platform_superuser": True,
+        "platform_capabilities": {
+            "cluster_management": True,
+            "audit_log": True,
+            "configuration": True,
+            "exchange_rates": True,
+        },
+    }
+
+
 def test_suspend_is_confirmed_idempotent_and_audited():
     workspace = Workspace.objects.create(name="Shop", slug="shop", is_active=True)
     WorkspacePlatformProfile.objects.create(workspace=workspace)

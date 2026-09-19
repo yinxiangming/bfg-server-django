@@ -55,6 +55,27 @@ class PlatformControlAccessViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsPlatformSuperuser]
 
 
+class PlatformControlStatusViewSet(PlatformControlAccessViewSet):
+    """A small, protected capability document for Platform navigation.
+
+    The established ``/workspaces/me/`` payload is intentionally unchanged so
+    existing workspace clients keep their exact contract. A successful status
+    response is itself proof that the caller is a Django superuser; every
+    mutating control endpoint still authorizes independently.
+    """
+
+    def list(self, request):
+        return Response({
+            "is_platform_superuser": True,
+            "platform_capabilities": {
+                "cluster_management": True,
+                "audit_log": True,
+                "configuration": True,
+                "exchange_rates": True,
+            },
+        })
+
+
 def _workspace_or_404(pk):
     Workspace = apps.get_model("common", "Workspace")
     try:

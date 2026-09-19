@@ -39,6 +39,10 @@ class Cluster(models.Model):
     max_workspaces = models.IntegerField(_("Max Workspaces"), default=500)
     current_workspaces = models.IntegerField(_("Current Workspaces"), default=0)
     is_accepting_new = models.BooleanField(_("Accepting New Workspaces"), default=True)
+    # A browser must include the version it read when changing shared cluster
+    # configuration. This prevents one administrator from silently overwriting
+    # another administrator's infrastructure change.
+    config_version = models.PositiveIntegerField(_("Configuration Version"), default=1)
 
     # Status
     is_active = models.BooleanField(_("Active"), default=True)

@@ -410,6 +410,7 @@ def test_cluster_health_check_is_superuser_only_and_audited(settings):
         response = client.post(
             f"/api/v1/platform/console/clusters/{cluster.id}/health-check/",
             {"confirm": True, "reason": "Routine health check"}, format="json",
+            HTTP_X_IDEMPOTENCY_KEY="cluster-health-0001",
         )
 
     assert response.status_code == 200
@@ -856,6 +857,7 @@ def test_cluster_write_requires_confirmation_and_records_redacted_audit_event():
         "/api/v1/platform/console/clusters/",
         {**payload, "confirm": True, "reason": "Create UAT infrastructure"},
         format="json",
+        HTTP_X_IDEMPOTENCY_KEY="cluster-create-0001",
     )
 
     assert refused.status_code == 400
@@ -865,6 +867,16 @@ def test_cluster_write_requires_confirmation_and_records_redacted_audit_event():
     assert event.reason == "Create UAT infrastructure"
     assert event.after["redis_configured"] is True
     assert "redis_url" not in event.after
+
+    replayed = client.post(
+        "/api/v1/platform/console/clusters/",
+        {**payload, "confirm": True, "reason": "Create UAT infrastructure"},
+        format="json",
+        HTTP_X_IDEMPOTENCY_KEY="cluster-create-0001",
+    )
+    assert replayed.status_code == 201
+    assert replayed["Idempotent-Replayed"] == "true"
+    assert PlatformAuditEvent.objects.filter(action="cluster.created", target_id="audit-cluster").count() == 1
 
 
 @pytest.mark.django_db
@@ -884,6 +896,7 @@ def test_cluster_update_uses_configuration_version_and_stops_allocation_when_ina
         f"/api/v1/platform/console/clusters/{cluster.id}/",
         {"is_active": False, "expected_version": 1, "confirm": True, "reason": "Maintenance window"},
         format="json",
+        HTTP_X_IDEMPOTENCY_KEY="cluster-update-0001",
     )
     assert changed.status_code == 200
     assert changed.data["config_version"] == 2
@@ -893,6 +906,7 @@ def test_cluster_update_uses_configuration_version_and_stops_allocation_when_ina
         f"/api/v1/platform/console/clusters/{cluster.id}/",
         {"name": "Stale write", "expected_version": 1, "confirm": True, "reason": "Outdated browser tab"},
         format="json",
+        HTTP_X_IDEMPOTENCY_KEY="cluster-update-stale-001",
     )
     assert stale.status_code == 409
     assert stale.data["code"] == "cluster_version_conflict"

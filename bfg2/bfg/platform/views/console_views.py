@@ -1573,14 +1573,42 @@ class PlatformConsoleClusterViewSet(PlatformConsoleAccessViewSet):
         reason = _change_reason(request)
         values = self._validated_values(request.data, creating=True)
         Cluster = apps.get_model("platform", "Cluster")
-        if Cluster.objects.filter(pk=values["id"]).exists():
-            return Response({"detail": "A cluster with this identifier already exists."}, status=status.HTTP_409_CONFLICT)
-        cluster = Cluster.objects.create(**values)
-        record_platform_audit(
-            request=request, action="cluster.created", target_type="cluster", target_id=cluster.id,
-            reason=reason, after=_cluster_snapshot(cluster),
-        )
-        return Response(self._item(cluster), status=status.HTTP_201_CREATED)
+        exists = Cluster.objects.filter(pk=values["id"]).exists()
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="cluster.created",
+                target_type="cluster",
+                target_id=values["id"],
+                payload={"values": values, "reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
+        if exists:
+            response_body = {"detail": "A cluster with this identifier already exists."}
+            _complete_platform_action(
+                action_request,
+                result="failed",
+                response_status=status.HTTP_409_CONFLICT,
+                response_body=response_body,
+            )
+            return Response(response_body, status=status.HTTP_409_CONFLICT)
+        with transaction.atomic():
+            cluster = Cluster.objects.create(**values)
+            record_platform_audit(
+                request=request, action="cluster.created", target_type="cluster", target_id=cluster.id,
+                reason=reason, after=_cluster_snapshot(cluster),
+            )
+            response_body = self._item(cluster)
+            _complete_platform_action(
+                action_request, result="succeeded", response_status=status.HTTP_201_CREATED, response_body=response_body,
+            )
+        return Response(response_body, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, pk=None):
         _confirmed(request)
@@ -1591,26 +1619,52 @@ class PlatformConsoleClusterViewSet(PlatformConsoleAccessViewSet):
             raise ValidationError({"expected_version": "Provide the configuration version you read."})
         if expected_version < 1:
             raise ValidationError({"expected_version": "Use a positive configuration version."})
+        values = self._validated_values(request.data, creating=False)
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="cluster.updated",
+                target_type="cluster",
+                target_id=pk,
+                payload={"expected_version": expected_version, "values": values, "reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
         try:
             with transaction.atomic():
                 Cluster = apps.get_model("platform", "Cluster")
                 cluster = Cluster.objects.select_for_update().get(pk=pk)
                 if cluster.config_version != expected_version:
-                    return Response({
+                    response_body = {
                         "detail": "This Cluster changed while you were editing it. Reload and review the latest configuration.",
                         "code": "cluster_version_conflict",
                         "current_version": cluster.config_version,
-                    }, status=status.HTTP_409_CONFLICT)
-                values = self._validated_values(request.data, creating=False)
+                    }
+                    _complete_platform_action(
+                        action_request,
+                        result="failed",
+                        response_status=status.HTTP_409_CONFLICT,
+                        response_body=response_body,
+                    )
+                    return Response(response_body, status=status.HTTP_409_CONFLICT)
                 if values.get("is_accepting_new") is True and values.get("is_active", cluster.is_active) is False:
                     raise ValidationError({"is_accepting_new": "An inactive Cluster cannot accept new workspaces."})
                 if values.get("is_active") is False:
                     values["is_accepting_new"] = False
                 if "max_workspaces" in values and values["max_workspaces"] < self._workspace_count(cluster):
-                    return Response(
-                        {"detail": "Capacity cannot be below the number of assigned workspaces."},
-                        status=status.HTTP_400_BAD_REQUEST,
+                    response_body = {"detail": "Capacity cannot be below the number of assigned workspaces."}
+                    _complete_platform_action(
+                        action_request,
+                        result="failed",
+                        response_status=status.HTTP_400_BAD_REQUEST,
+                        response_body=response_body,
                     )
+                    return Response(response_body, status=status.HTTP_400_BAD_REQUEST)
                 before = _cluster_snapshot(cluster)
                 for field, value in values.items():
                     setattr(cluster, field, value)
@@ -1621,7 +1675,11 @@ class PlatformConsoleClusterViewSet(PlatformConsoleAccessViewSet):
                         request=request, action="cluster.updated", target_type="cluster", target_id=cluster.id,
                         reason=reason, before=before, after=_cluster_snapshot(cluster),
                     )
-                return Response(self._item(cluster))
+                response_body = self._item(cluster)
+                _complete_platform_action(
+                    action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+                )
+                return Response(response_body)
         except apps.get_model("platform", "Cluster").DoesNotExist:
             return Response({"detail": "Cluster not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -1631,17 +1689,36 @@ class PlatformConsoleClusterViewSet(PlatformConsoleAccessViewSet):
         _confirmed(request)
         reason = _change_reason(request)
         cluster = self._cluster(pk)
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="cluster.health_checked",
+                target_type="cluster",
+                target_id=cluster.id,
+                payload={"reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
         expected_version = cluster.config_version
         try:
             result = probe_cluster_health(cluster)
         except ClusterHealthProbeConfigurationError:
-            return Response(
-                {
-                    "detail": "Cluster health probes are not configured for this endpoint.",
-                    "code": "cluster_health_probe_unavailable",
-                },
-                status=status.HTTP_409_CONFLICT,
+            response_body = {
+                "detail": "Cluster health probes are not configured for this endpoint.",
+                "code": "cluster_health_probe_unavailable",
+            }
+            _complete_platform_action(
+                action_request,
+                result="failed",
+                response_status=status.HTTP_409_CONFLICT,
+                response_body=response_body,
             )
+            return Response(response_body, status=status.HTTP_409_CONFLICT)
 
         Cluster = apps.get_model("platform", "Cluster")
         checked_at = timezone.now()
@@ -1653,14 +1730,18 @@ class PlatformConsoleClusterViewSet(PlatformConsoleAccessViewSet):
             # Do not apply an old probe result after another administrator has
             # changed its connection endpoint or other Cluster configuration.
             if locked_cluster.config_version != expected_version:
-                return Response(
-                    {
-                        "detail": "This Cluster changed while its health check was running. Reload and try again.",
-                        "code": "cluster_version_conflict",
-                        "current_version": locked_cluster.config_version,
-                    },
-                    status=status.HTTP_409_CONFLICT,
+                response_body = {
+                    "detail": "This Cluster changed while its health check was running. Reload and try again.",
+                    "code": "cluster_version_conflict",
+                    "current_version": locked_cluster.config_version,
+                }
+                _complete_platform_action(
+                    action_request,
+                    result="failed",
+                    response_status=status.HTTP_409_CONFLICT,
+                    response_body=response_body,
                 )
+                return Response(response_body, status=status.HTTP_409_CONFLICT)
             before = {
                 "health_status": locked_cluster.health_status,
                 "last_health_check": locked_cluster.last_health_check,
@@ -1681,7 +1762,11 @@ class PlatformConsoleClusterViewSet(PlatformConsoleAccessViewSet):
                     "http_status": result.http_status,
                 },
             )
-        return Response(self._item(locked_cluster))
+            response_body = self._item(locked_cluster)
+            _complete_platform_action(
+                action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+            )
+        return Response(response_body)
 
 
 class PlatformConsoleAuditEventViewSet(PlatformConsoleAccessViewSet):

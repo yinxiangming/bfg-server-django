@@ -20,6 +20,7 @@ from config.views import (
     provision_user,
     provision_workspace,
     acme_challenge,
+    health,
     server_version,
 )
 from config.social_auth import (
@@ -41,6 +42,7 @@ urlpatterns = [
         path('internal/auth/provision-user/', provision_user, name='provision_user'),
         path('internal/auth/provision-workspace/', provision_workspace, name='provision_workspace'),
         path('system/version/', server_version, name='server_version'),
+        path('health/', health, name='health'),
         path('auth/', include([
             path('register/', register, name='register'),
             path('finalize-onboarding/', finalize_onboarding, name='finalize-onboarding'),

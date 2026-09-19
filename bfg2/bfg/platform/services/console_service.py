@@ -113,6 +113,10 @@ def workspace_entries(workspaces, viewer: ConsoleViewer) -> list:
             "is_active": workspace.is_active,
             "is_platform": is_platform_workspace(workspace),
             "suspended_at": _suspended_at(workspace),
+            **(
+                {"scheduled_deletion_at": _scheduled_deletion_at(workspace)}
+                if _scheduled_deletion_at(workspace) is not None else {}
+            ),
             "created_at": workspace.created_at,
             "domains": hostnames.get(workspace.pk, []),
             "owner": user_summary(owners.get(workspace.pk)),
@@ -127,6 +131,11 @@ def workspace_entries(workspaces, viewer: ConsoleViewer) -> list:
 def _suspended_at(workspace):
     profile = getattr(workspace, "platform_profile", None)
     return profile.suspended_at if profile else None
+
+
+def _scheduled_deletion_at(workspace):
+    profile = getattr(workspace, "platform_profile", None)
+    return profile.scheduled_deletion_at if profile else None
 
 
 def _active_staff_counts(ids) -> dict:

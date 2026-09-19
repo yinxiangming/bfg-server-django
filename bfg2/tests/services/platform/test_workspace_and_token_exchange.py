@@ -1,6 +1,8 @@
 from unittest.mock import patch
 import uuid
 
+import requests
+
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
@@ -176,3 +178,31 @@ def test_token_exchange_standalone_returns_system_default_frontend_url(mock_post
     assert response.status_code == 200
     assert response.data["workspace_frontend_url"] == "https://token-ws-2.shops.example.test"
     assert response.data["workspace_url"] == "http://api.workspace2.test"
+
+
+@patch("bfg.platform.views.auth_views.http_requests.post")
+def test_token_exchange_does_not_disclose_remote_failure_details(mock_post, db, settings):
+    settings.PLATFORM_EMBEDDED = False
+    mock_post.side_effect = requests.RequestException("connection to https://private.cluster.test:9443 failed")
+
+    user = User.objects.create_user(username="token-error", password="secret", email="token-error@example.com")
+    workspace = Workspace.objects.create(name="Token Error", slug="token-error", is_active=True)
+    cluster = Cluster.objects.create(
+        name="Token Error Cluster",
+        region="apac",
+        api_base_url="https://private.cluster.test:9443",
+        frontend_base_url="https://shops.example.test",
+        db_host="private-db.example.test",
+        redis_url="rediss://private-redis.example.test",
+        s3_bucket="token-error",
+    )
+    profile = WorkspacePlatformProfile.objects.create(workspace=workspace, cluster=cluster, region="apac")
+    PlatformMembership.objects.create(user=user, profile=profile, role="owner", is_active=True)
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+    response = client.post("/api/v1/platform/auth/token-exchange/", {"workspace_id": workspace.slug}, format="json")
+
+    assert response.status_code == 502
+    assert response.data == {"error": "Unable to reach the workspace server. Please try again."}
+    assert "private.cluster.test" not in str(response.data)

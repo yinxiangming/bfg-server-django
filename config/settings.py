@@ -188,6 +188,8 @@ AUTH_USER_MODEL = 'common.User'
 
 # django-allauth (social login)
 SITE_ID = 1
+ACCOUNT_ADAPTER = 'config.adapters.ClusterAccountAdapter'
+ACCOUNT_ADAPTER = 'config.adapters.ClusterAccountAdapter'
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
     'allauth.account.auth_backends.AuthenticationBackend',
@@ -439,6 +441,8 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', '')
 # Prefer setting custom_domain (or cluster.frontend_base_url) per workspace in production.
 WORKSPACE_FRONTEND_URL = os.environ.get('WORKSPACE_FRONTEND_URL', '').strip()
 SITE_NAME = os.environ.get('SITE_NAME', 'BFG')
+CLUSTER_NAME = os.environ.get('CLUSTER_NAME', '').strip()
+CLUSTER_NAME = os.environ.get('CLUSTER_NAME', '').strip()
 
 # Staff invitations: default TTL in hours (used when admin doesn't override per-invite).
 INVITATION_EXPIRY_HOURS = int(os.environ.get('INVITATION_EXPIRY_HOURS', '48'))

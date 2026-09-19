@@ -1,0 +1,8 @@
+{% load account %}{% user_display user as user_display %}{% autoescape off %}
+Hello {{ user_display }},
+
+Please confirm your email address for {{ current_site.name }}:
+{{ activate_url }}
+
+If you did not request this, you can safely ignore this email.
+{% endautoescape %}

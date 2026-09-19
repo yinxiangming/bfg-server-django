@@ -1,0 +1,12 @@
+{% load account %}{% user_display user as user_display %}{% autoescape off %}
+Hello {{ user_display }},
+
+Welcome to {{ current_site.name }}.
+
+Please confirm your email address to continue setting up your workspace:
+{{ activate_url }}
+
+If you did not create this account, you can safely ignore this email.
+
+{{ current_site.name }}
+{% endautoescape %}

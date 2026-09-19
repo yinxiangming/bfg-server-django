@@ -1,0 +1,10 @@
+{% load account %}{% user_display user as user_display %}{% autoescape off %}
+<!doctype html>
+<html lang="en"><body style="margin:0;background:#f7f3ee;color:#30251f;font-family:Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;background:#f7f3ee;"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fffdf9;border:1px solid #e5d8ce;">
+<tr><td style="padding:34px 38px 18px;border-bottom:1px solid #eee4dc;"><div style="font-size:12px;letter-spacing:2px;text-transform:uppercase;color:#9a7465;">{{ current_site.name }}</div><h1 style="margin:22px 0 0;font:500 34px/1.08 Georgia,serif;">Confirm your email</h1></td></tr>
+<tr><td style="padding:34px 38px 40px;font-size:16px;line-height:1.65;"><p style="margin:0 0 18px;">Hello {{ user_display }},</p><p style="margin:0 0 28px;color:#65564d;">Welcome to {{ current_site.name }}. Confirm your email address to continue setting up your workspace.</p><p style="margin:0 0 30px;"><a href="{{ activate_url }}" style="display:inline-block;padding:14px 22px;background:#c8788a;color:#fff;text-decoration:none;font-weight:600;">Confirm email address</a></p><p style="margin:0;color:#897970;font-size:13px;">If you did not create this account, you can safely ignore this email.</p></td></tr>
+<tr><td style="padding:18px 38px;color:#9a8a80;border-top:1px solid #eee4dc;font-size:12px;">{{ current_site.name }} · Secure workspace onboarding</td></tr>
+</table></td></tr></table></body></html>
+{% endautoescape %}

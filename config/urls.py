@@ -20,6 +20,7 @@ from config.views import (
     provision_user,
     provision_workspace,
     acme_challenge,
+    health,
     server_version,
 )
 from config.social_auth import (
@@ -36,6 +37,7 @@ urlpatterns = [
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     path('api/v1/', include([
+        path('health/', health, name='health'),
         path('agent/', include('bfg.core.agent_urls')),
         path('internal/auth/provision-user/', provision_user, name='provision_user'),
         path('internal/auth/provision-workspace/', provision_workspace, name='provision_workspace'),

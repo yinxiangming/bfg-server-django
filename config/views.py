@@ -17,6 +17,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
 from django.conf import settings
 from django.http import HttpResponse
+from django.db import DatabaseError, connections
 from .serializers import (
     RegisterSerializer,
     FinalizeOnboardingSerializer,
@@ -40,6 +41,20 @@ def server_version(request):
     version, Django local extension apps (id + optional __version__), optional build id.
     """
     return Response(get_server_version_payload())
+
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def health(request):
+    """Public liveness and database-readiness probe without configuration data."""
+    try:
+        with connections['default'].cursor() as cursor:
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+    except DatabaseError:
+        return Response({'status': 'unavailable'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return Response({'status': 'ok'})
 
 
 @api_view(['POST'])

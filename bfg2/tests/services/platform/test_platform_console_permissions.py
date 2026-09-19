@@ -24,6 +24,7 @@ from bfg.platform.models import (
 from bfg.platform.models import PlatformMembership, WorkspacePlatformProfile
 from bfg.platform.serializers.workspace import WorkspaceCreateSerializer
 from bfg.platform.services.workspace_service import is_platform_admin
+from bfg.platform.services.cluster_health_service import ClusterHealthProbeResult, cluster_health_url
 from bfg.shop.services.batch_service import is_batch_management_enabled
 
 
@@ -317,6 +318,68 @@ def test_platform_console_missing_workspace_returns_404_instead_of_server_error(
     response = client.get("/api/v1/platform/console/workspaces/999999/usage-cap/")
 
     assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_public_health_endpoint_checks_database_without_authentication():
+    response = APIClient().get("/api/v1/health/")
+
+    assert response.status_code == 200
+    assert response.data == {"status": "ok"}
+
+
+def test_cluster_health_probe_url_requires_an_explicit_https_host_allowlist(settings):
+    class Target:
+        api_base_url = "https://api.uat.example.test"
+
+    settings.CLUSTER_HEALTH_ALLOWED_HOSTS = ["*.example.test"]
+    assert cluster_health_url(Target()) == "https://api.uat.example.test/api/v1/health/"
+
+    Target.api_base_url = "http://api.uat.example.test"
+    with pytest.raises(ValueError):
+        cluster_health_url(Target())
+
+    Target.api_base_url = "https://169.254.169.254"
+    with pytest.raises(ValueError):
+        cluster_health_url(Target())
+
+
+@pytest.mark.django_db
+def test_cluster_health_check_is_superuser_only_and_audited(settings):
+    settings.CLUSTER_HEALTH_ALLOWED_HOSTS = ["api.cluster.example.test"]
+    superuser = User.objects.create_superuser(
+        username="cluster-health-root", password="secret", email="cluster-health@example.test",
+    )
+    tenant_admin = User.objects.create_user(username="cluster-health-tenant", password="secret", is_staff=True)
+    cluster = Cluster.objects.create(
+        id="cluster-health", name="Cluster health", region="apac",
+        api_base_url="https://api.cluster.example.test", db_host="db.example.test",
+        redis_url="rediss://private.example.test/0", s3_bucket="cluster-health", max_workspaces=20,
+    )
+    client = APIClient()
+    client.force_authenticate(user=tenant_admin)
+    denied = client.post(
+        f"/api/v1/platform/console/clusters/{cluster.id}/health-check/",
+        {"confirm": True, "reason": "Routine health check"}, format="json",
+    )
+    assert denied.status_code == 403
+
+    client.force_authenticate(user=superuser)
+    with patch(
+        "bfg.platform.views.console_views.probe_cluster_health",
+        return_value=ClusterHealthProbeResult(health_status="healthy", http_status=200),
+    ):
+        response = client.post(
+            f"/api/v1/platform/console/clusters/{cluster.id}/health-check/",
+            {"confirm": True, "reason": "Routine health check"}, format="json",
+        )
+
+    assert response.status_code == 200
+    assert response.data["health_status"] == "healthy"
+    assert response.data["last_health_check"] is not None
+    event = PlatformAuditEvent.objects.get(action="cluster.health_checked", target_id=cluster.id)
+    assert event.after["health_status"] == "healthy"
+    assert event.after["http_status"] == 200
 
 
 @pytest.mark.django_db

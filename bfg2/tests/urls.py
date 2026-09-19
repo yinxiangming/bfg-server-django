@@ -7,6 +7,7 @@ from django.contrib import admin
 from rest_framework_simplejwt.views import TokenObtainPairView
 from config.serializers import CustomTokenObtainPairSerializer
 from config.views import (
+    health,
     register,
     forgot_password,
     reset_password_confirm,
@@ -20,6 +21,7 @@ urlpatterns = [
     path('auth/account-confirm-email/<str:key>/', TemplateView.as_view(), name='account_confirm_email'),
     # BFG2 API v1 endpoints (matching main server structure)
     path('api/v1/', include([
+        path('health/', health, name='health'),
         path('auth/', include([
             path('register/', register, name='register'),
             path('forgot-password/', forgot_password, name='forgot-password'),
@@ -58,4 +60,3 @@ urlpatterns = [
         path('platform/', include('bfg.platform.urls')),
     ])),
 ]
-

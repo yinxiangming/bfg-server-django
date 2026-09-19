@@ -441,6 +441,9 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', '')
 WORKSPACE_FRONTEND_URL = os.environ.get('WORKSPACE_FRONTEND_URL', '').strip()
 SITE_NAME = os.environ.get('SITE_NAME', 'BFG')
 CLUSTER_NAME = os.environ.get('CLUSTER_NAME', '').strip()
+# Explicit public API hosts the Platform may probe from the server. An empty
+# value disables probes instead of turning Cluster configuration into SSRF.
+CLUSTER_HEALTH_ALLOWED_HOSTS = _env_list('CLUSTER_HEALTH_ALLOWED_HOSTS')
 
 # Staff invitations: default TTL in hours (used when admin doesn't override per-invite).
 INVITATION_EXPIRY_HOURS = int(os.environ.get('INVITATION_EXPIRY_HOURS', '48'))

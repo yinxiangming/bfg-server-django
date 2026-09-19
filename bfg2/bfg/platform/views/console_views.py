@@ -32,6 +32,10 @@ from bfg.platform.services.configuration_service import (
     platform_variable_item,
     validate_platform_variable,
 )
+from bfg.platform.services.cluster_health_service import (
+    ClusterHealthProbeConfigurationError,
+    probe_cluster_health,
+)
 from bfg.platform.services.entitlement_service import (
     RUNTIME_ENTITLEMENT_KEYS,
     has_active_entitlement,
@@ -1248,6 +1252,64 @@ class PlatformConsoleClusterViewSet(viewsets.ViewSet):
                 return Response(self._item(cluster))
         except apps.get_model("platform", "Cluster").DoesNotExist:
             return Response({"detail": "Cluster not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=["post"], url_path="health-check")
+    def health_check(self, request, pk=None):
+        """Probe a configured Cluster endpoint and record an auditable result."""
+        _confirmed(request)
+        reason = _change_reason(request)
+        cluster = self._cluster(pk)
+        expected_version = cluster.config_version
+        try:
+            result = probe_cluster_health(cluster)
+        except ClusterHealthProbeConfigurationError:
+            return Response(
+                {
+                    "detail": "Cluster health probes are not configured for this endpoint.",
+                    "code": "cluster_health_probe_unavailable",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        Cluster = apps.get_model("platform", "Cluster")
+        checked_at = timezone.now()
+        with transaction.atomic():
+            try:
+                locked_cluster = Cluster.objects.select_for_update().get(pk=cluster.pk)
+            except Cluster.DoesNotExist as exc:
+                raise Http404 from exc
+            # Do not apply an old probe result after another administrator has
+            # changed its connection endpoint or other Cluster configuration.
+            if locked_cluster.config_version != expected_version:
+                return Response(
+                    {
+                        "detail": "This Cluster changed while its health check was running. Reload and try again.",
+                        "code": "cluster_version_conflict",
+                        "current_version": locked_cluster.config_version,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            before = {
+                "health_status": locked_cluster.health_status,
+                "last_health_check": locked_cluster.last_health_check,
+            }
+            locked_cluster.health_status = result.health_status
+            locked_cluster.last_health_check = checked_at
+            locked_cluster.save(update_fields=["health_status", "last_health_check", "updated_at"])
+            record_platform_audit(
+                request=request,
+                action="cluster.health_checked",
+                target_type="cluster",
+                target_id=locked_cluster.id,
+                reason=reason,
+                before=before,
+                after={
+                    "health_status": result.health_status,
+                    "last_health_check": checked_at,
+                    "http_status": result.http_status,
+                },
+            )
+        return Response(self._item(locked_cluster))
 
 
 class PlatformConsoleAuditEventViewSet(viewsets.ViewSet):

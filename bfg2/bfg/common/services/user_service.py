@@ -260,7 +260,7 @@ class UserService:
             return None, str(e)
 
     @classmethod
-    def request_password_reset(cls, email: str, frontend_url: str) -> None:
+    def request_password_reset(cls, email: str, frontend_url: str) -> bool:
         """
         Process password reset request for a given email.
         """
@@ -287,16 +287,17 @@ class UserService:
                 f"Your password won't change until you access the link above and create a new one."
             )
             
-            send_mail(
+            sent = send_mail(
                 subject,
                 message,
                 settings.DEFAULT_FROM_EMAIL,
                 [email],
                 fail_silently=False,
             )
+            return bool(sent)
         except Exception as e:
             logger.error(f"Failed to process password reset for {email}: {e}")
-            pass
+            return False
 
     @classmethod
     def reset_password(cls, uid: str, token: str, new_password: str) -> bool:

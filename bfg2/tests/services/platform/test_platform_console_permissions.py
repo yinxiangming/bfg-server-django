@@ -1,5 +1,6 @@
 import pytest
 from django.contrib.auth import get_user_model
+from unittest.mock import patch
 from rest_framework.test import APIClient
 
 from bfg.common.models import StaffMember, StaffRole, Workspace, WorkspaceDomain
@@ -376,6 +377,61 @@ def test_workspace_deletion_schedule_is_idempotent_and_can_be_explicitly_cancell
     assert restored.data["is_active"] is True
     assert restored.data["scheduled_deletion_at"] is None
     assert PlatformAuditEvent.objects.filter(action="workspace.deletion_cancelled").exists()
+
+
+@pytest.mark.django_db
+@patch("bfg.platform.views.console_views.UserService.request_password_reset", return_value=True)
+def test_password_reset_uses_standalone_platform_owner_and_only_that_owner(mock_reset, settings):
+    settings.PLATFORM_EMBEDDED = False
+    superuser = User.objects.create_superuser(
+        username="password-root", password="secret", email="root@example.test",
+    )
+    owner = User.objects.create_user(username="standalone-password-owner", password="secret", email="owner@example.test")
+    outsider = User.objects.create_user(username="reset-outsider", password="secret", email="outsider@example.test")
+    cluster = Cluster.objects.create(
+        id="password-cluster", name="Password", region="apac",
+        api_base_url="https://api.example.test", frontend_base_url="https://console.example.test",
+        db_host="db.example.test", redis_url="rediss://private.example.test/0", s3_bucket="password",
+    )
+    workspace = Workspace.objects.create(name="Password Workspace", slug="password-workspace", is_active=True)
+    profile = WorkspacePlatformProfile.objects.create(workspace=workspace, cluster=cluster, region="apac")
+    PlatformMembership.objects.create(user=owner, profile=profile, role="owner", is_active=True)
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    reset = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/reset-admin-password/",
+        {"confirm": True, "reason": "Support request"}, format="json",
+    )
+    assert reset.status_code == 200
+    mock_reset.assert_called_once_with(owner.email, "https://console.example.test")
+
+    refused = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/reset-admin-password/",
+        {"confirm": True, "reason": "Wrong recipient", "email": outsider.email}, format="json",
+    )
+    assert refused.status_code == 400
+    assert mock_reset.call_count == 1
+
+
+@pytest.mark.django_db
+@patch("bfg.platform.views.console_views.UserService.request_password_reset", return_value=False)
+def test_password_reset_reports_delivery_failure_without_audit_event(mock_reset, settings):
+    settings.PLATFORM_EMBEDDED = True
+    settings.FRONTEND_URL = "https://uat.idlevo.com"
+    superuser = User.objects.create_superuser(
+        username="mail-root", password="secret", email="root@example.test",
+    )
+    workspace = _embedded_workspace_member(superuser, slug="mail-workspace")
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    response = client.post(
+        f"/api/v1/platform/console/workspaces/{workspace.id}/reset-admin-password/",
+        {"confirm": True, "reason": "Support request"}, format="json",
+    )
+    assert response.status_code == 503
+    assert not PlatformAuditEvent.objects.filter(action="workspace.password_reset_requested").exists()
 
 
 @pytest.mark.django_db

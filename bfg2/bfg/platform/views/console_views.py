@@ -21,7 +21,7 @@ from rest_framework.response import Response
 from bfg.platform.permissions import IsPlatformSuperuser
 from bfg.platform.services.audit_service import record_platform_audit, redact_platform_audit_value
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
-from bfg.platform.utils import is_platform_workspace
+from bfg.platform.utils import is_embedded_mode, is_platform_workspace
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
 from bfg.common.services.workspace_service import WorkspaceService
 from bfg.common.services.user_service import UserService
@@ -72,14 +72,27 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         Workspace = apps.get_model("common", "Workspace")
         return Workspace.objects.select_related("platform_profile__cluster").get(pk=pk)
 
+    def _administrator_users(self, workspace):
+        """Return eligible reset recipients using the ownership model for this mode."""
+        User = apps.get_model("common", "User")
+        if is_embedded_mode():
+            StaffMember = apps.get_model("common", "StaffMember")
+            user_ids = StaffMember.all_objects.filter(
+                workspace=workspace, is_active=True, role__code__in=["admin", "owner"],
+            ).values_list("user_id", flat=True)
+        else:
+            PlatformMembership = apps.get_model("platform", "PlatformMembership")
+            # PlatformMembership ownership is durable; StaffMember roles may change
+            # inside the tenant and must not grant cross-workspace reset authority.
+            user_ids = PlatformMembership.objects.filter(
+                profile__workspace=workspace, is_active=True, role="owner",
+            ).values_list("user_id", flat=True)
+        return User.objects.filter(id__in=user_ids, is_active=True).order_by("id")
+
     def _owner(self, workspace):
-        StaffMember = apps.get_model("common", "StaffMember")
-        member = (StaffMember.all_objects.filter(workspace=workspace, is_active=True,
-                                                  role__code__in=["admin", "owner"])
-                   .select_related("user").order_by("id").first())
-        if not member:
+        user = self._administrator_users(workspace).first()
+        if not user:
             return None
-        user = member.user
         return {"id": user.id, "username": user.username, "email": user.email or None}
 
     def _item(self, workspace):
@@ -290,20 +303,31 @@ class PlatformConsoleWorkspaceViewSet(viewsets.ViewSet):
         _confirmed(request)
         reason = _change_reason(request)
         workspace = self._workspace(pk)
-        owner = self._owner(workspace)
-        email = str(request.data.get("email") or (owner or {}).get("email") or "").strip()
-        if not email:
-            return Response({"detail": "The workspace owner has no email address."}, status=status.HTTP_400_BAD_REQUEST)
+        administrators = self._administrator_users(workspace)
+        requested_email = str(request.data.get("email") or "").strip()
+        recipient = (
+            administrators.filter(email__iexact=requested_email).first()
+            if requested_email else administrators.first()
+        )
+        if not recipient or not recipient.email:
+            return Response(
+                {"detail": "Choose an active Workspace administrator with an email address."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         profile = getattr(workspace, "platform_profile", None)
         cluster = getattr(profile, "cluster", None) if profile else None
         from django.conf import settings
         frontend_url = (getattr(settings, "FRONTEND_URL", "") or getattr(cluster, "frontend_base_url", "")).rstrip("/")
         if not frontend_url:
             return Response({"detail": "Password reset frontend is not configured."}, status=status.HTTP_409_CONFLICT)
-        UserService.request_password_reset(email, frontend_url)
+        if not UserService.request_password_reset(recipient.email, frontend_url):
+            return Response(
+                {"detail": "The password reset email could not be sent. Check email delivery settings and try again."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         record_platform_audit(
             request=request, action="workspace.password_reset_requested", target_type="workspace",
-            target_id=workspace.id, reason=reason, after={"owner_email": email},
+            target_id=workspace.id, reason=reason, after={"administrator_id": recipient.id},
         )
         return Response({"detail": "If the account exists, a password reset email has been sent."})
 

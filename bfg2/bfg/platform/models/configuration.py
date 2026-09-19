@@ -88,6 +88,45 @@ class WorkspaceUsageCap(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class WorkspaceMeterUsage(models.Model):
+    """One idempotent, price-snapshotted metered action by a workspace."""
+
+    workspace = models.ForeignKey(
+        "common.Workspace",
+        on_delete=models.CASCADE,
+        related_name="platform_meter_usage",
+    )
+    meter = models.CharField(max_length=100)
+    # The caller keeps the same key when retrying one user action.  It is scoped
+    # to the meter because a caller can independently invoke more than one meter.
+    idempotency_key = models.CharField(max_length=128)
+    units = models.DecimalField(max_digits=20, decimal_places=4)
+    points = models.DecimalField(max_digits=20, decimal_places=4)
+    period_start = models.DateField(db_index=True)
+    price = models.ForeignKey(
+        "platform.PlatformMeterPrice",
+        null=True,
+        on_delete=models.PROTECT,
+        related_name="usage_records",
+    )
+    recorded_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        ordering = ["-recorded_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace", "meter", "idempotency_key"],
+                name="platform_meter_usage_idempotency",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["workspace", "meter", "period_start"],
+                name="platform_meter_usage_period",
+            ),
+        ]
+
+
 class WorkspaceEntitlement(models.Model):
     """A Platform-granted entitlement; it does not itself enable an extension."""
 

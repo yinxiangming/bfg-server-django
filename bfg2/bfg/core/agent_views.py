@@ -15,6 +15,11 @@ from django.http import StreamingHttpResponse
 
 from bfg.core.agent import AgentCapabilityRegistry, AgentCapability, _FakeView
 from bfg.core.api_tool_catalog import get_api_tools, execute_api_tool
+from bfg.platform.services.metering_service import (
+    MeteringIdempotencyKeyRequired,
+    WorkspaceUsageCapExceeded,
+    record_meter_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -301,6 +306,23 @@ class AgentChatView(APIView):
             return Response(
                 {"detail": "messages array is required (e.g. [{ role: 'user', content: '...' }])."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            record_meter_usage(
+                workspace,
+                "ai.agent_chat",
+                1,
+                idempotency_key=request.headers.get("X-Idempotency-Key"),
+            )
+        except MeteringIdempotencyKeyRequired:
+            return Response(
+                {"detail": "A stable idempotency key is required for metered AI requests.", "code": "metering_idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except WorkspaceUsageCapExceeded:
+            return Response(
+                {"detail": "This workspace has reached its monthly AI usage allowance.", "code": "workspace_usage_cap_exceeded"},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:

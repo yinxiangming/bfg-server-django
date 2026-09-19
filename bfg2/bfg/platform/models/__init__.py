@@ -5,6 +5,7 @@ from bfg.platform.models.configuration import (
     PlatformVariableChange,
     PlatformVariableOverride,
     WorkspaceEntitlement,
+    WorkspaceMeterUsage,
     WorkspaceUsageCap,
 )
 from bfg.platform.models.audit import PlatformAuditEvent
@@ -23,6 +24,7 @@ __all__ = [
     "PlatformSSOCode",
     "WorkspaceOperation",
     "WorkspaceEntitlement",
+    "WorkspaceMeterUsage",
     "WorkspacePlatformProfile",
     "WorkspaceUsageCap",
     "WorkspaceSSOConfig",

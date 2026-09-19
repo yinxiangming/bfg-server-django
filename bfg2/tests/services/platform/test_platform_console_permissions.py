@@ -888,6 +888,23 @@ def test_workspace_create_returns_a_safe_capacity_error_instead_of_a_server_erro
 
 
 @pytest.mark.django_db
+def test_workspace_service_does_not_assign_a_cluster_with_a_known_bad_health_state():
+    user = User.objects.create_user(username="unhealthy-cluster-owner", password="secret")
+    Cluster.objects.create(
+        id="unhealthy-cluster", name="Unhealthy", region="apac",
+        api_base_url="https://api.example.test", db_host="db.example.test",
+        redis_url="rediss://private.example.test/0", s3_bucket="unhealthy",
+        health_status="degraded", max_workspaces=20,
+    )
+    service = WorkspaceService(workspace=None, user=user)
+
+    with pytest.raises(WorkspaceCapacityUnavailable):
+        service.create_workspace(
+            name="Blocked by health", slug="blocked-by-health", owner_user=user, region="apac",
+        )
+
+
+@pytest.mark.django_db
 def test_workspace_deletion_schedule_is_idempotent_and_can_be_explicitly_cancelled(settings):
     settings.PLATFORM_EMBEDDED = True
     superuser = User.objects.create_superuser(

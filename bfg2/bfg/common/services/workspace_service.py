@@ -43,7 +43,15 @@ class WorkspaceService(BaseService):
 
         def has_capacity(candidate):
             assigned = WorkspacePlatformProfile.objects.filter(cluster_id=candidate.id).count()
-            return candidate.is_active and candidate.is_accepting_new and assigned < candidate.max_workspaces
+            # Unknown is retained for legacy deployments that have not enabled
+            # Platform probes yet. A recorded degraded or down state, however,
+            # must keep new tenants away until an operator restores health.
+            return (
+                candidate.is_active
+                and candidate.is_accepting_new
+                and candidate.health_status not in {"degraded", "down"}
+                and assigned < candidate.max_workspaces
+            )
 
         if cluster:
             cluster_id = getattr(cluster, 'id', cluster)

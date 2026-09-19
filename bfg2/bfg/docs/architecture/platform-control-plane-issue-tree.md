@@ -102,7 +102,7 @@ rather than claim that the workspace moved.
 
 ### Verification record (2026-09-20)
 
-- Current local BFG suite: `2050 passed, 22 subtests passed`.
+- Current local BFG suite: `2051 passed, 22 subtests passed`.
 - UAT server-layer smoke used existing persisted accounts without changing data:
   the Django superuser received 200 from the workspace, Cluster, and audit
   control reads; an existing workspace owner received 200 from the established

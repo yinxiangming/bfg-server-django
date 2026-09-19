@@ -79,11 +79,15 @@ class ConsoleViewer:
         return None
 
 
-def console_workspaces(viewer: ConsoleViewer, search: str = ""):
+CONSOLE_WORKSPACE_STATUSES = frozenset({"active", "suspended", "inactive", "scheduled_for_deletion"})
+
+
+def console_workspaces(viewer: ConsoleViewer, search: str = "", *, status: str = "", cluster: str = ""):
     """The workspaces *viewer* reaches, newest first.
 
     Every workspace for a platform administrator, and the ones they own for anyone
     else. *search* keeps those whose name or slug contains it, in any case.
+    *status* and *cluster* only narrow that already-authorized set.
     """
     Workspace = apps.get_model("common", "Workspace")
     workspaces = Workspace.objects.select_related("platform_profile").order_by("-created_at", "-id")
@@ -92,6 +96,27 @@ def console_workspaces(viewer: ConsoleViewer, search: str = ""):
     search = (search or "").strip()
     if search:
         workspaces = workspaces.filter(Q(name__icontains=search) | Q(slug__icontains=search))
+    if status == "scheduled_for_deletion":
+        workspaces = workspaces.filter(platform_profile__scheduled_deletion_at__isnull=False)
+    elif status == "suspended":
+        workspaces = workspaces.filter(
+            platform_profile__scheduled_deletion_at__isnull=True,
+            platform_profile__suspended_at__isnull=False,
+        )
+    elif status == "inactive":
+        workspaces = workspaces.filter(
+            platform_profile__scheduled_deletion_at__isnull=True,
+            platform_profile__suspended_at__isnull=True,
+            is_active=False,
+        )
+    elif status == "active":
+        workspaces = workspaces.filter(
+            platform_profile__scheduled_deletion_at__isnull=True,
+            platform_profile__suspended_at__isnull=True,
+            is_active=True,
+        )
+    if cluster:
+        workspaces = workspaces.filter(platform_profile__cluster_id=cluster)
     return workspaces
 
 

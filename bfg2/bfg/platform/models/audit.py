@@ -21,6 +21,9 @@ class PlatformAuditEvent(models.Model):
     target_type = models.CharField(max_length=64)
     target_id = models.CharField(max_length=255)
     reason = models.CharField(max_length=500)
+    # The final server-side outcome, deliberately separate from arbitrary
+    # exception detail that must remain in secured logs.
+    result = models.CharField(max_length=32, default="succeeded")
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,

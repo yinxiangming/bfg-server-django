@@ -61,7 +61,7 @@ def _request_id(request):
         return None
 
 
-def record_platform_audit(*, request, action, target_type, target_id, reason, before=None, after=None):
+def record_platform_audit(*, request, action, target_type, target_id, reason, before=None, after=None, result="succeeded"):
     """Record one completed control-plane action without retaining credentials."""
     PlatformAuditEvent = apps.get_model("platform", "PlatformAuditEvent")
     return PlatformAuditEvent.objects.create(
@@ -69,6 +69,7 @@ def record_platform_audit(*, request, action, target_type, target_id, reason, be
         target_type=target_type,
         target_id=str(target_id),
         reason=reason,
+        result=result,
         actor=request.user if getattr(request.user, "is_authenticated", False) else None,
         request_id=_request_id(request),
         source_ip=_client_ip(request),

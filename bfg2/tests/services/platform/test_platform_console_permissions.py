@@ -1165,6 +1165,7 @@ def test_audit_events_are_paginated_filterable_and_redacted_for_superusers():
 
     assert first.status_code == 200
     assert first.data["results"][0]["id"] == str(newer.id)
+    assert first.data["results"][0]["result"] == "succeeded"
     assert first.data["next"]
     assert "source_ip" not in first.data["results"][0]
     second = client.get(f"/api/v1/platform/console/audit-events/?cursor={first.data['next']}")

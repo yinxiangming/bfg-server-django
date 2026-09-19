@@ -1355,6 +1355,7 @@ class PlatformConsoleAuditEventViewSet(PlatformConsoleAccessViewSet):
             "action": event.action,
             "target": {"type": event.target_type, "id": event.target_id},
             "reason": event.reason,
+            "result": event.result,
             "actor": (
                 {"id": event.actor_id, "username": event.actor.username}
                 if event.actor_id else None

@@ -27,7 +27,7 @@ User = get_user_model()
 class Command(BaseCommand):
     help = (
         "Create workspace from workspace_bootstrap block in JSON (if not exists), "
-        "then load site config (Site, Theme, Pages, Menus, categories)."
+        "then load site config (Site, Theme, Pages, Menus, categories, and posts)."
     )
 
     def add_arguments(self, parser):
@@ -130,6 +130,10 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"Menus: {result.get('menus_count', 0)}"))
             if result.get("categories_count"):
                 self.stdout.write(self.style.SUCCESS(f"Categories: {result.get('categories_count')}"))
+            if result.get("content_categories_count"):
+                self.stdout.write(self.style.SUCCESS(f"Content categories: {result.get('content_categories_count')}"))
+            if result.get("posts_count"):
+                self.stdout.write(self.style.SUCCESS(f"Posts: {result.get('posts_count')}"))
         except Exception as e:
             self.stdout.write(self.style.ERROR(str(e)))
             raise

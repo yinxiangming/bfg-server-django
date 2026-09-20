@@ -156,3 +156,6 @@ survive only as the source for the one-time migration that seeds the default.
 ## Skills
 
 - `/bfg-api` — Full reference of all BFG2 models, fields, and API endpoints
+- `/bfg-website-import` — Import an existing public website into a
+  Workspace-scoped site-config, CMS content, extension data, and CDN asset
+  manifest

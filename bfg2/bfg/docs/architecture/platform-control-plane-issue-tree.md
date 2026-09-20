@@ -111,6 +111,16 @@ rather than claim that the workspace moved.
 ### Verification record (2026-09-20)
 
 - Current local BFG suite: `2063 passed, 22 subtests passed`.
+- An isolated two-instance local HTTP check used independent SQLite databases
+  and Django `runserver` processes for a source and a target BFG Platform. A
+  superuser exported one reviewed workspace template from the source (`200`) and
+  imported it into the target (`201`). The target matched the workspace name,
+  contact details, settings, pending custom domain, existing owner and Cluster
+  assignment. Replaying the import with the same idempotency key returned the
+  stored `201` with `Idempotent-Replayed: true`; a normal workspace owner got
+  the uniform control-plane `403`. This proves the configuration-template path
+  across isolated instances only. It does not prove a tenant-data archive,
+  media copy, restore, purge, or live Cluster migration.
 - Placement reservations are strict-superuser-only, reserve capacity without
   changing ``WorkspacePlatformProfile.cluster``, have idempotent rollback and
   persist ordered progress events. An explicit preview-by-default maintenance

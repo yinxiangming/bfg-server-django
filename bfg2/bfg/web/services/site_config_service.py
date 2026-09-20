@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 Site config load and export for bfg.web.
-Load from JSON/YAML config (Site, Theme, Pages, Menus, Product categories) or export workspace site data.
+Load from JSON/YAML config (Site, Theme, Pages, Menus, content/product categories, and posts) or export workspace site data.
 """
 
 from typing import Any, Dict, List, Optional
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from django.utils.text import slugify
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from bfg.common.constants import DEFAULT_CURRENCY_CODE
@@ -18,7 +20,7 @@ from bfg.common.models import (
     upsert_custom_workspace_domain,
 )
 from bfg.common.utils import first_staff_user_for_workspace
-from bfg.web.models import Site, Theme, Language, Page, Menu, MenuItem
+from bfg.web.models import Site, Theme, Language, Page, Menu, MenuItem, Post, Category, Tag
 
 User = get_user_model()
 
@@ -36,7 +38,8 @@ class SiteConfigService(BaseService):
     ) -> Dict[str, Any]:
         """
         Load site config into current workspace.
-        config: dict with keys site, theme (optional), pages, menus, categories (optional).
+        config: dict with keys site, theme (optional), pages, menus, categories (optional),
+        content_categories (optional), and posts (optional).
         mode: 'merge' (default) = create/update by slug; 'replace' = delete existing web data then import.
         replace_shop_categories: if True and config contains 'categories', delete workspace ProductCategory rows before import.
         """
@@ -66,6 +69,11 @@ class SiteConfigService(BaseService):
 
                 ProductCategory.objects.filter(workspace=self.workspace).delete()
             categories_count = self._upsert_product_categories(raw_categories, language=lang)
+        content_categories_count = self._upsert_content_categories(
+            config.get("content_categories") or [],
+            language=(site_data or {}).get("default_language") or "en",
+        )
+        posts_count = self._upsert_posts(config.get("posts") or [], created_by_user)
         menus_data = config.get("menus") or config.get("menu") or []
         for m in menus_data:
             self._upsert_menu(m, pages_by_slug)
@@ -75,6 +83,8 @@ class SiteConfigService(BaseService):
             "pages": list(pages_by_slug.values()),
             "menus_count": len(menus_data),
             "categories_count": categories_count,
+            "content_categories_count": content_categories_count,
+            "posts_count": posts_count,
         }
 
     def _clear_workspace_web_site_data(self) -> None:
@@ -320,6 +330,108 @@ class SiteConfigService(BaseService):
             )
             category_map[slug] = obj
         return len(category_map)
+
+    def _upsert_content_categories(self, items: List[Dict[str, Any]], language: str = "en") -> int:
+        """Create or update web content categories by workspace and slug."""
+        category_map: Dict[tuple[str, str], Category] = {}
+        remaining = list(items)
+        for _ in range(len(remaining) + 1):
+            if not remaining:
+                break
+            next_remaining = []
+            for item in remaining:
+                slug = (item.get("slug") or "").strip()
+                if not slug:
+                    continue
+                lang = (item.get("language") or language or "en")[:10]
+                parent_slug = (item.get("parent_slug") or "").strip()
+                parent = category_map.get((parent_slug, lang)) if parent_slug else None
+                if parent_slug and parent is None:
+                    next_remaining.append(item)
+                    continue
+                category, _ = Category.objects.update_or_create(
+                    workspace=self.workspace,
+                    slug=slug,
+                    language=lang,
+                    defaults={
+                        "name": (item.get("name") or slug)[:100],
+                        "description": (item.get("description") or ""),
+                        "parent": parent,
+                        "content_type_name": (item.get("content_type_name") or "")[:50],
+                        "fields_schema": item.get("fields_schema") or {},
+                        "icon": (item.get("icon") or "")[:50],
+                        "color": (item.get("color") or "")[:7],
+                        "order": int(item.get("order", 100)),
+                        "is_active": bool(item.get("is_active", True)),
+                    },
+                )
+                category_map[(slug, lang)] = category
+            remaining = next_remaining
+        return len(category_map)
+
+    def _upsert_posts(self, items: List[Dict[str, Any]], author) -> int:
+        """Import idempotent workspace-scoped CMS posts and their tags."""
+        if not items:
+            return 0
+        post_author = author or getattr(self, "user", None) or first_staff_user_for_workspace(self.workspace)
+        if post_author is None:
+            raise ValueError("posts require an author; pass --user or add a staff user to the workspace")
+        categories = {
+            (category.slug, category.language): category
+            for category in Category.objects.filter(workspace=self.workspace)
+        }
+        count = 0
+        for item in items:
+            slug = (item.get("slug") or "").strip()
+            if not slug:
+                continue
+            language = (item.get("language") or "en")[:10]
+            category_slug = (item.get("category_slug") or "").strip()
+            category = categories.get((category_slug, language)) or categories.get((category_slug, "en"))
+            raw_published_at = item.get("published_at")
+            published_at = parse_datetime(raw_published_at) if isinstance(raw_published_at, str) else None
+            if published_at and timezone.is_naive(published_at):
+                published_at = timezone.make_aware(published_at)
+            status = (item.get("status") or "draft").strip()
+            if status == "published" and published_at is None:
+                published_at = timezone.now()
+            defaults = {
+                "title": (item.get("title") or slug)[:255],
+                "content": item.get("content") or "",
+                "excerpt": item.get("excerpt") or "",
+                "featured_image": item.get("featured_image") or "",
+                "category": category,
+                "custom_fields": item.get("custom_fields") or {},
+                "meta_title": (item.get("meta_title") or item.get("title") or slug)[:255],
+                "meta_description": item.get("meta_description") or "",
+                "status": status,
+                "published_at": published_at,
+                "allow_comments": bool(item.get("allow_comments", True)),
+                "author": post_author,
+            }
+            post, _ = Post.objects.update_or_create(
+                workspace=self.workspace,
+                slug=slug,
+                language=language,
+                defaults=defaults,
+            )
+            tag_objects = []
+            for raw_tag in item.get("tags") or []:
+                tag_name = raw_tag.get("name") if isinstance(raw_tag, dict) else raw_tag
+                tag_name = (str(tag_name or "")).strip()
+                if not tag_name:
+                    continue
+                tag_slug = (raw_tag.get("slug") if isinstance(raw_tag, dict) else "") or slugify(tag_name)
+                tag, _ = Tag.objects.update_or_create(
+                    workspace=self.workspace,
+                    slug=tag_slug[:50],
+                    language=language,
+                    defaults={"name": tag_name[:50]},
+                )
+                tag_objects.append(tag)
+            post.tags.set(tag_objects)
+            count += 1
+        return count
 
     def _upsert_menu(self, data: Dict, pages_by_slug: Dict[str, Page]) -> None:
         slug = (data.get("slug") or "menu").strip()

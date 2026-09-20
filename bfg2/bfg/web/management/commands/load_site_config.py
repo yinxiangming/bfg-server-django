@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Load site config (Site, Theme, Pages, Menus) from JSON file into a workspace.
+Load site config (Site, Theme, Pages, Menus, content categories, and posts) from JSON file into a workspace.
 Usage: python manage.py load_site_config <path-to-site-config.json> --workspace=<slug_or_id> [--replace] [--user=<id>]
 """
 
@@ -16,7 +16,7 @@ User = get_user_model()
 
 
 class Command(BaseCommand):
-    help = "Load site config from JSON into a workspace (bfg.web Site, Theme, Pages, Menus)"
+    help = "Load site config from JSON into a workspace (bfg.web Site, Theme, Pages, Menus, Categories, Posts)"
 
     def add_arguments(self, parser):
         parser.add_argument("config_path", type=str, help="Path to site-config JSON file")
@@ -93,6 +93,10 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"Menus: {result.get('menus_count', 0)}"))
             if result.get("categories_count"):
                 self.stdout.write(self.style.SUCCESS(f"Categories: {result.get('categories_count')}"))
+            if result.get("content_categories_count"):
+                self.stdout.write(self.style.SUCCESS(f"Content categories: {result.get('content_categories_count')}"))
+            if result.get("posts_count"):
+                self.stdout.write(self.style.SUCCESS(f"Posts: {result.get('posts_count')}"))
         except Exception as e:
             self.stdout.write(self.style.ERROR(str(e)))
             raise

@@ -8,6 +8,7 @@ Supports embedded and standalone modes:
   - Embedded: token exchange returns the same JWT (no cross-instance call)
   - Standalone: token exchange calls Workspace Server to provision user + get JWT
 """
+import logging
 import requests as http_requests
 
 from urllib.parse import urlparse
@@ -22,6 +23,20 @@ from django.utils import timezone
 
 from bfg.common.models import resolve_workspace_public_frontend_base_url
 from bfg.platform.utils import is_embedded_mode
+
+
+logger = logging.getLogger(__name__)
+WORKSPACE_SERVER_UNAVAILABLE = "Unable to reach the workspace server. Please try again."
+
+
+def _release_sso_code_after_remote_failure(sso_code, claimed_at) -> None:
+    """Make a code retryable when no workspace token was obtained.
+
+    The conditional update cannot clear a code another successful exchange has
+    consumed. A remote ``provision-user`` call is idempotent for the same user,
+    so retrying after a transport failure is safer than stranding the user.
+    """
+    sso_code.__class__.objects.filter(pk=sso_code.pk, used_at=claimed_at).update(used_at=None)
 
 
 class AuthViewSet(viewsets.ViewSet):
@@ -155,8 +170,8 @@ class AuthViewSet(viewsets.ViewSet):
 
         if not workspace_api_url:
             return Response(
-                {'error': 'Workspace cluster API URL is not configured'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                {'error': WORKSPACE_SERVER_UNAVAILABLE},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
         try:
@@ -173,9 +188,10 @@ class AuthViewSet(viewsets.ViewSet):
                 timeout=10,
             )
             resp.raise_for_status()
-        except Exception as e:
+        except Exception:
+            logger.warning("Workspace token exchange failed", exc_info=True)
             return Response(
-                {'error': f'Token exchange failed: {e}'},
+                {'error': WORKSPACE_SERVER_UNAVAILABLE},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
@@ -264,9 +280,10 @@ class AuthViewSet(viewsets.ViewSet):
                 workspace,
                 override_domain=override_domain or None,
             )
-        except ValueError as exc:
+        except ValueError:
+            logger.info("SSO start refused because no verified public domain is available", exc_info=True)
             return Response(
-                {'error': str(exc)},
+                {'error': 'The workspace does not have a verified public domain.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -403,13 +420,14 @@ class AuthViewSet(viewsets.ViewSet):
                     timeout=10,
                 )
                 resp.raise_for_status()
-            except Exception as e:
+                resp_data = resp.json()
+            except Exception:
+                logger.warning("Workspace SSO exchange failed", exc_info=True)
+                _release_sso_code_after_remote_failure(sso_code, claimed_at)
                 return Response(
-                    {'error': f'Token exchange failed: {e}'},
+                    {'error': WORKSPACE_SERVER_UNAVAILABLE},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
-
-            resp_data = resp.json()
 
             workspace_frontend_url = resolve_workspace_public_frontend_base_url(workspace)
 

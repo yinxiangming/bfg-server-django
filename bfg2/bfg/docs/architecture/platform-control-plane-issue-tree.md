@@ -36,6 +36,25 @@ turning an ordinary workspace owner into a deployment administrator.
 - [ ] Add an explicit migration workflow between clusters. Do not reuse export
       and import as a live-data migration.
 
+### Deletion retention implementation gate
+
+The required archive, restore, and purge adapter contract is documented in
+[`platform-data-plane-adapter-contract.md`](platform-data-plane-adapter-contract.md).
+
+Do not implement this worker as ``workspace.delete()``. A scheduled deletion is
+recoverable until the Platform has a complete per-workspace archive: database
+rows, private media inventory, a versioned manifest, a verified read-back, and
+an isolated restore test. The existing extension archive mechanism is not that
+archive; it intentionally covers only one extension's rows.
+
+The eventual purge command or worker must remain disabled unless a deployment
+setting explicitly enables it, default to a read-only preview, and require a
+separate execute confirmation. It must lock the profile, re-check that its
+scheduled timestamp is still due and that the workspace is inactive, record the
+verified archive reference before deletion, and write one idempotent final audit
+event after the transaction succeeds. Media removal requires the same manifest
+and verification boundary; it must not be inferred from database cascades.
+
 ## P2: Cluster operations
 
 - [x] List, create, and edit clusters with optimistic configuration versions.
@@ -44,10 +63,26 @@ turning an ordinary workspace owner into a deployment administrator.
 - [x] Add a fixed-path HTTPS health probe, allowlisted by
       `CLUSTER_HEALTH_ALLOWED_HOSTS`, with no redirects, proxy environment, IP
       literals, credentials, or response-body disclosure.
-- [ ] Provide a controlled assignment/migration queue with capacity reservation,
-      rollback, and progress events.
-- [ ] Add a deployment health dashboard based on stored observations, rather
+- [x] Provide a controlled placement-reservation queue with capacity reservation,
+      rollback, ordered progress events, and a profile fencing version. It is
+      intentionally not a live-data migration executor.
+- [x] Add a deployment health dashboard based on stored observations, rather
       than browser-side probes.
+
+### Placement implementation gate
+
+The required data-plane migration phases, fencing semantics, and release gates
+are documented in
+[`platform-data-plane-adapter-contract.md`](platform-data-plane-adapter-contract.md).
+
+Do not represent a live workspace migration as a direct update of
+`WorkspacePlatformProfile.cluster`. The current deployment has no authenticated,
+phase-idempotent data-plane adapter for copying, verifying, cutting over, and
+compensating tenant data between Clusters. A safe implementation must first add
+a superuser-only placement operation with capacity reservations, ordered progress
+events, a fencing version on the workspace profile, and an explicit rollback
+window. Until that adapter exists, a requested live migration must fail clearly
+rather than claim that the workspace moved.
 
 ## P3: Policy, billing, and extensions
 
@@ -55,10 +90,10 @@ turning an ordinary workspace owner into a deployment administrator.
       entitlement data models rather than duplicating them.
 - [x] Publish strict-superuser control aliases for existing configuration
       endpoints while the client moves from the historical path.
-- [ ] Move all privileged configuration reads and writes to dedicated control
+- [x] Move all privileged configuration reads and writes to dedicated control
       view classes, then retire the historical privileged console aliases.
-- [ ] Add audit/idempotency coverage to the legacy configuration services before
-      removing their aliases.
+- [x] Retire legacy configuration routes after migrating their regression
+      coverage to the confirmed, idempotent and audited control contract.
 
 ## P4: User interface and release verification
 
@@ -72,6 +107,38 @@ turning an ordinary workspace owner into a deployment administrator.
       works, but every `/control/` endpoint returns 403.
 - [ ] Run and verify database migrations from the current deployment schema.
 - [ ] Promote only as part of the agreed larger production release.
+
+### Verification record (2026-09-20)
+
+- Current local BFG suite: `2063 passed, 22 subtests passed`.
+- An isolated two-instance local HTTP check used independent SQLite databases
+  and Django `runserver` processes for a source and a target BFG Platform. A
+  superuser exported one reviewed workspace template from the source (`200`) and
+  imported it into the target (`201`). The target matched the workspace name,
+  contact details, settings, pending custom domain, existing owner and Cluster
+  assignment. Replaying the import with the same idempotency key returned the
+  stored `201` with `Idempotent-Replayed: true`; a normal workspace owner got
+  the uniform control-plane `403`. This proves the configuration-template path
+  across isolated instances only. It does not prove a tenant-data archive,
+  media copy, restore, purge, or live Cluster migration.
+- Placement reservations are strict-superuser-only, reserve capacity without
+  changing ``WorkspacePlatformProfile.cluster``, have idempotent rollback and
+  persist ordered progress events. An explicit preview-by-default maintenance
+  command releases expired reservations only with ``--apply`` and writes a
+  fencing event plus audit evidence. Requests to move an already assigned
+  workspace return a clear data-plane-adapter refusal instead of changing
+  routing metadata. Focused control regressions: `24 passed`; client typecheck
+  and Webpack production build also pass.
+- UAT server-layer smoke used existing persisted accounts without changing data:
+  the Django superuser received 200 from the workspace, Cluster, and audit
+  control reads; an existing workspace owner received 200 from the established
+  owner console and 403 from the control route.
+- The public UAT health document returns `{"status":"ok"}`, and UAT reports no
+  pending migrations. The Cluster health UI route and its stored-observation
+  dashboard are covered by local route-level regressions and remain in the next
+  batched release until their PRs are merged.
+- These checks do not replace a browser-login E2E path. Keep the two UAT
+  smoke items above open until that final UI-level verification is performed.
 
 ## Non-goals
 

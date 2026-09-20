@@ -259,6 +259,19 @@ confirmation mails can actually be delivered.
   - Whoever runs the deployment has to put a retention rule on the prefix: nothing
     deletes an archive. See `bfg/docs/deployment/extension-archives.md`.
 
+### `PLATFORM_PLACEMENT_EXPIRY_ENABLED`
+- Default: `false`
+- Purpose:
+  - Enables the scheduled release of capacity reservations whose rollback window
+    has elapsed.
+- Notes:
+  - Leave it off until the deployment has a running Celery worker/beat process
+    and retains Platform audit records.
+  - The task only releases capacity and invalidates the placement fence; it never
+    changes Workspace routing or migrates tenant data.
+  - `python manage.py expire_placement_reservations` is preview-only; add
+    `--apply` for the same bounded write outside Celery.
+
 ---
 
 ## 9. Celery / Async Jobs

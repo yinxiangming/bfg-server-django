@@ -63,7 +63,12 @@ from bfg.common.middleware import bound_workspace
 from bfg.core.read_only import exempt_from_read_only
 from bfg.platform.services import acquisitions, bill_payment, console_billing
 from bfg.platform.services.billing import PlatformWorkspaceMissing
-from bfg.platform.services.console_service import ConsoleViewer, console_workspaces, workspace_entries
+from bfg.platform.services.console_service import (
+    CONSOLE_WORKSPACE_STATUSES,
+    ConsoleViewer,
+    console_workspaces,
+    workspace_entries,
+)
 
 WORKSPACE_NOT_FOUND = 'workspace_not_found'
 INVALID_MONTH = 'invalid_month'
@@ -121,7 +126,24 @@ class ConsoleWorkspaceViewSet(viewsets.GenericViewSet):
 
     def get_queryset(self):
         search = self.request.query_params.get('search', '') if self.action == 'list' else ''
-        return console_workspaces(self.viewer, search)
+        status = (self.request.query_params.get('status', '') if self.action == 'list' else '').strip()
+        cluster = (self.request.query_params.get('cluster', '') if self.action == 'list' else '').strip()
+        unassigned = (self.request.query_params.get('unassigned', '') if self.action == 'list' else '').strip()
+        if status and status not in CONSOLE_WORKSPACE_STATUSES:
+            raise ValidationError({'status': 'Use active, suspended, inactive, or scheduled_for_deletion.'})
+        if len(cluster) > 32:
+            raise ValidationError({'cluster': 'Use a Cluster ID of 32 characters or fewer.'})
+        if unassigned not in ('', 'true', 'false'):
+            raise ValidationError({'unassigned': 'Use true or false.'})
+        if cluster and unassigned == 'true':
+            raise ValidationError({'cluster': 'Choose a Cluster or unassigned workspaces, not both.'})
+        return console_workspaces(
+            self.viewer,
+            search,
+            status=status,
+            cluster=cluster,
+            unassigned=unassigned == 'true',
+        )
 
     def get_object(self):
         # The queryset holds only what the caller reaches, so a workspace outside it

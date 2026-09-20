@@ -38,6 +38,10 @@ class WorkspacePlatformProfile(models.Model):
         related_name="workspaces",
     )
     region = models.CharField(_("Region"), max_length=20, default="us")
+    # Every placement request captures this value. A future data-plane worker must
+    # re-check it before cutover, so a rolled-back or superseded request cannot
+    # later change routing with stale credentials or delayed delivery.
+    placement_fence = models.PositiveIntegerField(_("Placement Fence"), default=0)
     
     # API Keys
     platform_api_key = models.CharField(_("Platform API Key"), max_length=64, blank=True)

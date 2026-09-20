@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 from bfg.platform.models.cluster import Cluster
-from bfg.platform.models.control import PlatformAuditEvent, PlatformControlActionRequest
+from bfg.platform.models.control import (
+    ClusterHealthObservation,
+    PlatformAuditEvent,
+    PlatformControlActionRequest,
+    WorkspacePlacementEvent,
+    WorkspacePlacementRequest,
+)
 from bfg.platform.models.entitlement import WorkspaceEntitlement
 from bfg.platform.models.feature import FeatureDefinition
 from bfg.platform.models.metering import MeterPrice, UsageRecord
@@ -10,6 +16,7 @@ from bfg.platform.models.workspace_profile import WorkspacePlatformProfile, Work
 
 __all__ = [
     "Cluster",
+    "ClusterHealthObservation",
     "FeatureDefinition",
     "MeterPrice",
     "PlatformAuditEvent",
@@ -21,6 +28,8 @@ __all__ = [
     "UsageRecord",
     "WorkspaceEntitlement",
     "WorkspaceOperation",
+    "WorkspacePlacementEvent",
+    "WorkspacePlacementRequest",
     "WorkspacePlatformProfile",
     "WorkspaceSSOConfig",
 ]

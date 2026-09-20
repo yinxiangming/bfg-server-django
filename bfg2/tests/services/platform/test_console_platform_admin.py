@@ -1,17 +1,18 @@
 """
-The console's platform-administrator half: the numbers the deployment bills by.
+The control plane's deployment-administration coverage.
 
-``/api/v1/platform/console/variables/``, ``/meter-prices/``, ``/exchange-rates/``
-and the two workspace paths ``/usage-cap/`` and ``/grants/`` are for the people who
-run the deployment. Workspace owners share the rest of the console and none of
-this, and are refused the same way for a workspace they own, one they do not and
-one that does not exist.
+Variables, meter prices, exchange rates, workspace usage caps and grants are
+available only through ``/api/v1/platform/control/``. Workspace owners share the
+ordinary console and are refused by the control plane regardless of which
+workspace identifier they try.
 
 Manifests are faked, as in ``test_console_workspaces``.
 """
 
 from datetime import date, timedelta
 from decimal import Decimal
+from itertools import count
+from collections.abc import Mapping
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -37,14 +38,16 @@ from bfg.platform.services.ownership import assign_workspace_owner
 User = get_user_model()
 pytestmark = pytest.mark.django_db
 
-CONSOLE = '/api/v1/platform/console/'
-VARIABLES = f'{CONSOLE}variables/'
-METER_PRICES = f'{CONSOLE}meter-prices/'
-RATES = f'{CONSOLE}exchange-rates/'
+CONTROL = '/api/v1/platform/control/'
+VARIABLES = f'{CONTROL}variables/'
+METER_PRICES = f'{CONTROL}meter-prices/'
+RATES = f'{CONTROL}exchange-rates/'
 REFUSED_TO_OWNERS = {
-    'code': 'platform_admin_required',
-    'detail': 'Only a Django superuser can use this part of the console.',
+    'code': 'platform_superuser_required',
+    'detail': 'Only a Django superuser can use the Platform control plane.',
 }
+
+_control_request_numbers = count(1)
 
 MANIFESTS = {
     'reviews': ExtensionManifest(key='reviews', name='Reviews', app_label='reviews_app'),
@@ -61,11 +64,11 @@ MANIFESTS = {
 
 
 def usage_cap_url(workspace_id):
-    return f'{CONSOLE}workspaces/{workspace_id}/usage-cap/'
+    return f'{CONTROL}workspaces/{workspace_id}/usage-cap/'
 
 
 def grants_url(workspace_id):
-    return f'{CONSOLE}workspaces/{workspace_id}/grants/'
+    return f'{CONTROL}workspaces/{workspace_id}/grants/'
 
 
 @pytest.fixture(autouse=True)
@@ -123,8 +126,34 @@ def currencies(db):
         )
 
 
+class ControlClient(APIClient):
+    """Add mandatory safeguards to ordinary successful control-plane writes."""
+
+    def _write(self, method, path, data=None, format=None, **extra):
+        if path.startswith(CONTROL):
+            if isinstance(data, Mapping):
+                supplied_reason = data.get('reason')
+                data = {
+                    **data,
+                    'confirm': data.get('confirm', True),
+                    'reason': (
+                        supplied_reason
+                        if isinstance(supplied_reason, str) and len(supplied_reason.strip()) >= 3
+                        else 'Test control change'
+                    ),
+                }
+            extra.setdefault('HTTP_X_IDEMPOTENCY_KEY', f'control-test-{next(_control_request_numbers)}')
+        return getattr(super(), method)(path, data=data, format=format, **extra)
+
+    def post(self, path, data=None, format=None, **extra):
+        return self._write('post', path, data, format, **extra)
+
+    def patch(self, path, data=None, format=None, **extra):
+        return self._write('patch', path, data, format, **extra)
+
+
 def client_for(user=None):
-    client = APIClient()
+    client = ControlClient()
     if user is not None:
         client.force_authenticate(user=user)
     return client
@@ -221,7 +250,7 @@ def test_a_platform_administrator_naming_no_workspace_is_told_so(operator, shop)
     response = client_for(operator).get(usage_cap_url(shop.id + 5000))
 
     assert response.status_code == 404
-    assert response.data == {'code': 'workspace_not_found', 'detail': 'Workspace not found.'}
+    assert response.data['detail'].code == 'not_found'
 
 
 # ── Platform variables ───────────────────────────────────────────────
@@ -274,9 +303,14 @@ def test_changing_a_variable_records_who_did_it_and_why(operator):
 
 
 def test_a_change_nobody_gave_a_reason_for_is_refused(operator):
+    client = APIClient()
+    client.force_authenticate(user=operator)
     responses = [
-        client_for(operator).patch(f'{VARIABLES}grace_days/', body, format='json')
-        for body in ({'value': 21}, {'value': 21, 'reason': '   '})
+        client.patch(
+            f'{VARIABLES}grace_days/', {**body, 'confirm': True}, format='json',
+            HTTP_X_IDEMPOTENCY_KEY=f'missing-reason-{index}',
+        )
+        for index, body in enumerate(({'value': 21}, {'value': 21, 'reason': '   '}), start=1)
     ]
 
     assert [response.status_code for response in responses] == [400, 400]
@@ -623,7 +657,7 @@ def test_an_entitlement_that_has_run_out_can_be_granted_again(operator, shop):
         ({'key': 'reviews', 'months': 0, 'reason': 'x'}, 'invalid_grant'),
         ({'key': 'reviews', 'months': 1000, 'reason': 'x'}, 'invalid_grant'),
         ({'key': 'reviews', 'months': '3', 'reason': 'x'}, 'invalid_grant'),
-        ({'key': 'reviews', 'months': 3}, 'invalid_grant'),
+        ({'key': 'reviews', 'months': 3}, 'reason_required'),
         ({'months': 3, 'reason': 'x'}, 'invalid_grant'),
         ({'key': 'nothing_of_the_sort', 'months': 3, 'reason': 'x'}, 'unknown_extension'),
         # Declared, but not something a workspace switches on.
@@ -631,7 +665,15 @@ def test_an_entitlement_that_has_run_out_can_be_granted_again(operator, shop):
     ],
 )
 def test_a_grant_that_does_not_say_what_or_for_how_long_is_refused(operator, shop, body, code):
-    response = client_for(operator).post(grants_url(shop.id), body, format='json')
+    if code == 'reason_required':
+        client = APIClient()
+        client.force_authenticate(user=operator)
+        response = client.post(
+            grants_url(shop.id), {**body, 'confirm': True}, format='json',
+            HTTP_X_IDEMPOTENCY_KEY='missing-grant-reason',
+        )
+    else:
+        response = client_for(operator).post(grants_url(shop.id), body, format='json')
 
     assert response.status_code == 400
     assert response.data['code'] == code

@@ -25,7 +25,10 @@ def require_reason(request) -> str:
     value = value or request.headers.get("X-Platform-Change-Reason") or ""
     reason = str(value).strip()
     if len(reason) < 3:
-        raise ValidationError({"reason": "Provide a change reason of at least 3 characters."})
+        raise ValidationError({
+            "code": "reason_required",
+            "detail": "Provide a change reason of at least 3 characters.",
+        })
     return reason[:500]
 
 

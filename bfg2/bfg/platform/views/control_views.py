@@ -13,7 +13,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core import signing
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, OuterRef, Q, Subquery
 from django.http import Http404, HttpResponse
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -27,7 +27,7 @@ from rest_framework.response import Response
 from bfg.common.models import normalize_hostname
 from bfg.common.extensions import registry
 from bfg.common.services.user_service import UserService
-from bfg.common.services.workspace_service import WorkspaceService
+from bfg.common.services.workspace_service import WorkspaceClusterUnavailable, WorkspaceService
 from bfg.platform.permissions import IsPlatformSuperuser
 from bfg.platform.services.cluster_health import (
     ClusterHealthProbeConfigurationError,
@@ -41,6 +41,11 @@ from bfg.platform.services.control_actions import (
 )
 from bfg.platform.services.control_audit import record_control_audit, redact_control_value
 from bfg.platform.services.provision_service import resume_workspace, suspend_workspace
+from bfg.platform.services.placement_queue import (
+    PlacementQueueError,
+    create_reservation,
+    rollback_reservation,
+)
 from bfg.platform.services import console_admin, entitlements, exchange_rates, pricing, usage
 from bfg.platform.services import platform_variables as variables
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
@@ -128,7 +133,43 @@ def _workspace_item(workspace, *, viewer=None):
             {"id": cluster.id, "name": cluster.name, "region": cluster.region, "is_active": cluster.is_active}
             if cluster else None
         ),
+        "placement_fence": profile.placement_fence if profile else 0,
         "capabilities": {"extension_management": False, "usage": True},
+    }
+
+
+def _placement_cluster_item(cluster):
+    if not cluster:
+        return None
+    return {"id": cluster.id, "name": cluster.name, "region": cluster.region, "is_active": cluster.is_active}
+
+
+def _placement_item(placement):
+    return {
+        "id": str(placement.id),
+        "workspace": {
+            "id": placement.workspace_id,
+            "name": placement.workspace.name,
+            "slug": placement.workspace.slug,
+        },
+        "source_cluster": _placement_cluster_item(placement.source_cluster),
+        "target_cluster": _placement_cluster_item(placement.target_cluster),
+        "profile_fence": placement.profile_fence,
+        "status": placement.status,
+        "reservation_expires_at": placement.reservation_expires_at,
+        "rolled_back_at": placement.rolled_back_at,
+        "created_by": _user_item(placement.created_by),
+        "created_at": placement.created_at,
+        "updated_at": placement.updated_at,
+        "events": [
+            {
+                "sequence": event.sequence,
+                "event_type": event.event_type,
+                "details": redact_control_value(event.details or {}),
+                "created_at": event.created_at,
+            }
+            for event in placement.events.all()
+        ],
     }
 
 
@@ -411,7 +452,13 @@ class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
             complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
             return Response(body, status=status.HTTP_409_CONFLICT)
         entitlement = granted["entitlement"]
-        body = {"workspace": workspace.id, "entitlement": {**entitlement, "is_effective": True}}
+        body = {
+            "workspace": workspace.id,
+            "entitlement": {**entitlement, "is_effective": True},
+            # Preserve the operational result of a grant without making the
+            # historical console route a second privileged write surface.
+            "extension": granted["extension"],
+        }
         complete_action(action_request, result="succeeded", response_status=status.HTTP_201_CREATED, response_body=body)
         record_control_audit(
             request=request, action="workspace.entitlement_granted", target_type="workspace",
@@ -553,16 +600,25 @@ class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
                 body = {"detail": "One or more custom domains are already assigned on this Platform.", "code": "workspace_import_domain_conflict", "domains": conflicts}
                 complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
                 return Response(body, status=status.HTTP_409_CONFLICT)
-            workspace = WorkspaceService(user=request.user).create_workspace(
-                name=name,
-                slug=slug,
-                owner_user=owner,
-                email=source.get("email", ""),
-                phone=source.get("phone", ""),
-                settings=source.get("settings") or {},
-                region=cluster.region if cluster else str(cluster_data.get("region") or "us"),
-                cluster=cluster,
-            )
+            try:
+                workspace = WorkspaceService(user=request.user).create_workspace(
+                    name=name,
+                    slug=slug,
+                    owner_user=owner,
+                    email=source.get("email", ""),
+                    phone=source.get("phone", ""),
+                    settings=source.get("settings") or {},
+                    region=cluster.region if cluster else str(cluster_data.get("region") or "us"),
+                    cluster=cluster,
+                )
+            except WorkspaceClusterUnavailable as exc:
+                body = {"detail": "The selected Cluster is not accepting new workspaces.", "code": exc.code}
+                complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+                record_control_audit(
+                    request=request, action="workspace.imported", target_type="workspace", target_id="new",
+                    reason=reason, after={"cluster_id": cluster_id or None, "code": exc.code}, result="failed",
+                )
+                return Response(body, status=status.HTTP_409_CONFLICT)
             WorkspaceDomain.objects.bulk_create([
                 WorkspaceDomain(
                     workspace=workspace, hostname=hostname, kind=WorkspaceDomain.KIND_CUSTOM,
@@ -613,6 +669,176 @@ class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
         record_control_audit(
             request=request, action="workspace.password_reset_requested", target_type="workspace",
             target_id=workspace.id, reason=reason, after={"administrator_id": recipient.id},
+        )
+        return Response(body)
+
+
+class PlatformControlPlacementRequestViewSet(PlatformControlAccessViewSet):
+    """Superuser-only reservations for a future, verified Cluster placement."""
+
+    _STATUSES = {"reserved", "rolled_back", "expired"}
+
+    @staticmethod
+    def _queryset():
+        PlacementRequest = apps.get_model("platform", "WorkspacePlacementRequest")
+        return PlacementRequest.objects.select_related(
+            "workspace", "source_cluster", "target_cluster", "created_by",
+        ).prefetch_related("events")
+
+    def list(self, request):
+        queryset = self._queryset()
+        workspace_id = (request.query_params.get("workspace") or "").strip()
+        target_cluster_id = (request.query_params.get("target_cluster") or "").strip()
+        requested_status = (request.query_params.get("status") or "").strip()
+        if workspace_id:
+            try:
+                workspace_id = int(workspace_id)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError({"workspace": "Use a whole Workspace ID."}) from exc
+            queryset = queryset.filter(workspace_id=workspace_id)
+        if target_cluster_id:
+            if len(target_cluster_id) > 32:
+                raise ValidationError({"target_cluster": "Use a Cluster ID of 32 characters or fewer."})
+            queryset = queryset.filter(target_cluster_id=target_cluster_id)
+        if requested_status:
+            if requested_status not in self._STATUSES:
+                raise ValidationError({"status": "Use reserved, rolled_back, or expired."})
+            queryset = queryset.filter(status=requested_status)
+        return Response([_placement_item(placement) for placement in queryset])
+
+    def retrieve(self, request, pk=None):
+        PlacementRequest = apps.get_model("platform", "WorkspacePlacementRequest")
+        try:
+            placement = self._queryset().get(pk=pk)
+        except PlacementRequest.DoesNotExist as exc:
+            raise Http404 from exc
+        return Response(_placement_item(placement))
+
+    def create(self, request):
+        require_confirmation(request)
+        reason = require_reason(request)
+        data = _body(request)
+        workspace = _workspace_or_404(data.get("workspace_id"))
+        target_cluster_id = data.get("target_cluster_id")
+        expected_fence = data.get("expected_placement_fence")
+        action_request, replay = claim_action(
+            request,
+            action="workspace.placement_reserved",
+            target_type="workspace",
+            target_id=workspace.id,
+            payload={
+                "target_cluster_id": target_cluster_id,
+                "expected_placement_fence": expected_fence,
+                "reason": reason,
+            },
+        )
+        if replay is not None:
+            return replay
+        profile = getattr(workspace, "platform_profile", None)
+        before = {
+            "cluster_id": profile.cluster_id if profile else None,
+            "placement_fence": profile.placement_fence if profile else 0,
+        }
+        try:
+            placement = create_reservation(
+                workspace=workspace,
+                target_cluster_id=target_cluster_id,
+                expected_profile_fence=expected_fence,
+                initiated_by=request.user,
+            )
+        except PlacementQueueError as exc:
+            body = {"detail": exc.detail, "code": exc.code}
+            complete_action(
+                action_request,
+                result="failed",
+                response_status=exc.status_code,
+                response_body=body,
+            )
+            record_control_audit(
+                request=request,
+                action="workspace.placement_reserved",
+                target_type="workspace",
+                target_id=workspace.id,
+                reason=reason,
+                before=before,
+                after={"target_cluster_id": target_cluster_id, "code": exc.code},
+                result="failed",
+            )
+            return Response(body, status=exc.status_code)
+        placement = self._queryset().get(pk=placement.pk)
+        body = _placement_item(placement)
+        complete_action(action_request, result="succeeded", response_status=status.HTTP_202_ACCEPTED, response_body=body)
+        record_control_audit(
+            request=request,
+            action="workspace.placement_reserved",
+            target_type="workspace",
+            target_id=workspace.id,
+            reason=reason,
+            before=before,
+            after={
+                "placement_request_id": str(placement.id),
+                "target_cluster_id": placement.target_cluster_id,
+                "profile_fence": placement.profile_fence,
+                "reservation_expires_at": placement.reservation_expires_at,
+            },
+        )
+        return Response(body, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=["post"])
+    def rollback(self, request, pk=None):
+        require_confirmation(request)
+        reason = require_reason(request)
+        PlacementRequest = apps.get_model("platform", "WorkspacePlacementRequest")
+        try:
+            placement = self._queryset().get(pk=pk)
+        except PlacementRequest.DoesNotExist as exc:
+            raise Http404 from exc
+        action_request, replay = claim_action(
+            request,
+            action="workspace.placement_rolled_back",
+            target_type="placement_request",
+            target_id=placement.id,
+            payload={"reason": reason},
+        )
+        if replay is not None:
+            return replay
+        before = {
+            "status": placement.status,
+            "target_cluster_id": placement.target_cluster_id,
+            "profile_fence": placement.profile_fence,
+        }
+        try:
+            placement = rollback_reservation(request=placement)
+        except PlacementQueueError as exc:
+            body = {"detail": exc.detail, "code": exc.code}
+            complete_action(
+                action_request,
+                result="failed",
+                response_status=exc.status_code,
+                response_body=body,
+            )
+            record_control_audit(
+                request=request,
+                action="workspace.placement_rolled_back",
+                target_type="placement_request",
+                target_id=placement.id,
+                reason=reason,
+                before=before,
+                after={"code": exc.code},
+                result="failed",
+            )
+            return Response(body, status=exc.status_code)
+        placement = self._queryset().get(pk=placement.pk)
+        body = _placement_item(placement)
+        complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
+        record_control_audit(
+            request=request,
+            action="workspace.placement_rolled_back",
+            target_type="placement_request",
+            target_id=placement.id,
+            reason=reason,
+            before=before,
+            after={"status": placement.status, "rolled_back_at": placement.rolled_back_at},
         )
         return Response(body)
 
@@ -701,8 +927,100 @@ class PlatformControlClusterViewSet(PlatformControlAccessViewSet):
         Cluster = apps.get_model("platform", "Cluster")
         return Response([self._item(cluster) for cluster in Cluster.objects.all()])
 
+    @action(detail=False, methods=["get"], url_path="health-summary")
+    def health_summary(self, request):
+        """Summarize stored probe observations without reaching any Cluster."""
+        window_hours = 24
+        generated_at = timezone.now()
+        cutoff = generated_at - timedelta(hours=window_hours)
+        Cluster = apps.get_model("platform", "Cluster")
+        Observation = apps.get_model("platform", "ClusterHealthObservation")
+        latest = Observation.objects.filter(cluster_id=OuterRef("pk")).order_by("-observed_at", "-id")
+        clusters = Cluster.objects.all().annotate(
+            observation_count=Count(
+                "health_observations",
+                filter=Q(health_observations__observed_at__gte=cutoff),
+            ),
+            last_observed_at=Subquery(latest.values("observed_at")[:1]),
+            last_observed_status=Subquery(latest.values("health_status")[:1]),
+            last_observed_outcome=Subquery(latest.values("outcome")[:1]),
+            last_observed_http_status=Subquery(latest.values("http_status")[:1]),
+        )
+        summary = {
+            "active_clusters": 0,
+            "inactive_clusters": 0,
+            "checked_within_window": 0,
+            "stale_or_unchecked": 0,
+            "healthy": 0,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+        }
+        items = []
+        for cluster in clusters:
+            is_fresh = bool(cluster.last_observed_at and cluster.last_observed_at >= cutoff)
+            displayed_status = cluster.last_observed_status if is_fresh else "unknown"
+            if displayed_status not in {"healthy", "degraded", "down", "unknown"}:
+                displayed_status = "unknown"
+            if cluster.is_active:
+                summary["active_clusters"] += 1
+                if is_fresh:
+                    summary["checked_within_window"] += 1
+                else:
+                    summary["stale_or_unchecked"] += 1
+                summary[displayed_status] += 1
+            else:
+                summary["inactive_clusters"] += 1
+            items.append({
+                "id": cluster.id,
+                "name": cluster.name,
+                "region": cluster.region,
+                "is_active": cluster.is_active,
+                "is_accepting_new": cluster.is_accepting_new,
+                "observations_within_window": cluster.observation_count,
+                "is_stale_or_unchecked": not is_fresh,
+                "last_observation": (
+                    {
+                        "health_status": cluster.last_observed_status,
+                        "http_status": cluster.last_observed_http_status,
+                        "outcome": cluster.last_observed_outcome,
+                        "observed_at": cluster.last_observed_at,
+                    }
+                    if cluster.last_observed_at else None
+                ),
+            })
+        return Response({
+            "generated_at": generated_at,
+            "window_hours": window_hours,
+            "summary": summary,
+            "clusters": items,
+        })
+
     def retrieve(self, request, pk=None):
         return Response(self._item(self._cluster(pk)))
+
+    @action(detail=True, methods=["get"], url_path="health-observations")
+    def health_observations(self, request, pk=None):
+        """Return recent server-side probe results without response bodies."""
+        try:
+            limit = int(request.query_params.get("limit", 20))
+        except (TypeError, ValueError) as exc:
+            raise ValidationError({"limit": "Use a whole number between 1 and 100."}) from exc
+        if not 1 <= limit <= 100:
+            raise ValidationError({"limit": "Use a whole number between 1 and 100."})
+        cluster = self._cluster(pk)
+        Observation = apps.get_model("platform", "ClusterHealthObservation")
+        rows = Observation.objects.filter(cluster=cluster).select_related("observed_by")[:limit]
+        return Response([
+            {
+                "id": row.id,
+                "health_status": row.health_status,
+                "http_status": row.http_status,
+                "outcome": row.outcome,
+                "observed_at": row.observed_at,
+            }
+            for row in rows
+        ])
 
     def create(self, request):
         require_confirmation(request)
@@ -775,6 +1093,69 @@ class PlatformControlClusterViewSet(PlatformControlAccessViewSet):
                 )
             body = self._item(cluster)
             complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
+        return Response(body)
+
+    @action(detail=True, methods=["post"], url_path="health-check")
+    def health_check(self, request, pk=None):
+        """Run the restricted server-side probe for this Cluster."""
+        require_confirmation(request)
+        reason = require_reason(request)
+        cluster = self._cluster(pk)
+        action_request, replay = claim_action(
+            request, action="cluster.health_checked", target_type="cluster", target_id=cluster.id,
+            payload={"config_version": cluster.config_version, "reason": reason},
+        )
+        if replay is not None:
+            return replay
+        try:
+            probe = probe_cluster_health(cluster)
+        except ClusterHealthProbeConfigurationError:
+            body = {"detail": "Cluster health probes are not configured for this endpoint.", "code": "cluster_health_probe_unavailable"}
+            Cluster = apps.get_model("platform", "Cluster")
+            Observation = apps.get_model("platform", "ClusterHealthObservation")
+            with transaction.atomic():
+                locked = Cluster.objects.select_for_update().get(pk=cluster.pk)
+                Observation.objects.create(
+                    cluster=locked, health_status="unknown", outcome="configuration_unavailable",
+                    observed_by=request.user,
+                )
+                complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+                record_control_audit(
+                    request=request, action="cluster.health_checked", target_type="cluster", target_id=locked.id,
+                    reason=reason, after={"outcome": "configuration_unavailable"}, result="failed",
+                )
+            return Response(body, status=status.HTTP_409_CONFLICT)
+        Cluster = apps.get_model("platform", "Cluster")
+        Observation = apps.get_model("platform", "ClusterHealthObservation")
+        with transaction.atomic():
+            locked = Cluster.objects.select_for_update().get(pk=cluster.pk)
+            if locked.config_version != cluster.config_version:
+                body = {"detail": "This Cluster changed while its health check was running. Reload and try again.", "code": "cluster_version_conflict", "current_version": locked.config_version}
+                Observation.objects.create(
+                    cluster=locked, health_status=probe.health_status, http_status=probe.http_status,
+                    outcome="configuration_changed", observed_by=request.user,
+                )
+                complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
+                record_control_audit(
+                    request=request, action="cluster.health_checked", target_type="cluster", target_id=locked.id,
+                    reason=reason, after={"outcome": "configuration_changed"}, result="failed",
+                )
+                return Response(body, status=status.HTTP_409_CONFLICT)
+            before = {"health_status": locked.health_status, "last_health_check": locked.last_health_check}
+            locked.health_status = probe.health_status
+            locked.last_health_check = timezone.now()
+            locked.save(update_fields=["health_status", "last_health_check", "updated_at"])
+            Observation.objects.create(
+                cluster=locked, health_status=probe.health_status, http_status=probe.http_status,
+                observed_by=request.user,
+            )
+            body = self._item(locked)
+            complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
+            record_control_audit(
+                request=request, action="cluster.health_checked", target_type="cluster", target_id=locked.id,
+                reason=reason, before=before,
+                after={"health_status": locked.health_status, "last_health_check": locked.last_health_check, "http_status": probe.http_status},
+            )
         return Response(body)
 
 
@@ -898,44 +1279,6 @@ class PlatformControlExchangeRateViewSet(PlatformControlAccessViewSet):
             reason=reason, before={"rates": before}, after=entry,
         )
         return Response(entry, status=status.HTTP_201_CREATED)
-
-    @action(detail=True, methods=["post"], url_path="health-check")
-    def health_check(self, request, pk=None):
-        require_confirmation(request)
-        reason = require_reason(request)
-        cluster = self._cluster(pk)
-        action_request, replay = claim_action(
-            request, action="cluster.health_checked", target_type="cluster", target_id=cluster.id,
-            payload={"config_version": cluster.config_version, "reason": reason},
-        )
-        if replay is not None:
-            return replay
-        try:
-            probe = probe_cluster_health(cluster)
-        except ClusterHealthProbeConfigurationError:
-            body = {"detail": "Cluster health probes are not configured for this endpoint.", "code": "cluster_health_probe_unavailable"}
-            complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
-            return Response(body, status=status.HTTP_409_CONFLICT)
-        Cluster = apps.get_model("platform", "Cluster")
-        with transaction.atomic():
-            locked = Cluster.objects.select_for_update().get(pk=cluster.pk)
-            if locked.config_version != cluster.config_version:
-                body = {"detail": "This Cluster changed while its health check was running. Reload and try again.", "code": "cluster_version_conflict", "current_version": locked.config_version}
-                complete_action(action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=body)
-                return Response(body, status=status.HTTP_409_CONFLICT)
-            before = {"health_status": locked.health_status, "last_health_check": locked.last_health_check}
-            locked.health_status = probe.health_status
-            locked.last_health_check = timezone.now()
-            locked.save(update_fields=["health_status", "last_health_check", "updated_at"])
-            body = self._item(locked)
-            complete_action(action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=body)
-            record_control_audit(
-                request=request, action="cluster.health_checked", target_type="cluster", target_id=locked.id,
-                reason=reason, before=before,
-                after={"health_status": locked.health_status, "last_health_check": locked.last_health_check, "http_status": probe.http_status},
-            )
-        return Response(body)
-
 
 class PlatformControlAuditEventViewSet(PlatformControlAccessViewSet):
     """A bounded, cursor-paginated read of redacted control-plane events."""

@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+import pytest
 
 from bfg.common.models import (
     WorkspaceDomain,
@@ -7,6 +8,7 @@ from bfg.common.models import (
     upsert_custom_workspace_domain,
 )
 from bfg.common.services.workspace_service import WorkspaceService
+from bfg.common.services.workspace_service import WorkspaceClusterUnavailable
 from bfg.platform.models import Cluster, WorkspacePlatformProfile
 
 
@@ -48,6 +50,26 @@ def test_create_workspace_with_cluster_materializes_system_default_domain(db):
     assert domain.hostname == "acme-two.shops.example.test"
     assert domain.verification_status == WorkspaceDomain.VERIFICATION_VERIFIED
     assert domain.is_primary is False
+
+
+def test_create_workspace_refuses_an_inactive_or_full_cluster(db):
+    user = User.objects.create_user(username="capacity-owner", password="x")
+    inactive = Cluster.objects.create(
+        id="inactive", name="Inactive", region="apac", api_base_url="https://api.example.test",
+        db_host="db.example.test", redis_url="redis://redis.example.test", s3_bucket="inactive", is_active=False,
+    )
+    service = WorkspaceService(workspace=None, user=user)
+
+    with pytest.raises(WorkspaceClusterUnavailable):
+        service.create_workspace(name="Inactive Shop", slug="inactive-shop", owner_user=user, cluster=inactive)
+
+    capacity = Cluster.objects.create(
+        id="capacity", name="Capacity", region="apac", api_base_url="https://api.example.test",
+        db_host="db.example.test", redis_url="redis://redis.example.test", s3_bucket="capacity", max_workspaces=1,
+    )
+    service.create_workspace(name="First Shop", slug="first-shop", owner_user=user, cluster=capacity)
+    with pytest.raises(WorkspaceClusterUnavailable):
+        service.create_workspace(name="Second Shop", slug="second-shop", owner_user=user, cluster=capacity)
 
 
 def test_resolve_workspace_public_frontend_base_url_prefers_primary_custom_domain(db):

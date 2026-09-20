@@ -101,11 +101,13 @@ rather than claim that the workspace moved.
 - [x] Route privileged lifecycle, cluster, audit, and configuration calls to
       `/control/` in the client.
 - [x] Build the client and run focused server regression tests locally.
-- [ ] UAT smoke test with a real Django superuser: workspace list, Cluster list,
+- [x] UAT API smoke with a real Django superuser: workspace list, Cluster list,
       audit read, and a non-destructive health-probe configuration refusal.
-- [ ] UAT smoke test with a real ordinary owner: existing Workspace management
+- [x] UAT API smoke with a real ordinary owner: existing Workspace management
       works, but every `/control/` endpoint returns 403.
-- [ ] Run and verify database migrations from the current deployment schema.
+- [x] Run and verify database migrations from the current deployment schema.
+- [ ] UAT browser-login E2E with a real Django superuser and ordinary owner.
+      This verifies the client login, route access, and UI behavior end to end.
 - [ ] Promote only as part of the agreed larger production release.
 
 ### Verification record (2026-09-20)
@@ -137,8 +139,8 @@ rather than claim that the workspace moved.
   pending migrations. The Cluster health UI route and its stored-observation
   dashboard are covered by local route-level regressions and remain in the next
   batched release until their PRs are merged.
-- These checks do not replace a browser-login E2E path. Keep the two UAT
-  smoke items above open until that final UI-level verification is performed.
+- These API and migration checks do not replace browser-login E2E. Keep the
+  browser-login item above open until final UI-level verification is performed.
 
 ## Non-goals
 

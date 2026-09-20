@@ -13,6 +13,7 @@ from bfg.platform.models.configuration import (
 from bfg.platform.models.audit import PlatformAuditEvent
 from bfg.platform.models.feature import FeatureDefinition
 from bfg.platform.models.operations import WorkspaceOperation
+from bfg.platform.models.data_plane import WorkspaceDataSnapshot
 from bfg.platform.models.workspace_profile import WorkspacePlatformProfile, WorkspaceSSOConfig, PlatformMembership, PlatformSSOCode
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "PlatformMembership",
     "PlatformSSOCode",
     "WorkspaceOperation",
+    "WorkspaceDataSnapshot",
     "WorkspaceEntitlement",
     "WorkspaceMeterUsage",
     "WorkspacePlatformProfile",

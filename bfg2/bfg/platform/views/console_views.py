@@ -46,6 +46,10 @@ from bfg.platform.services.entitlement_service import (
 from bfg.platform.services.metering_service import RUNTIME_METER_KEYS, is_runtime_meter_key
 from bfg.platform.services.provision_service import suspend_workspace, resume_workspace
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
+from bfg.platform.data_plane import (
+    DataPlaneError,
+    get_data_plane_adapter,
+)
 from bfg.common.exceptions import WorkspaceCapacityUnavailable
 from bfg.common.models import normalize_hostname
 from bfg.common.constants import get_default_currency_for_workspace
@@ -664,6 +668,26 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
             },
         }
 
+    @staticmethod
+    def _data_snapshot_item(snapshot):
+        """Serialize snapshot metadata without exposing archive contents."""
+        return {
+            "id": str(snapshot.id),
+            "workspace_id": snapshot.workspace_id,
+            "kind": snapshot.kind,
+            "status": snapshot.status,
+            "artifact_sha256": snapshot.artifact_sha256 or None,
+            "manifest_sha256": snapshot.manifest_sha256 or None,
+            "row_count": snapshot.row_count,
+            "media_count": snapshot.media_count,
+            "media_bytes": snapshot.media_bytes,
+            "source_cluster_id": snapshot.source_cluster_id or None,
+            "target_cluster_id": snapshot.target_cluster_id or None,
+            "failure_code": snapshot.failure_code or None,
+            "created_at": snapshot.created_at,
+            "completed_at": snapshot.completed_at,
+        }
+
     def list(self, request):
         Workspace = apps.get_model("common", "Workspace")
         queryset = Workspace.objects.select_related("platform_profile__cluster").order_by("-created_at")
@@ -701,6 +725,279 @@ class PlatformConsoleWorkspaceViewSet(PlatformConsoleAccessViewSet):
         payload["settings"] = workspace.settings or {}
         payload["extensions"] = []
         return Response(payload)
+
+    @action(detail=True, methods=["get"], url_path="data-snapshots")
+    def data_snapshots(self, request, pk=None):
+        """List business-data archives; distinct from configuration exports."""
+        workspace = self._workspace(pk)
+        Snapshot = apps.get_model("platform", "WorkspaceDataSnapshot")
+        return Response([
+            self._data_snapshot_item(snapshot)
+            for snapshot in Snapshot.objects.filter(workspace=workspace).select_related("requested_by")[:100]
+        ])
+
+    @action(detail=True, methods=["post"], url_path="data-export")
+    def data_export(self, request, pk=None):
+        """Create a business-data + media archive for a workspace.
+
+        This endpoint intentionally has a different name from ``export``.  The
+        latter remains the configuration-template contract and excludes business
+        data and media.
+        """
+        _confirmed(request)
+        reason = _change_reason(request)
+        workspace = self._workspace(pk)
+        profile = getattr(workspace, "platform_profile", None)
+        if not is_embedded_mode() and profile and profile.remote_workspace_uuid:
+            return Response(
+                {"detail": "Remote workspace export requires the data-plane coordinator.", "code": "remote_source_not_implemented"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="workspace.data_export",
+                target_type="workspace",
+                target_id=workspace.id,
+                payload={"reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
+
+        Snapshot = apps.get_model("platform", "WorkspaceDataSnapshot")
+        cluster = getattr(profile, "cluster", None) if profile else None
+        snapshot = Snapshot.objects.create(
+            workspace=workspace,
+            kind=Snapshot.KIND_ARCHIVE,
+            status=Snapshot.STATUS_EXPORTING,
+            requested_by=request.user,
+            source_cluster_id=cluster.id if cluster else "",
+        )
+        try:
+            result = get_data_plane_adapter().export(workspace, snapshot_id=str(snapshot.id))
+        except DataPlaneError as exc:
+            snapshot.status = Snapshot.STATUS_FAILED
+            snapshot.failure_code = exc.code
+            snapshot.completed_at = timezone.now()
+            snapshot.save(update_fields=["status", "failure_code", "completed_at"])
+            response_body = {"detail": "The workspace data archive could not be created.", "code": exc.code}
+            _complete_platform_action(
+                action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=response_body,
+            )
+            record_platform_audit(
+                request=request, action="workspace.data_export", target_type="workspace", target_id=workspace.id,
+                reason=reason, result="failed", after={"snapshot_id": str(snapshot.id), "code": exc.code},
+            )
+            return Response(response_body, status=status.HTTP_409_CONFLICT)
+        snapshot.status = Snapshot.STATUS_READY
+        snapshot.artifact_uri = result.artifact_uri
+        snapshot.artifact_sha256 = result.artifact_sha256
+        snapshot.manifest_sha256 = result.manifest_sha256
+        snapshot.manifest = result.manifest
+        snapshot.row_count = result.row_count
+        snapshot.media_count = result.media_count
+        snapshot.media_bytes = result.media_bytes
+        snapshot.completed_at = timezone.now()
+        snapshot.save(update_fields=[
+            "status", "artifact_uri", "artifact_sha256", "manifest_sha256", "manifest",
+            "row_count", "media_count", "media_bytes", "completed_at",
+        ])
+        response_body = self._data_snapshot_item(snapshot)
+        _complete_platform_action(
+            action_request, result="succeeded", response_status=status.HTTP_201_CREATED, response_body=response_body,
+        )
+        record_platform_audit(
+            request=request, action="workspace.data_export", target_type="workspace", target_id=workspace.id,
+            reason=reason, after={
+                "snapshot_id": str(snapshot.id), "format": result.manifest["format"],
+                "row_count": result.row_count, "media_count": result.media_count,
+            },
+        )
+        return Response(response_body, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="data-verify")
+    def data_verify(self, request, pk=None):
+        """Verify an existing archive before any restore is attempted."""
+        _confirmed(request)
+        reason = _change_reason(request)
+        workspace = self._workspace(pk)
+        snapshot_id = str(request.data.get("snapshot_id") or "").strip()
+        Snapshot = apps.get_model("platform", "WorkspaceDataSnapshot")
+        try:
+            snapshot = Snapshot.objects.get(id=snapshot_id, workspace=workspace)
+        except (Snapshot.DoesNotExist, ValueError):
+            return Response({"detail": "Data snapshot not found.", "code": "data_snapshot_not_found"}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="workspace.data_verify",
+                target_type="workspace",
+                target_id=workspace.id,
+                payload={"snapshot_id": snapshot_id, "reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
+        try:
+            result = get_data_plane_adapter().validate(snapshot.artifact_uri, expected_workspace_uuid=workspace.uuid)
+        except DataPlaneError as exc:
+            snapshot.status = Snapshot.STATUS_FAILED
+            snapshot.failure_code = exc.code
+            snapshot.save(update_fields=["status", "failure_code"])
+            record_platform_audit(
+                request=request, action="workspace.data_verify", target_type="workspace", target_id=workspace.id,
+                reason=reason, result="failed", after={"snapshot_id": str(snapshot.id), "code": exc.code},
+            )
+            response_body = {"detail": "The workspace data archive failed verification.", "code": exc.code}
+            _complete_platform_action(
+                action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=response_body,
+            )
+            return Response(response_body, status=status.HTTP_409_CONFLICT)
+        if (
+            snapshot.artifact_sha256 and snapshot.artifact_sha256 != result.artifact_sha256
+        ) or (
+            snapshot.manifest_sha256 and snapshot.manifest_sha256 != result.manifest_sha256
+        ):
+            snapshot.status = Snapshot.STATUS_FAILED
+            snapshot.failure_code = "snapshot_metadata_mismatch"
+            snapshot.save(update_fields=["status", "failure_code"])
+            response_body = {
+                "detail": "The workspace data archive metadata no longer matches the stored snapshot.",
+                "code": "snapshot_metadata_mismatch",
+            }
+            _complete_platform_action(
+                action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=response_body,
+            )
+            record_platform_audit(
+                request=request, action="workspace.data_verify", target_type="workspace", target_id=workspace.id,
+                reason=reason, result="failed", after={"snapshot_id": str(snapshot.id), "code": "snapshot_metadata_mismatch"},
+            )
+            return Response(response_body, status=status.HTTP_409_CONFLICT)
+        snapshot.status = Snapshot.STATUS_VERIFIED
+        snapshot.failure_code = ""
+        snapshot.save(update_fields=["status", "failure_code"])
+        record_platform_audit(
+            request=request, action="workspace.data_verify", target_type="workspace", target_id=workspace.id,
+            reason=reason, after={"snapshot_id": str(snapshot.id), "artifact_sha256": result.artifact_sha256},
+        )
+        response_body = self._data_snapshot_item(snapshot)
+        _complete_platform_action(
+            action_request, result="succeeded", response_status=status.HTTP_200_OK, response_body=response_body,
+        )
+        return Response(response_body)
+
+    @action(detail=False, methods=["post"], url_path="data-restore")
+    def data_restore(self, request):
+        """Restore a verified local archive into an empty target workspace.
+
+        Cross-cluster transport, DNS cutover and source cleanup are deliberately
+        rejected here.  They need a separate remote coordinator and journal.
+        """
+        _confirmed(request)
+        reason = _change_reason(request)
+        snapshot_id = str(request.data.get("snapshot_id") or "").strip()
+        target_id = request.data.get("target_workspace_id")
+        Snapshot = apps.get_model("platform", "WorkspaceDataSnapshot")
+        Workspace = apps.get_model("common", "Workspace")
+        try:
+            source_snapshot = Snapshot.objects.select_related("workspace").get(id=snapshot_id)
+            target = Workspace.objects.select_related("platform_profile__cluster").get(pk=target_id)
+        except (Snapshot.DoesNotExist, ValueError):
+            return Response({"detail": "Data snapshot not found.", "code": "data_snapshot_not_found"}, status=status.HTTP_404_NOT_FOUND)
+        except Workspace.DoesNotExist:
+            return Response({"detail": "Target workspace not found.", "code": "target_workspace_not_found"}, status=status.HTTP_404_NOT_FOUND)
+        if source_snapshot.status != Snapshot.STATUS_VERIFIED:
+            return Response(
+                {"detail": "Verify the data snapshot before restoring it.", "code": "snapshot_not_verified"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        source_profile = getattr(source_snapshot.workspace, "platform_profile", None)
+        target_profile = getattr(target, "platform_profile", None)
+        source_cluster = getattr(source_profile, "cluster", None) if source_profile else None
+        target_cluster = getattr(target_profile, "cluster", None) if target_profile else None
+        if not is_embedded_mode() and (
+            (source_profile and source_profile.remote_workspace_uuid)
+            or (target_profile and target_profile.remote_workspace_uuid)
+        ):
+            return Response(
+                {"detail": "Remote workspace restore requires the data-plane coordinator.", "code": "remote_target_not_implemented"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if source_cluster and target_cluster and source_cluster.id != target_cluster.id:
+            return Response(
+                {"detail": "Cross-cluster restore requires the remote data-plane coordinator.", "code": "cross_cluster_transport_not_implemented"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        try:
+            action_request, replay = _claim_platform_action(
+                request,
+                action="workspace.data_restore",
+                target_type="workspace",
+                target_id=target.id,
+                payload={"snapshot_id": snapshot_id, "reason": reason},
+            )
+        except ValidationError:
+            return Response(
+                {"detail": "Provide X-Idempotency-Key with 8 to 128 characters.", "code": "idempotency_key_required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if replay is not None:
+            return replay
+        restore_snapshot = Snapshot.objects.create(
+            workspace=target,
+            kind=Snapshot.KIND_RESTORE,
+            status=Snapshot.STATUS_RESTORING,
+            requested_by=request.user,
+            source_cluster_id=source_cluster.id if source_cluster else "",
+            target_cluster_id=target_cluster.id if target_cluster else "",
+        )
+        try:
+            result = get_data_plane_adapter().restore(source_snapshot.artifact_uri, target_workspace=target)
+        except DataPlaneError as exc:
+            restore_snapshot.status = Snapshot.STATUS_FAILED
+            restore_snapshot.failure_code = exc.code
+            restore_snapshot.completed_at = timezone.now()
+            restore_snapshot.save(update_fields=["status", "failure_code", "completed_at"])
+            response_body = {"detail": "The workspace data restore was refused.", "code": exc.code}
+            _complete_platform_action(
+                action_request, result="failed", response_status=status.HTTP_409_CONFLICT, response_body=response_body,
+            )
+            record_platform_audit(
+                request=request, action="workspace.data_restore", target_type="workspace", target_id=target.id,
+                reason=reason, result="failed", after={"snapshot_id": snapshot_id, "code": exc.code},
+            )
+            return Response(response_body, status=status.HTTP_409_CONFLICT)
+        restore_snapshot.status = Snapshot.STATUS_COMPLETED
+        restore_snapshot.artifact_uri = result.artifact_uri
+        restore_snapshot.artifact_sha256 = result.artifact_sha256
+        restore_snapshot.manifest_sha256 = result.manifest_sha256
+        restore_snapshot.manifest = result.manifest
+        restore_snapshot.row_count = result.row_count
+        restore_snapshot.media_count = result.media_count
+        restore_snapshot.media_bytes = result.media_bytes
+        restore_snapshot.completed_at = timezone.now()
+        restore_snapshot.save(update_fields=[
+            "status", "artifact_uri", "artifact_sha256", "manifest_sha256", "manifest",
+            "row_count", "media_count", "media_bytes", "completed_at",
+        ])
+        response_body = self._data_snapshot_item(restore_snapshot)
+        _complete_platform_action(
+            action_request, result="succeeded", response_status=status.HTTP_201_CREATED, response_body=response_body,
+        )
+        record_platform_audit(
+            request=request, action="workspace.data_restore", target_type="workspace", target_id=target.id,
+            reason=reason, after={"source_snapshot_id": snapshot_id, "restore_snapshot_id": str(restore_snapshot.id)},
+        )
+        return Response(response_body, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get"])
     def operations(self, request, pk=None):

@@ -9,6 +9,28 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+class AddFieldIfMissing(migrations.AddField):
+    """Make a partially applied MySQL migration safe to retry."""
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.model_name)
+        with schema_editor.connection.cursor() as cursor:
+            columns = schema_editor.connection.introspection.get_table_description(
+                cursor, model._meta.db_table
+            )
+        if model._meta.get_field(self.name).column not in {column.name for column in columns}:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
+class CreateModelIfMissing(migrations.CreateModel):
+    """Skip a model table already created before a release was interrupted."""
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.name)
+        if model._meta.db_table not in schema_editor.connection.introspection.table_names():
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -19,12 +41,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
+        AddFieldIfMissing(
             model_name='workspaceplatformprofile',
             name='monthly_usage_cap_points',
             field=models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True, verbose_name='Monthly Usage Cap (points)'),
         ),
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name='MeterPrice',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -43,7 +65,7 @@ class Migration(migrations.Migration):
                 'constraints': [models.CheckConstraint(condition=models.Q(('unit_size__gt', 0)), name='platform_meter_price_unit_size_positive')],
             },
         ),
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name='PlatformVariable',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -58,7 +80,7 @@ class Migration(migrations.Migration):
                 'ordering': ['key'],
             },
         ),
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name='PlatformVariableChange',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -76,7 +98,7 @@ class Migration(migrations.Migration):
                 'indexes': [models.Index(fields=['variable', '-changed_at'], name='platform_pl_variabl_b6c786_idx')],
             },
         ),
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name='UsageRecord',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -102,7 +124,7 @@ class Migration(migrations.Migration):
                 ('all_objects', django.db.models.manager.Manager()),
             ],
         ),
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name='WorkspaceEntitlement',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),

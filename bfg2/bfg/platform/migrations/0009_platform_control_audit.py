@@ -7,6 +7,15 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+class CreateModelIfMissing(migrations.CreateModel):
+    """Skip a model table already created before a release was interrupted."""
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.name)
+        if model._meta.db_table not in schema_editor.connection.introspection.table_names():
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -15,7 +24,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name="PlatformAuditEvent",
             fields=[
                 ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
@@ -40,7 +49,7 @@ class Migration(migrations.Migration):
                 ],
             },
         ),
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name="PlatformControlActionRequest",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),

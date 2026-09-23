@@ -3,6 +3,17 @@
 from django.db import migrations, models
 
 
+class AddFieldIfMissing(migrations.AddField):
+    """Make a partially applied MySQL migration safe to retry."""
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.model_name)
+        with schema_editor.connection.cursor() as cursor:
+            columns = schema_editor.connection.introspection.get_table_description(cursor, model._meta.db_table)
+        if model._meta.get_field(self.name).column not in {column.name for column in columns}:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,7 +21,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
+        AddFieldIfMissing(
             model_name="cluster",
             name="config_version",
             field=models.PositiveIntegerField(default=1, verbose_name="Configuration Version"),

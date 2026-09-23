@@ -6,6 +6,24 @@ import django.db.models.deletion
 import django.utils.timezone
 
 
+class CreateModelIfMissing(migrations.CreateModel):
+    """Skip a model table already created before a release was interrupted."""
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.name)
+        if model._meta.db_table not in schema_editor.connection.introspection.table_names():
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
+class AddIndexIfMissing(migrations.AddIndex):
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.model_name)
+        with schema_editor.connection.cursor() as cursor:
+            indexes = schema_editor.connection.introspection.get_constraints(cursor, model._meta.db_table)
+        if self.index.name not in indexes:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -14,7 +32,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name="ClusterHealthObservation",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
@@ -27,7 +45,7 @@ class Migration(migrations.Migration):
             ],
             options={"ordering": ["-observed_at", "-id"]},
         ),
-        migrations.AddIndex(
+        AddIndexIfMissing(
             model_name="clusterhealthobservation",
             index=models.Index(fields=["cluster", "-observed_at"], name="plat_cluster_health_obs_idx"),
         ),

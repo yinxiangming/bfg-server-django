@@ -50,6 +50,7 @@ from bfg.platform.services import console_admin, entitlements, exchange_rates, p
 from bfg.platform.services import platform_variables as variables
 from bfg.platform.utils import is_embedded_mode, is_platform_workspace
 from bfg.platform.views.console_admin_views import _body, _day, _limit, _moment
+from bfg.platform.views.data_plane_actions import PlatformDataPlaneActionsMixin
 from config.authentication import BearerTokenAuthentication
 
 
@@ -173,7 +174,7 @@ def _placement_item(placement):
     }
 
 
-class PlatformControlWorkspaceViewSet(PlatformControlAccessViewSet):
+class PlatformControlWorkspaceViewSet(PlatformDataPlaneActionsMixin, PlatformControlAccessViewSet):
     """Superuser lifecycle controls for every Workspace in the deployment."""
 
     class Pagination(LimitOffsetPagination):

@@ -85,13 +85,13 @@ class AccountAdapter(DefaultAccountAdapter):
     def format_email_subject(self, subject):
         if app_settings.EMAIL_SUBJECT_PREFIX is not None:
             return super().format_email_subject(subject)
-        return f'[{self._site_name()}] {force_str(subject)}'
+        return f'[{self._cluster_name()}] {force_str(subject)}'
 
     def send_mail(self, template_prefix, email, context):
         # The templates greet with current_site.name and quote current_site.domain.
         request = allauth_context.request
         site = SimpleNamespace(
-            name=self._site_name(),
+            name=self._cluster_name(),
             domain=urlsplit(frontend_base_url(request)).hostname or get_current_site(request).domain,
         )
         super().send_mail(template_prefix, email, {'current_site': site, **context})
@@ -99,3 +99,24 @@ class AccountAdapter(DefaultAccountAdapter):
     @staticmethod
     def _site_name():
         return getattr(settings, 'SITE_NAME', '') or get_current_site(allauth_context.request).name
+
+    @classmethod
+    def _cluster_name(cls):
+        """Return the hosting Cluster brand for account email subjects and copy."""
+        configured = str(getattr(settings, 'CLUSTER_NAME', '') or '').strip()
+        if configured:
+            return configured
+        try:
+            from bfg.platform.models import Cluster
+
+            cluster = Cluster.objects.filter(is_active=True).order_by('id').first()
+            if cluster and cluster.name:
+                return cluster.name.strip()
+        except Exception:
+            # Account email rendering must not fail because an embedded deployment
+            # has no Cluster row yet.
+            pass
+        fallback = cls._site_name()
+        if fallback.lower() in {'surlex', 'surlex limited'}:
+            return 'Idlevo'
+        return fallback or 'Idlevo'

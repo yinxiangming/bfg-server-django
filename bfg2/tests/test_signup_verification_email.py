@@ -75,6 +75,18 @@ def test_the_mail_names_the_site_rather_than_the_placeholder_site_row(signup):
     assert 'example.com' not in message.subject + message.body
 
 
+def test_the_mail_uses_the_cluster_brand_when_configured(signup, settings):
+    settings.CLUSTER_NAME = 'Community Cluster'
+    settings.SITE_NAME = 'Surlex'
+
+    signup('cluster-branded@acme.test')
+
+    [message] = mail.outbox
+    assert message.subject.startswith('[Community Cluster] ')
+    assert 'Hello from Community Cluster!' in message.body
+    assert 'Surlex' not in message.subject + message.body
+
+
 def test_an_origin_outside_the_allowlist_gets_the_configured_frontend(signup):
     signup('elsewhere@acme.test', origin='https://attacker.test')
 

@@ -342,6 +342,10 @@ else:
 # Absolute API/site origin for media URLs when storage returns relative paths (e.g. GitHub issue embeds).
 MEDIA_PUBLIC_BASE_URL = os.environ.get('MEDIA_PUBLIC_BASE_URL', '').strip().rstrip('/')
 
+# Local data-plane archives are private operator artifacts, never storefront
+# media. Production should point this at a private volume or archive bucket mount.
+WORKSPACE_DATA_ARCHIVE_ROOT = os.environ.get('WORKSPACE_DATA_ARCHIVE_ROOT', '').strip()
+
 # ─── Extension archives ─────────────────────────────────────────────────
 # Where the data of an extension a workspace stopped using is written before the
 # rows are deleted; see bfg.common.extensions.archive. **Set none of this and
@@ -663,6 +667,9 @@ WORKSPACE_FRONTEND_URL = os.environ.get('WORKSPACE_FRONTEND_URL', '').strip()
 # Unset, the site takes the name its mail is already sent under: DEFAULT_FROM_EMAIL's display name.
 from email.utils import parseaddr  # noqa: E402
 SITE_NAME = os.environ.get('SITE_NAME') or parseaddr(DEFAULT_FROM_EMAIL)[0] or 'BFG'
+# The deployment brand used in account emails. If unset, the active Cluster row
+# is used, then SITE_NAME remains the safe embedded-mode fallback.
+CLUSTER_NAME = os.environ.get('CLUSTER_NAME', '').strip()
 
 # Staff invitations: default TTL in hours (used when admin doesn't override per-invite).
 INVITATION_EXPIRY_HOURS = int(os.environ.get('INVITATION_EXPIRY_HOURS', '48'))

@@ -7,6 +7,7 @@ from bfg.platform.models.control import (
     WorkspacePlacementEvent,
     WorkspacePlacementRequest,
 )
+from bfg.platform.models.data_plane import WorkspaceDataSnapshot
 from bfg.platform.models.entitlement import WorkspaceEntitlement
 from bfg.platform.models.feature import FeatureDefinition
 from bfg.platform.models.metering import MeterPrice, UsageRecord
@@ -27,6 +28,7 @@ __all__ = [
     "PlatformVariableChange",
     "UsageRecord",
     "WorkspaceEntitlement",
+    "WorkspaceDataSnapshot",
     "WorkspaceOperation",
     "WorkspacePlacementEvent",
     "WorkspacePlacementRequest",

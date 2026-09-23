@@ -5,6 +5,22 @@ import django.utils.timezone
 import uuid
 
 
+class CreateModelIfMissing(migrations.CreateModel):
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.name)
+        if model._meta.db_table not in schema_editor.connection.introspection.table_names():
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
+class AddIndexIfMissing(migrations.AddIndex):
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.model_name)
+        with schema_editor.connection.cursor() as cursor:
+            indexes = schema_editor.connection.introspection.get_constraints(cursor, model._meta.db_table)
+        if self.index.name not in indexes:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -14,7 +30,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name="WorkspaceDataSnapshot",
             fields=[
                 ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
@@ -37,11 +53,11 @@ class Migration(migrations.Migration):
             ],
             options={"ordering": ["-created_at"]},
         ),
-        migrations.AddIndex(
+        AddIndexIfMissing(
             model_name="workspacedatasnapshot",
             index=models.Index(fields=["workspace", "-created_at"], name="plat_snapshot_ws_time_idx"),
         ),
-        migrations.AddIndex(
+        AddIndexIfMissing(
             model_name="workspacedatasnapshot",
             index=models.Index(fields=["status", "-created_at"], name="plat_snapshot_status_idx"),
         ),

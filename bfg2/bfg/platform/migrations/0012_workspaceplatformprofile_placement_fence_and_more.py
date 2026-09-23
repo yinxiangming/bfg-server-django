@@ -8,6 +8,42 @@ import django.db.models.deletion
 import django.utils.timezone
 
 
+class AddFieldIfMissing(migrations.AddField):
+    """Make a partially applied MySQL migration safe to retry."""
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.model_name)
+        with schema_editor.connection.cursor() as cursor:
+            columns = schema_editor.connection.introspection.get_table_description(cursor, model._meta.db_table)
+        if model._meta.get_field(self.name).column not in {column.name for column in columns}:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
+class CreateModelIfMissing(migrations.CreateModel):
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.name)
+        if model._meta.db_table not in schema_editor.connection.introspection.table_names():
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
+class AddIndexIfMissing(migrations.AddIndex):
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.model_name)
+        with schema_editor.connection.cursor() as cursor:
+            indexes = schema_editor.connection.introspection.get_constraints(cursor, model._meta.db_table)
+        if self.index.name not in indexes:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
+class AddConstraintIfMissing(migrations.AddConstraint):
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        model = to_state.apps.get_model(app_label, self.model_name)
+        with schema_editor.connection.cursor() as cursor:
+            constraints = schema_editor.connection.introspection.get_constraints(cursor, model._meta.db_table)
+        if self.constraint.name not in constraints:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -16,12 +52,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
+        AddFieldIfMissing(
             model_name="workspaceplatformprofile",
             name="placement_fence",
             field=models.PositiveIntegerField(default=0, verbose_name="Placement Fence"),
         ),
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name="WorkspacePlacementRequest",
             fields=[
                 ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
@@ -38,7 +74,7 @@ class Migration(migrations.Migration):
             ],
             options={"ordering": ["-created_at", "-id"]},
         ),
-        migrations.CreateModel(
+        CreateModelIfMissing(
             name="WorkspacePlacementEvent",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
@@ -50,19 +86,19 @@ class Migration(migrations.Migration):
             ],
             options={"ordering": ["sequence", "id"]},
         ),
-        migrations.AddIndex(
+        AddIndexIfMissing(
             model_name="workspaceplacementrequest",
             index=models.Index(fields=["target_cluster", "status", "reservation_expires_at"], name="plat_place_target_idx"),
         ),
-        migrations.AddIndex(
+        AddIndexIfMissing(
             model_name="workspaceplacementrequest",
             index=models.Index(fields=["workspace", "status", "-created_at"], name="plat_place_workspace_idx"),
         ),
-        migrations.AddConstraint(
+        AddConstraintIfMissing(
             model_name="workspaceplacementrequest",
             constraint=models.UniqueConstraint(condition=models.Q(("status", "reserved")), fields=("workspace",), name="plat_place_one_active_per_workspace"),
         ),
-        migrations.AddConstraint(
+        AddConstraintIfMissing(
             model_name="workspaceplacementevent",
             constraint=models.UniqueConstraint(fields=("request", "sequence"), name="plat_place_event_sequence"),
         ),

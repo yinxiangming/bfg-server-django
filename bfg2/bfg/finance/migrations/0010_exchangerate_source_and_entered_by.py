@@ -13,7 +13,7 @@ class AddFieldIfMissing(migrations.AddField):
             columns = schema_editor.connection.introspection.get_table_description(
                 cursor, model._meta.db_table
             )
-        return self.field_name in {column.name for column in columns}
+        return self.name in {column.name for column in columns}
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         model = to_state.apps.get_model(app_label, self.model_name)

@@ -11,7 +11,7 @@ from datetime import timedelta
 from dotenv import load_dotenv
 import dj_database_url
 
-from config.local_apps import get_local_app_dotted_names
+from config.local_apps import get_local_app_dotted_names, apply_local_app_settings
 
 # Project root (src/server): must be defined before load_dotenv so .env is found regardless of cwd.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -437,33 +437,8 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
-# WeChat mini-program login (apps.wechat_identity). The wxstore cutover reuses
-# the legacy mini-program's AppID, so the openids backfilled by the legacy
-# importer match what jscode2session returns and returning members log in to
-# their existing account.
-WECHAT_MINIPROGRAM_APPID = os.environ.get('WECHAT_MINIPROGRAM_APPID', '').strip()
-WECHAT_MINIPROGRAM_APPSECRET = os.environ.get('WECHAT_MINIPROGRAM_APPSECRET', '').strip()
-
-# 一起拼这个 mini program (apps.groupbuy). One mini program serves every shop, so its
-# endpoints take the shop from the URL and check membership in their own views;
-# WorkspaceMiddleware must neither bind them to the JWT's workspace claim nor 403
-# a user who shops somewhere they are not a member.
-BFG_EXTRA_PUBLIC_PATHS = ('/api/v1/groupbuy/',)
-GROUPBUY_MINIPROGRAM_APPID = os.environ.get('GROUPBUY_MINIPROGRAM_APPID', '').strip()
-GROUPBUY_MINIPROGRAM_APPSECRET = os.environ.get('GROUPBUY_MINIPROGRAM_APPSECRET', '').strip()
-# The platform workspace WeChat identities hang off (SocialIdentity.workspace is
-# required), so a user can log in before owning any shop. Unset = login refuses.
-_groupbuy_home_workspace_id = os.environ.get('GROUPBUY_HOME_WORKSPACE_ID', '').strip()
-GROUPBUY_HOME_WORKSPACE_ID = int(_groupbuy_home_workspace_id) if _groupbuy_home_workspace_id.isdigit() else None
-GROUPBUY_MAX_SHOPS_PER_USER = int(os.environ.get('GROUPBUY_MAX_SHOPS_PER_USER', '3') or '3')
-
-# Google Maps, server side (apps.geo). Address suggestions and reverse geocoding
-# run here rather than in the client because the mini-program cannot load Google's
-# JavaScript SDK, and a key shipped in a mini-program bundle is a key anyone can
-# extract and spend. Restrict this key to the Places and Geocoding APIs, and to the
-# server's IP — it is never sent to a client. Which workspaces may use it, and the
-# country each is restricted to, is a per-workspace setting, not an env var.
-GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '').strip()
+# Optional installed apps contribute only their own settings and API public prefix.
+BFG_EXTRA_PUBLIC_PATHS = ()
 
 # Whether a workspace has to be entitled to an extension before it may use one, named
 # as the dotted path of a ``(workspace, manifest) -> bool`` callable. Empty — the
@@ -520,7 +495,7 @@ CORS_ALLOW_CREDENTIALS = True
 # the API from the local network; prod should never need this.
 CORS_ALLOW_PRIVATE_NETWORK = _env_bool('CORS_ALLOW_PRIVATE_NETWORK', default=not IS_PROD)
 # x-bfg-cart-session / x-cart-id carry guest-cart identity. The storefront and the
-# API sit on different registrable domains (geeker.co.nz vs surlex.co.nz), so the
+# API sit on different registrable domains (shop.example.com vs api.example.net), so the
 # sessionid cookie is cross-site and SameSite=Lax keeps the browser from ever sending
 # it back — every request would otherwise land on a brand-new empty cart. Leaving
 # these two out of the allowlist fails the preflight and reinstates that bug.
@@ -690,3 +665,6 @@ LOGGING = {
     },
     'root': {'handlers': ['console'], 'level': 'DEBUG' if DEBUG else 'INFO'},
 }
+
+# Run after host settings are defined; extensions cannot replace host settings.
+apply_local_app_settings(globals(), get_local_app_dotted_names())

@@ -117,6 +117,4 @@ class AccountAdapter(DefaultAccountAdapter):
             # has no Cluster row yet.
             pass
         fallback = cls._site_name()
-        if fallback.lower() in {'surlex', 'surlex limited'}:
-            return 'Idlevo'
-        return fallback or 'Idlevo'
+        return str(fallback or '').strip() or 'BFG'

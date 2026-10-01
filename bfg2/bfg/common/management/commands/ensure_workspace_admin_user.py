@@ -16,7 +16,7 @@ class Command(BaseCommand):
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("workspace_slug", type=str, help="Workspace slug (e.g. geeker)")
+        parser.add_argument("workspace_slug", type=str, help="Workspace slug (e.g. demo-shop)")
         parser.add_argument("--username", type=str, required=True)
         parser.add_argument(
             "--password",

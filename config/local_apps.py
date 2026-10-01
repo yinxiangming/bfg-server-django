@@ -65,3 +65,44 @@ def get_local_apps():
 def get_local_app_dotted_names():
     """Return list of dotted app names (e.g. ['apps.custom_app'])."""
     return [f'apps.{name}' for name in get_local_apps()]
+
+
+def apply_local_app_settings(namespace, app_names):
+    """Load optional model-free host_settings contributions from installed local apps.
+
+    SETTINGS adds new uppercase keys; PUBLIC_PATHS may exempt only the app's
+    own API prefix. Host configuration and another app's keys cannot be replaced.
+    Import errors inside a declared module fail startup instead of being hidden.
+    """
+    from importlib import import_module
+    from importlib.util import find_spec
+
+    additions = {}
+    public_paths = list(namespace.get('BFG_EXTRA_PUBLIC_PATHS', ()))
+    for app_name in app_names:
+        module_name = f'{app_name}.host_settings'
+        if find_spec(module_name) is None:
+            continue
+        contribution = import_module(module_name)
+        values = getattr(contribution, 'SETTINGS', {})
+        if not isinstance(values, dict):
+            raise ImproperlyConfigured(f'{module_name}.SETTINGS must be a dict')
+        for key, value in values.items():
+            if not isinstance(key, str) or not key.isidentifier() or not key.isupper():
+                raise ImproperlyConfigured(f'{module_name}: invalid setting key {key!r}')
+            if key in namespace or key in additions:
+                raise ImproperlyConfigured(f'{module_name}: setting {key} already belongs to the host or another app')
+            additions[key] = value
+        paths = getattr(contribution, 'PUBLIC_PATHS', ())
+        prefix = f'/api/v1/{app_name.rsplit(".", 1)[-1]}/'
+        if not isinstance(paths, (tuple, list)) or any(
+            not isinstance(path, str) or not path.startswith(prefix)
+            or any(part in {'.', '..'} for part in path.split('/'))
+            or '?' in path or '#' in path or '\\' in path
+            for path in paths
+        ):
+            raise ImproperlyConfigured(f'{module_name}: PUBLIC_PATHS must stay within {prefix}')
+        public_paths.extend(paths)
+    # Validate all declarations before publishing any contributions.
+    namespace.update(additions)
+    namespace['BFG_EXTRA_PUBLIC_PATHS'] = tuple(dict.fromkeys(public_paths))

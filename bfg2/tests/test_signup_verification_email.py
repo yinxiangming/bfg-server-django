@@ -153,3 +153,12 @@ def test_a_mail_that_cannot_be_sent_fails_the_signup_and_keeps_nothing(signup):
     # So the same address can sign up again once mail goes out.
     assert signup('lost@acme.test').status_code == 201
     assert len(mail.outbox) == 1
+
+
+def test_embedded_brand_has_no_hardcoded_customer_alias(db, settings):
+    from config.account_adapter import AccountAdapter
+    settings.CLUSTER_NAME = ''
+    settings.SITE_NAME = 'Surlex Limited'
+    assert AccountAdapter._cluster_name() == 'Surlex Limited'
+    settings.SITE_NAME = 'Other Deployment'
+    assert AccountAdapter._cluster_name() == 'Other Deployment'

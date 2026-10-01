@@ -509,7 +509,7 @@ class PlatformControlWorkspaceViewSet(PlatformDataPlaneActionsMixin, PlatformCon
         cluster = getattr(profile, "cluster", None) if profile else None
         owner = _owner_users(workspace).first()
         data = {
-            "format": "idlevo-workspace-v1",
+            "format": "bfg-workspace-v1",
             "scope": "configuration-template",
             "does_not_include": ["members", "business_data", "media", "credentials"],
             "workspace": {"name": workspace.name, "slug": workspace.slug, "email": workspace.email,
@@ -533,9 +533,9 @@ class PlatformControlWorkspaceViewSet(PlatformDataPlaneActionsMixin, PlatformCon
         require_confirmation(request)
         reason = require_reason(request)
         data = request.data if isinstance(request.data, dict) else {}
-        if data.get("format") not in (None, "", "idlevo-workspace-v1"):
+        if data.get("format") not in (None, "", "bfg-workspace-v1", "idlevo-workspace-v1"):
             return Response(
-                {"detail": "This is not a supported Idlevo workspace configuration export.", "code": "unsupported_workspace_import_format"},
+                {"detail": "This is not a supported BFG workspace configuration export.", "code": "unsupported_workspace_import_format"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         source = data.get("workspace", data)

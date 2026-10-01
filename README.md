@@ -297,3 +297,15 @@ src/server/
 ## License
 
 MIT
+
+### Local app host settings
+
+An installed `apps.<name>` may provide a model-free `host_settings.py` with a
+`SETTINGS` dict of new uppercase keys and optional `PUBLIC_PATHS` tuple. Public
+paths must stay under `/api/v1/<name>/`; host keys and duplicate extension keys
+cannot be replaced. Only discovered/configured local apps are loaded, after
+host settings have been defined. Do not import Django models in this module.
+Deployment credentials and business seed files belong to the extension/project.
+Configuration exports use `bfg-workspace-v1`; legacy `idlevo-workspace-v1`
+imports remain supported. External site seed JSON remains accepted via
+`manage.py init --site-config /absolute/path/to/site-config.json`.

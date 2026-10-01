@@ -315,7 +315,8 @@ def test_cluster_health_configuration_refusal_is_observed_and_audited(settings):
     assert PlatformAuditEvent.objects.filter(action="cluster.health_checked", result="failed").exists()
 
 
-def test_configuration_only_workspace_import_creates_pending_domains():
+@pytest.mark.parametrize("workspace_format", ["bfg-workspace-v1", "idlevo-workspace-v1"])
+def test_configuration_only_workspace_import_creates_pending_domains(workspace_format):
     owner = User.objects.create_user(
         username="import-owner", email="owner@example.test", password="secret",
     )
@@ -325,7 +326,7 @@ def test_configuration_only_workspace_import_creates_pending_domains():
         {
             "confirm": True,
             "reason": "Restore reviewed workspace configuration",
-            "format": "idlevo-workspace-v1",
+            "format": workspace_format,
             "workspace": {
                 "name": "Restored Shop",
                 "slug": "restored-shop",
@@ -673,3 +674,16 @@ def test_control_usage_cap_and_base_plan_grant_are_audited_and_recoverable():
     assert revoked.status_code == 200
     assert revoked.data["entitlement"]["status"] == "ended"
     assert PlatformAuditEvent.objects.filter(action="workspace.entitlement_revoked").exists()
+
+
+def test_workspace_export_uses_generic_format_and_import_rejects_unknown():
+    import json
+    root = User.objects.create_superuser(username='export-root', email='export@example.test', password='secret')
+    workspace = Workspace.objects.create(name='Export', slug='export', is_active=True)
+    client = client_for(root)
+    response = client.post(f'{CONTROL}workspaces/{workspace.id}/export/', {'confirm': True, 'reason': 'Reviewed configuration backup'}, format='json')
+    assert response.status_code == 200
+    assert json.loads(response.content)['format'] == 'bfg-workspace-v1'
+    response = client.post(f'{CONTROL}workspaces/import-workspace/', {'confirm': True, 'reason': 'Reviewed configuration import', 'format': 'unknown-format'}, format='json')
+    assert response.status_code == 400
+    assert response.data['code'] == 'unsupported_workspace_import_format'

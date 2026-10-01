@@ -31,7 +31,7 @@ request runs them, and the notification templates, for every workspace it create
 Usage:
 
     # audit — prints a readiness table, exits 1 when something is missing
-    python manage.py provision_workspace --slug geeker --check
+    python manage.py provision_workspace --slug demo-shop --check
 
     # create or complete, idempotent
     python manage.py provision_workspace \\

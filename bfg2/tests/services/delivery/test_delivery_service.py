@@ -89,3 +89,13 @@ def test_a_carrier_plugin_invents_nothing_when_the_workspace_has_no_country(db):
     workspace = Workspace.objects.create(name='Unset', slug='unset-country', is_active=True)
     stand_in = SimpleNamespace(carrier=SimpleNamespace(workspace=workspace))
     assert BaseCarrierPlugin.default_country.fget(stand_in) == ''
+
+
+def test_delivery_clear_removes_its_models_without_customer_app(db):
+    from bfg.common.models import Workspace
+    from bfg.delivery.models import Carrier
+    from bfg.delivery.seed_data import clear_data
+    workspace = Workspace.objects.create(name='Clear', slug='clear', is_active=True)
+    Carrier.objects.create(workspace=workspace, name='Local', code='local')
+    clear_data()
+    assert not Carrier.objects.exists()

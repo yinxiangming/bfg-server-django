@@ -33,8 +33,8 @@ For fields, control APIs, domain changes, health and rollback, read
    `bfg2/bfg/platform/views/control_views.py`,
    `bfg2/bfg/common/services/workspace_service.py`,
    `bfg2/bfg/common/models/workspace_domain.py`, and platform signals.
-   Find the hosting project's Brand Portal extension separately; it is not
-   guaranteed to ship in this Server repository.
+   Inspect the bundled Branding extension at `extensions/branding/server`;
+   verify that the configured host loads and activates it.
 3. Run the read-only inventory from the Server root using its configured Python:
 
    ```sh

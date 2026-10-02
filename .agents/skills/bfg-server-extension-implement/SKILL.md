@@ -39,9 +39,9 @@ Inspect the pinned host before choosing an implementation shape.
   email delivery, and extension-host utilities belong to BFG Server.
 - A host adapter must stay thin and must not copy extension policy.
 
-The root `extension.json` is the stable manifest. In a Nexus host, map it in
-`extensions/registry.json` to the stable Django app name and client plugin
-entrypoint. The folder name may be short (`branding`, `resale`, `channels`),
+The root `extension.json` is the stable manifest. In an integrating host, map it in
+that host's `extensions/registry.json` to the stable Django app name and client plugin
+entrypoint. The folder name may be short (`branding`, `geo`, or a host-owned module),
 but it must not silently rename an existing app, migration namespace, API
 route, or plugin id. Host links under `src/server/apps/` and
 `src/client/src/plugins/` should be rebuildable relative links to the unified

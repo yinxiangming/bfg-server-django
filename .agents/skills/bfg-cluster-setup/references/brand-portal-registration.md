@@ -1,9 +1,9 @@
 # Brand Portal registration and Cluster inheritance
 
-The flow below was checked against the Nexus hosting extension
-`extensions/branding/server` and the Resale brand-site BFF. These are separate
-repositories/components, not guaranteed contents of BFG Server. Recheck the
-installed host extension revision and its contracts before applying the plan.
+The flow below uses the bundled reusable Branding extension at
+`extensions/branding/server`. Marketing websites and BFF deployments are
+separate host-owned components. Recheck their installed revisions and contracts
+before applying the plan.
 
 ## Components and ownership
 
@@ -123,18 +123,16 @@ TLS, email, activation or remote deployment prerequisites as unverified rather
 than reporting setup complete.
 
 
-## Nexus local HTTP development
+## Local HTTP development
 
-The Nexus monorepo keeps branding sites under `websites/nexus-website` and
-`websites/resale-website`. Its guarded `scripts/configure-branding-local.py`
-configures local-only brand Clusters with frontend roots
-`http://nexus.localhost:3012` and `http://resale.localhost:3012`, while the brand
-callback sites run on ports 3002 and 3011. Read `websites/README.md` for exact
-entry URLs and environment setup.
+Bundled Branding is at `extensions/branding/server`, with its administrative
+client plugin at `extensions/branding/client/plugins/brand_portal`. A deploying
+host supplies marketing websites, origins, ports, and default business plugins.
+Keep those deployment values outside BFG source code.
 
 Local HTTP requires explicit development opt-ins. The domain resolver preserves
-scheme/port only with `DEBUG` and `BFG_LOCAL_HTTP_FRONTEND`; the BFF uses local
-HttpOnly cookies only with `BFG_BRAND_PORTAL_LOCAL_HTTP` and a validated local
-callback origin. Production HTTPS and Secure cookies remain the default. Do not
-infer that changing a Cluster URL alone configures callback validation, cookies,
-email links, CORS or the shared frontend's API origin.
+scheme and port only with `DEBUG` and `BFG_LOCAL_HTTP_FRONTEND`. Branding callback
+origins must be validated loopback or localhost origins. A frontend BFF must
+also opt in to local HTTP cookies using its own maintained configuration.
+Production HTTPS and Secure cookies remain the default. Verify callback
+validation, cookies, email links, CORS, and API routing independently.

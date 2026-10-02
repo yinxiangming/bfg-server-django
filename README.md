@@ -309,3 +309,18 @@ Deployment credentials and business seed files belong to the extension/project.
 Configuration exports use `bfg-workspace-v1`; legacy `idlevo-workspace-v1`
 imports remain supported. External site seed JSON remains accepted via
 `manage.py init --site-config /absolute/path/to/site-config.json`.
+
+## Bundled reusable extensions
+
+`extensions/branding` and `extensions/geo` are maintained in this repository.
+Each source root owns its server, optional client, tests, and documentation.
+The stable Django entrypoints are `apps.brand_portal` and `apps.geo`; the relative
+links in `apps/` work in an independent checkout. Automatic local-app discovery
+loads them when `LOCAL_APPS` is unset; an explicit list must select them.
+Workspace activation and authorization still apply.
+
+Branding's administrative frontend plugin is at
+`extensions/branding/client/plugins/brand_portal`. Frontend hosts link or
+materialize that source and supply their own dependencies. Generated frontend
+output, infrastructure addresses, customer assets, and business plugin defaults
+are host-owned and must not be added to this repository.

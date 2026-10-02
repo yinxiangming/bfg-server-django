@@ -61,3 +61,10 @@ jobs:
         # tests/settings.py uses in-memory SQLite, so no database service is needed.
         working-directory: bfg2
         run: python -m pytest tests/ -q
+
+      - name: Bundled Branding and Geo extensions
+        env:
+          ENV: test
+          DJANGO_SETTINGS_MODULE: config.test
+          LOCAL_APPS: brand_portal,geo
+        run: python manage.py test apps.brand_portal apps.geo --noinput

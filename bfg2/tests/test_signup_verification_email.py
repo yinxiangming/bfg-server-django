@@ -158,14 +158,14 @@ def test_a_mail_that_cannot_be_sent_fails_the_signup_and_keeps_nothing(signup):
 def test_embedded_brand_has_no_hardcoded_customer_alias(db, settings):
     from config.account_adapter import AccountAdapter
     settings.CLUSTER_NAME = ''
-    settings.SITE_NAME = 'Surlex Limited'
-    assert AccountAdapter._cluster_name() == 'Surlex Limited'
+    settings.SITE_NAME = 'Example Deployment'
+    assert AccountAdapter._cluster_name() == 'Example Deployment'
     settings.SITE_NAME = 'Other Deployment'
     assert AccountAdapter._cluster_name() == 'Other Deployment'
 
 
 @pytest.mark.parametrize("debug,opt_in,expected", [
-    (True, True, "http://nexus.localhost:3002"),
+    (True, True, "http://brand-one.localhost:3000"),
     (True, False, "https://app.acme.test"),
     (False, True, "https://app.acme.test"),
 ])
@@ -175,5 +175,20 @@ def test_server_attested_brand_http_requires_local_development(settings, debug, 
     settings.FRONTEND_URL = "https://app.acme.test"
     settings.CORS_ALLOWED_ORIGINS = []
     request = RequestFactory().post("/register")
-    request._trusted_frontend_origin = "http://nexus.localhost:3002"
+    request._trusted_frontend_origin = "http://brand-one.localhost:3000"
     assert frontend_base_url(request) == expected
+
+
+@pytest.mark.parametrize("origin", [
+    "http://brand-one.localhost.example.test:3000",
+    "http://remote.example.test:3000",
+    "http://user:password@brand-one.localhost:3000",
+])
+def test_local_brand_http_rejects_nonlocal_or_credentialed_origins(settings, origin):
+    settings.DEBUG = True
+    settings.BFG_LOCAL_HTTP_FRONTEND = True
+    settings.FRONTEND_URL = "https://app.acme.test"
+    settings.CORS_ALLOWED_ORIGINS = []
+    request = RequestFactory().post("/register")
+    request._trusted_frontend_origin = origin
+    assert frontend_base_url(request) == "https://app.acme.test"

@@ -1,13 +1,13 @@
-# CLAUDE.md — resale-website/server
+# CLAUDE.md — BFG Server
 
-Django backend for the Resale Website project, built on the **BFG2 Framework** — a multi-tenant, multi-workspace e-commerce backend library.
+Reusable Django backend built on the **BFG2 Framework** — a multi-tenant, multi-workspace e-commerce backend library.
 
 ## Directory Structure
 
 ```
 server/
-├── apps/                        # Local Django apps (auto-discovered), e.g. resale
-├── bfg2/                        # BFG2 Framework (git submodule)
+├── apps/                        # Local Django apps (auto-discovered), including bundled Branding and Geo
+├── bfg2/                        # BFG2 Framework (bundled library)
 │   ├── bfg/                     # Core modules
 │   │   ├── docs/                # English agent docs (deployment, architecture, API reference)
 │   │   ├── core/                # Agent API, permissions, middleware, PDF
@@ -45,7 +45,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # Required .env vars:
-# DATABASE_URL=mysql://user:pass@127.0.0.1:3306/resale
+# DATABASE_URL=mysql://user:pass@127.0.0.1:3306/bfg
 # SECRET_KEY=...
 # REDIS_URL=redis://localhost:6379/0
 # CELERY_BROKER_URL=redis://localhost:6379/0
@@ -122,7 +122,11 @@ Pass `workspace_id` explicitly in API requests when using API keys from a platfo
 
 Apps in `apps/` are auto-discovered by `config/local_apps.py` if they have both `urls.py` and `apps.py`. They register as `apps.<name>` and route at `/api/v1/<name>/`. Override with `LOCAL_APPS=app1,app2` in `.env`.
 
-Example local app: **`apps.resale`** (symlink → `extensions/resale/server`).
+Bundled reusable apps: **`apps.brand_portal`** and **`apps.geo`**, with tracked
+relative entrypoint links into `extensions/branding/server` and
+`extensions/geo/server`. Branding also owns its web plugin at
+`extensions/branding/client/plugins/brand_portal`. Explicit `LOCAL_APPS` lists
+must include the desired bundled apps; per-workspace activation remains separate.
 SaaS platform APIs (**clusters, workspaces, billing, token exchange, SSO**) are provided by **`bfg.platform`**, registered in `config/urls.py` at `/api/v1/platform/`.
 
 ## Environment Variables

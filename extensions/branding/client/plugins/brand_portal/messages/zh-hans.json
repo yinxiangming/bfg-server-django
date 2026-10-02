@@ -1,0 +1,41 @@
+{
+  "admin": {
+    "brandPortal": {
+      "title": "品牌门户",
+      "subtitle": "配置该品牌 workspace 的注册默认值，并查看开通记录。",
+      "loading": "正在加载品牌门户",
+      "retry": "重试",
+      "inactive": "请先为此 workspace 启用私有 Brand Portal 扩展，然后再进行配置。",
+      "suspended": "此 workspace 已暂停，品牌门户配置为只读。",
+      "workspaceInactive": "此 workspace 未启用，品牌门户配置为只读。",
+      "saved": "品牌门户设置已保存。",
+      "save": "保存设置",
+      "saving": "正在保存…",
+      "fields": {
+        "registrationEnabled": "接受用户注册",
+        "extensions": "新 workspace 自动安装的扩展",
+        "default_country": "默认国家",
+        "default_currency": "默认币种",
+        "default_language": "默认语言",
+        "default_theme": "默认主题",
+        "default_plan": "默认方案"
+      },
+      "domains": {
+        "title": "已验证的门户域名",
+        "none": "此 workspace 尚未关联已验证域名。"
+      },
+      "audit": {
+        "title": "最近注册开通",
+        "workspace": "创建的 workspace",
+        "status": "状态",
+        "created": "开始时间",
+        "error": "错误代码",
+        "none": "目前还没有通过注册创建 workspace。"
+      },
+      "errors": {
+        "load": "无法加载品牌门户配置。",
+        "save": "无法保存品牌门户配置。"
+      }
+    }
+  }
+}

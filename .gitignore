@@ -17,3 +17,8 @@ __pycache__/
 # Extension apps (submodules or symlinks)
 apps/*
 !apps/__init__.py
+
+# Bundled reusable extension entrypoints and local client dependencies.
+!apps/brand_portal
+!apps/geo
+node_modules

@@ -115,7 +115,7 @@ API 成功和已规范化的错误响应都会带 `X-Request-ID`。BFF 可以传
 
 业务 Workspace 的系统域名由 Brand Workspace 所属 cluster 的 `frontend_base_url` 派生。例如 cluster 前端地址为 `https://app.example.com`，新 Workspace slug 为 `casey-store`，则平台访问地址为 `https://casey-store.app.example.com`。Brand Workspace 未配置可用 cluster 前端地址时，创建整体回滚并返回 `workspace_domain_unavailable`。
 
-数据库驱动的品牌回调域名仍不在当前范围；这里使用的是新业务 Workspace 的平台访问域名，不是 Surlex/Idlevo 的邮箱、密码重置或 OAuth 最终回调域名。
+数据库驱动的品牌回调域名仍不在当前范围；这里使用的是新业务 Workspace 的平台访问域名，不是 品牌网站 的邮箱、密码重置或 OAuth 最终回调域名。
 
 写接口的稳定错误码还包括：
 

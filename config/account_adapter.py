@@ -46,7 +46,10 @@ def _trusted_frontend_base_url(request):
     ):
         return ''
     local_hosts = {'localhost', '127.0.0.1', '::1'}
-    if parsed.scheme != 'https' and parsed.hostname not in local_hosts:
+    local_brand_http = (settings.DEBUG and getattr(settings, 'BFG_LOCAL_HTTP_FRONTEND', False)
+                        and parsed.hostname in {'nexus.localhost', 'resale.localhost'}
+                        and parsed.port in {3002, 3011})
+    if parsed.scheme != 'https' and parsed.hostname not in local_hosts and not local_brand_http:
         return ''
     return f'{parsed.scheme}://{parsed.netloc}'.rstrip('/')
 

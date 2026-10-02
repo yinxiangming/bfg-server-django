@@ -1,90 +1,83 @@
 ---
 name: bfg-cluster-setup
-description: Plan, configure, migrate, or validate BFG Cluster records and their Workspace domain routing. Use when adding a brand-specific Workspace domain root, assigning WorkspacePlatformProfile.cluster, or preparing a genuinely independent BFG infrastructure cluster.
+description: Audit, configure, or validate BFG Cluster routing and Brand Portal tenant registration. Use for WorkspacePlatformProfile.cluster assignment, brand-specific tenant domains, Cluster health/capacity controls, or planning an independent deployment.
 metadata:
-  short-description: Configure BFG clusters and workspace routing
+  short-description: Configure clusters and branded tenant registration
 ---
 
 # BFG Cluster Setup
 
-Set up BFG clusters without confusing a database routing record with deployed
-infrastructure. Preserve existing Workspace routing and keep UAT and Production
-as separate release gates.
+Produce a verified Cluster and tenant-routing plan for the requested environment.
+A Cluster record describes routing and resources; it does not deploy servers or
+switch Django database connections.
 
-## Start with the mode
+## Choose the mode
 
-Classify the requested cluster before changing anything:
+- **Logical brand routing:** one existing BFG API/database/frontend deployment,
+  with a separate tenant domain root for a brand.
+- **Physical infrastructure:** independently deployed API, database, Redis,
+  storage and frontend. Verify those resources before enabling assignments;
+  the current registration service is not a remote deployment provisioner.
 
-- **Logical brand-routing cluster:** shares an existing API, database, Redis,
-  object storage, and Workspace frontend deployment, but uses a different
-  `frontend_base_url` so newly provisioned Workspaces receive a brand-specific
-  system domain.
-- **Physical infrastructure cluster:** has independently deployed API, database,
-  Redis, object storage, secrets, migrations, monitoring, and frontend routing.
+For a branded registration site, read
+[references/brand-portal-registration.md](references/brand-portal-registration.md).
+For fields, control APIs, domain changes, health and rollback, read
+[references/cluster-runbook.md](references/cluster-runbook.md).
 
-A `Cluster` row never deploys infrastructure. If the user asks for a physical
-cluster, prepare and verify the infrastructure before enabling Workspace
-assignment.
+## Establish the actual state
 
-## Read the implementation before acting
+1. Identify the Server checkout/revision, environment, database, frontend
+   deployment and intended Brand Workspace. Do not infer live configuration
+   from a website name, documentation, a sample env file or a health response.
+2. Inspect the pinned core: `bfg2/bfg/platform/models/{cluster,workspace_profile}.py`,
+   `bfg2/bfg/platform/views/control_views.py`,
+   `bfg2/bfg/common/services/workspace_service.py`,
+   `bfg2/bfg/common/models/workspace_domain.py`, and platform signals.
+   Find the hosting project's Brand Portal extension separately; it is not
+   guaranteed to ship in this Server repository.
+3. Run the read-only inventory from the Server root using its configured Python:
 
-Inspect these files in the target revision because downstream projects may pin
-different BFG commits:
+   ```sh
+   python manage.py shell -c "exec(open('.agents/skills/bfg-cluster-setup/scripts/inspect_clusters.py').read())"
+   ```
 
-- `bfg2/bfg/platform/models/cluster.py`
-- `bfg2/bfg/platform/models/workspace_profile.py`
-- `bfg2/bfg/common/models/workspace_domain.py`
-- `bfg2/bfg/common/services/workspace_service.py`
-- `bfg2/bfg/platform/signals.py`
+   The script queries only the configured database, reports missing tables/apps,
+   and omits credentials, tokens and customer identities. An empty inventory is
+   evidence of missing configuration, not authorization to create sample rows.
+4. Compare migration state with the actual schema before any schema repair.
+   Back up the target before writes. Do not reset a database, fake migrations,
+   delete files, or bulk reassign existing tenants to make an empty screen look
+   populated.
 
-If a Brand Portal is involved, also inspect its profile and provisioning
-service. The portal's Workspace cluster determines the target cluster for newly
-created Workspaces; the portal profile, not the Cluster, determines which
-extensions and defaults are installed.
+## Configure within the authorized scope
 
-## Preserve these invariants
+- Record stable Cluster ID, infrastructure versus routing mode, API origin,
+  tenant domain root, capacity, affected profiles, and rollback mapping.
+- Configure wildcard DNS/TLS on the tenant frontend, not only the marketing
+  website. Public tenant URLs currently resolve to HTTPS; a loopback URL with
+  a dev-server port is not a working end-to-end domain setup.
+- Prefer the superuser-only control API for audited Cluster changes. It requires
+  confirmation, a change reason and `X-Idempotency-Key`; updates additionally
+  require the version read from the current record.
+- Bind only the intended Brand Workspace through a saved
+  `WorkspacePlatformProfile`. New Brand Portal tenants inherit that Cluster;
+  existing tenants are not moved by changing the Brand Workspace's binding.
+- Configure Brand Portal registration/defaults/extensions and dedicated
+  server-only BFF credentials separately. Region alone does not select a Cluster.
+- Inventory all bound profiles before changing a Cluster's frontend root:
+  save signals regenerate their system domains and may replace old domain rows.
 
-- Treat `Cluster.id` as a stable identifier. Do not rename it after Workspaces
-  are assigned.
-- Set `frontend_base_url` to the HTTPS root used to derive system domains, for
-  example `https://uat.example.com`. Do not include a wildcard, Workspace slug,
-  path, query, or trailing slash.
-- Expect a Workspace with slug `shop-a` to receive
-  `shop-a.uat.example.com`.
-- Audit every `WorkspacePlatformProfile` bound to an existing Cluster before
-  editing its `frontend_base_url`. Saving that Cluster regenerates the system
-  domain for every bound Workspace.
-- Do not use `QuerySet.update()` for ordinary cluster assignment because it
-  bypasses model signals. If a controlled migration requires it, explicitly
-  reconcile `WorkspaceDomain` rows and invalidate domain caches.
-- Provision wildcard DNS and TLS before assigning real Workspaces.
-- Keep API credentials, database credentials, Redis credentials, and provider
-  tokens out of commits, commands, tickets, and logs.
-- Do not apply a UAT configuration to Production without a separate approval
-  and Production validation.
+## Verify and report
 
-## Workflow
+For independent infrastructure, verify database identity, migration state, an
+authorized read/write canary and backup restore separately from HTTP liveness.
+Verify stored assignment and system domains, frontend host routing, TLS/CORS,
+protected Cluster reads, brand config, an authorized disposable registration,
+extension activation, and one-time SSO. Include a non-superuser denial check.
+Do not send registration emails or perform remote writes for a read-only audit.
+Keep existing task authorization; only resolve genuinely missing write scope.
 
-1. Inventory the target environment, existing Clusters, bound Workspaces,
-   system domains, DNS ownership, TLS status, and frontend project.
-2. Record whether the change is logical routing or physical infrastructure.
-3. Define the Cluster fields, domain root, capacity policy, rollback target,
-   and affected Workspaces.
-4. For a physical cluster, deploy and validate all infrastructure first.
-5. Create the Cluster while no customer Workspace is assigned to it.
-6. Configure wildcard DNS and TLS on the Workspace frontend deployment.
-7. Bind the intended management or Brand Portal Workspace through
-   `WorkspacePlatformProfile.cluster`.
-8. Configure Brand Portal defaults and a dedicated BFF API key separately when
-   applicable.
-   A direct generic workspace create/provision request may pass a core ``skin``.
-   Brand Portal provisioning should use its ``default_theme`` setting instead;
-   an extension-owned theme is valid only when that extension is also listed in
-   ``provisioning_extensions``.
-9. Validate database state, DNS, TLS, Workspace creation, system-domain
-   materialization, extension activation, and SSO.
-10. Record evidence and stop at the requested environment boundary.
-
-Read [references/cluster-runbook.md](references/cluster-runbook.md) for the
-field matrix, preflight queries, logical and physical checklists, validation,
-rollback, and current implementation limitations.
+Report the configured environment/revision, mode, affected profiles, checks
+performed, unresolved gaps and rollback artifact. Separate a configured record,
+a reachable service, and a completed registration flow. Keep deployment-specific
+hosts, test accounts and transient incidents out of this reusable skill.

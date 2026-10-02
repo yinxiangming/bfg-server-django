@@ -162,3 +162,18 @@ def test_embedded_brand_has_no_hardcoded_customer_alias(db, settings):
     assert AccountAdapter._cluster_name() == 'Surlex Limited'
     settings.SITE_NAME = 'Other Deployment'
     assert AccountAdapter._cluster_name() == 'Other Deployment'
+
+
+@pytest.mark.parametrize("debug,opt_in,expected", [
+    (True, True, "http://nexus.localhost:3002"),
+    (True, False, "https://app.acme.test"),
+    (False, True, "https://app.acme.test"),
+])
+def test_server_attested_brand_http_requires_local_development(settings, debug, opt_in, expected):
+    settings.DEBUG = debug
+    settings.BFG_LOCAL_HTTP_FRONTEND = opt_in
+    settings.FRONTEND_URL = "https://app.acme.test"
+    settings.CORS_ALLOWED_ORIGINS = []
+    request = RequestFactory().post("/register")
+    request._trusted_frontend_origin = "http://nexus.localhost:3002"
+    assert frontend_base_url(request) == expected

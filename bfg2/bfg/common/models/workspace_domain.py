@@ -5,6 +5,7 @@ Workspace domain resolver helpers and model.
 
 from urllib.parse import urlparse
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.cache import cache
 from django.db import models, transaction
@@ -147,8 +148,9 @@ def resolve_workspace_public_frontend_base_url(workspace, override_domain=None) 
         raise ValueError("workspace is required")
 
     cache_key = get_workspace_frontend_base_url_cache_key(workspace.id)
-    cached = cache.get(cache_key)
-    if cached:
+    local_http = settings.DEBUG and getattr(settings, "BFG_LOCAL_HTTP_FRONTEND", False)
+    cached = None if local_http else cache.get(cache_key)
+    if cached and cached.startswith("https://"):
         return cached
 
     primary = workspace.domains.filter(
@@ -164,7 +166,22 @@ def resolve_workspace_public_frontend_base_url(workspace, override_domain=None) 
     system_default = workspace.domains.filter(kind=WorkspaceDomain.KIND_SYSTEM_DEFAULT).first()
     if system_default:
         value = f"https://{system_default.hostname}"
-        cache.set(cache_key, value, cache_ttl())
+        # Preserve explicit local HTTP routing without changing production domains.
+        if local_http:
+            profile = getattr(workspace, "platform_profile", None)
+            cluster = getattr(profile, "cluster", None) if profile else None
+            parsed = urlparse(getattr(cluster, "frontend_base_url", ""))
+            host = parsed.hostname or ""
+            try:
+                port = parsed.port
+            except ValueError:
+                port = None
+            if (parsed.scheme == "http" and (host == "localhost" or host.endswith(".localhost"))
+                    and not parsed.username and not parsed.password and port
+                    and system_default.hostname == compute_system_default_hostname(workspace, cluster)):
+                value = f"http://{system_default.hostname}:{port}"
+        if not local_http:
+            cache.set(cache_key, value, cache_ttl())
         return value
 
     raise ValueError(f"Workspace {workspace.id} does not have a public frontend domain configured")

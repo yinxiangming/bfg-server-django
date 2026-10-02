@@ -122,7 +122,7 @@ Pass `workspace_id` explicitly in API requests when using API keys from a platfo
 
 Apps in `apps/` are auto-discovered by `config/local_apps.py` if they have both `urls.py` and `apps.py`. They register as `apps.<name>` and route at `/api/v1/<name>/`. Override with `LOCAL_APPS=app1,app2` in `.env`.
 
-Example local app: **`apps.resale`** (symlink → `extensions/resale-server`).  
+Example local app: **`apps.resale`** (symlink → `extensions/resale/server`).
 SaaS platform APIs (**clusters, workspaces, billing, token exchange, SSO**) are provided by **`bfg.platform`**, registered in `config/urls.py` at `/api/v1/platform/`.
 
 ## Environment Variables

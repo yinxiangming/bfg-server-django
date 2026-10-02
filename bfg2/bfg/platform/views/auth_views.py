@@ -368,6 +368,30 @@ class AuthViewSet(viewsets.ViewSet):
         workspace = sso_code.workspace
         user = sso_code.user
 
+        # Recheck access when consuming the code: membership may have changed
+        # after it was issued. A denied code remains consumed.
+        profile = getattr(workspace, 'platform_profile', None)
+        if not user.is_active or not workspace.is_active or (profile and profile.suspended_at):
+            return Response(
+                {'error': 'No access to this workspace'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if is_embedded_mode():
+            StaffMember = apps.get_model('common', 'StaffMember')
+            has_access = StaffMember.all_objects.filter(
+                user=user, workspace=workspace, is_active=True,
+            ).exists()
+        else:
+            PlatformMembership = apps.get_model('platform', 'PlatformMembership')
+            has_access = PlatformMembership.objects.filter(
+                user=user, profile__workspace=workspace, is_active=True,
+            ).exists()
+        if not has_access:
+            return Response(
+                {'error': 'No access to this workspace'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Issue JWT — reuse the same logic as token_exchange
         if is_embedded_mode():
             from rest_framework_simplejwt.tokens import RefreshToken

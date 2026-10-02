@@ -293,7 +293,7 @@ __pycache__/
 venv/
 
 # Node
-node_modules/
+node_modules
 .next/
 
 # Build / tooling
@@ -329,17 +329,79 @@ PY
 fi
 
 echo "Rendering extension templates..."
+EXTENSION_ROOT="${APP_ROOT}/extensions/${APP_SLUG}"
+mkdir -p "${EXTENSION_ROOT}/client/plugins"
+
 python3 "${BOOTSTRAP_DIR}/scripts/render_templates.py" \
   "${BOOTSTRAP_DIR}/templates/server" \
-  "${APP_ROOT}/extensions/${APP_SLUG}-server" \
+  "${EXTENSION_ROOT}/server" \
   --slug "$APP_SLUG" \
   --title "$APP_TITLE"
 
 python3 "${BOOTSTRAP_DIR}/scripts/render_templates.py" \
   "${BOOTSTRAP_DIR}/templates/client" \
-  "${APP_ROOT}/extensions/${APP_SLUG}-client" \
+  "${EXTENSION_ROOT}/client/plugins/${APP_SLUG}" \
   --slug "$APP_SLUG" \
   --title "$APP_TITLE"
+
+# Keep extension package dependencies shared with the host checkout. These are
+# relative links so the generated project remains relocatable and rebuildable.
+ln -snf "../../../src/client/node_modules" "${EXTENSION_ROOT}/client/node_modules"
+ln -snf "../../../../../src/client/node_modules" \
+  "${EXTENSION_ROOT}/client/plugins/${APP_SLUG}/node_modules"
+
+echo "Writing extension manifest and ownership notes..."
+export EXTENSION_ROOT APP_SLUG APP_TITLE
+python3 <<'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["EXTENSION_ROOT"])
+slug = os.environ["APP_SLUG"]
+title = os.environ["APP_TITLE"]
+
+manifest = {
+    "schemaVersion": 1,
+    "id": slug,
+    "name": title,
+    "entrypoints": {
+        "server": "server",
+        "client": f"client/plugins/{slug}",
+    },
+}
+(root / "extension.json").write_text(
+    json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+)
+
+(root / "README.md").write_text(
+    f"""# {title} extension
+
+`extension.json` is the stable host manifest. Keep the Django app name and
+client plugin id compatible with the generated entrypoints.
+
+- `server/`: extension-owned Django code, migrations, and server tests.
+- `client/plugins/`: extension-owned client plugin code and client tests.
+- `skins/`: optional reusable storefront skins owned by this extension.
+- `docs/`: extension contract, architecture, and operational notes.
+- `tests/`: focused unit and integration tests not colocated with code.
+- `e2e/`: end-to-end tests requiring a running host or external service.
+
+Keep host wiring in the Nexus registry and use rebuildable relative links
+from `src/server/apps/` and `src/client/src/plugins/`; do not copy source
+into the host repositories.
+""",
+    encoding="utf-8",
+)
+for directory, description in (
+    ("docs", "Extension-owned contract, architecture, and operational documentation."),
+    ("tests", "Extension-owned focused tests that are not colocated with source code."),
+    ("e2e", "Extension-owned end-to-end tests and their host/service fixtures."),
+):
+    path = root / directory / "README.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"# {directory.upper()}\n\n{description}\n", encoding="utf-8")
+PY
 
 echo "Installing reference extension templates under server/client..."
 mkdir -p "${APP_ROOT}/src/server/_extension_template"
@@ -359,8 +421,9 @@ python3 "${BOOTSTRAP_DIR}/scripts/render_templates.py" \
 echo "Linking extensions into submodule apps/plugins..."
 mkdir -p "${APP_ROOT}/src/server/apps"
 mkdir -p "${APP_ROOT}/src/client/src/plugins"
-ln -snf "${APP_ROOT}/extensions/${APP_SLUG}-server" "${APP_ROOT}/src/server/apps/${APP_SLUG}"
-ln -snf "${APP_ROOT}/extensions/${APP_SLUG}-client" "${APP_ROOT}/src/client/src/plugins/${APP_SLUG}"
+ln -snf "../../../extensions/${APP_SLUG}/server" "${APP_ROOT}/src/server/apps/${APP_SLUG}"
+ln -snf "../../../../extensions/${APP_SLUG}/client/plugins/${APP_SLUG}" \
+  "${APP_ROOT}/src/client/src/plugins/${APP_SLUG}"
 
 MAILPIT_SMTP_PORT_EFFECTIVE="${BFG_BOOTSTRAP_MAILPIT_SMTP_PORT:-1025}"
 MAILPIT_UI_PORT_EFFECTIVE="${BFG_BOOTSTRAP_MAILPIT_UI_PORT:-8025}"

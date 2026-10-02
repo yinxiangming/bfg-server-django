@@ -27,9 +27,27 @@ Inspect the pinned host before choosing an implementation shape.
 
 - Domain models, serializers, permissions, routes, migrations, fixtures, and
   tests belong to the extension Server package.
+- Keep a unified extension layout when the extension has more than one
+  surface: `extensions/<short-name>/server/` for Django code and migrations,
+  `client/plugins/<plugin-id>/` for a host web plugin, optional
+  `client/miniapp/` for a mini-program, and optional `skins/` for
+  extension-owned storefront themes, `docs/` for contracts and operations,
+  `tests/` for focused non-colocated tests, and `e2e/` for host or service
+  end-to-end tests. Each directory remains extension-owned; do not move its
+  policy into a generic host package.
 - Generic manifest loading, activation gates, Workspace primitives, audit,
   email delivery, and extension-host utilities belong to BFG Server.
 - A host adapter must stay thin and must not copy extension policy.
+
+The root `extension.json` is the stable manifest. In a Nexus host, map it in
+`extensions/registry.json` to the stable Django app name and client plugin
+entrypoint. The folder name may be short (`branding`, `resale`, `channels`),
+but it must not silently rename an existing app, migration namespace, API
+route, or plugin id. Host links under `src/server/apps/` and
+`src/client/src/plugins/` should be rebuildable relative links to the unified
+extension tree. A server-only extension may omit the client entrypoint, and a
+client-only extension may omit `server/`; keep the same manifest and ownership
+rules.
 
 Record every host-owned change in the dispatch result with the reason it could
 not remain extension-owned.

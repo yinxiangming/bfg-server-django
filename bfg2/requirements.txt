@@ -1,4 +1,4 @@
-Django>=6.0.8,<7.0
+Django>=5.0,<6.0
 djangorestframework>=3.14
 # >=1.26 for stream_options: a streamed answer reports its tokens only when asked.
 openai>=1.26

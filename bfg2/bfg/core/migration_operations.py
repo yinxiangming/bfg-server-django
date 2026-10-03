@@ -265,6 +265,45 @@ def _matching(constraints, columns, flag):
     ]
 
 
+def _has_implicit_field_index(
+    constraints, column, allow_left_prefix=False, declared_unique_indexes=frozenset()
+):
+    for name, item in constraints.items():
+        if not item.get("index"):
+            continue
+        columns = list(item.get("columns", []))
+        if columns == [column] and not item.get("unique"):
+            return True
+        # MySQL can discard a redundant single-column foreign-key index once
+        # a non-unique composite index has the same leftmost column. That index
+        # provides the lookup shape requested by an implicit field db_index.
+        if allow_left_prefix and len(columns) > 1 and columns[0] == column:
+            if not item.get("unique"):
+                return True
+            if (name, tuple(columns)) in declared_unique_indexes:
+                return True
+    return False
+
+
+def _declared_unique_indexes(schema_editor, model):
+    declared = set()
+    for constraint in model._meta.constraints:
+        if not isinstance(constraint, models.UniqueConstraint):
+            continue
+        if (
+            not constraint.fields
+            or constraint.expressions
+            or constraint.include
+            or constraint.opclasses
+            or constraint.condition is not None
+        ):
+            continue
+        if constraint.create_sql(model, schema_editor) is None:
+            continue
+        declared.add((constraint.name, tuple(_field_columns(model, constraint.fields))))
+    return declared
+
+
 def _validate_field(schema_editor, model, field):
     table = model._meta.db_table
     column = _columns(schema_editor, table).get(field.column)
@@ -300,8 +339,18 @@ def _validate_field(schema_editor, model, field):
     if field.unique and not field.primary_key and not _matching(constraints, [field.column], "unique"):
         _fail(table, f"missing unique constraint for {field.column!r}")
     if field.db_index and not field.unique:
-        indexes = _matching(constraints, [field.column], "index")
-        if not indexes or not any(not item.get("unique") for item in indexes):
+        allow_mysql_fk_prefix = (
+            schema_editor.connection.vendor == "mysql"
+            and field.remote_field
+            and field.many_to_one
+            and field.db_constraint
+        )
+        if not _has_implicit_field_index(
+            constraints,
+            field.column,
+            allow_left_prefix=allow_mysql_fk_prefix,
+            declared_unique_indexes=_declared_unique_indexes(schema_editor, model),
+        ):
             _fail(table, f"missing non-unique index for {field.column!r}")
 
     if field.remote_field and field.many_to_one and field.db_constraint:

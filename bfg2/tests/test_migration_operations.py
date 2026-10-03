@@ -12,6 +12,7 @@ from bfg.core.migration_operations import (
     AddIndexIfCompatible,
     CreateModelIfCompatible,
     SchemaRetryError,
+    _has_implicit_field_index,
     _normalise_expression,
 )
 
@@ -362,6 +363,49 @@ def test_sql_normalisation_preserves_expression_semantics_and_literals():
     assert _normalise_expression("a AND b") != _normalise_expression("aandb")
     assert _normalise_expression("status = 'Ready Now'") != _normalise_expression(
         "status = 'ready now'"
+    )
+
+
+def test_mysql_foreign_key_index_accepts_only_a_non_unique_left_prefix():
+    composite = {
+        "composite_idx": {
+            "columns": ["parent_id", "changed_at"],
+            "index": True,
+            "unique": False,
+        }
+    }
+    assert _has_implicit_field_index(
+        composite, "parent_id", allow_left_prefix=True
+    )
+    assert not _has_implicit_field_index(composite, "parent_id")
+
+    wrong_order = deepcopy(composite)
+    wrong_order["composite_idx"]["columns"] = ["changed_at", "parent_id"]
+    assert not _has_implicit_field_index(
+        wrong_order, "parent_id", allow_left_prefix=True
+    )
+
+    unique = deepcopy(composite)
+    unique["composite_idx"]["unique"] = True
+    assert not _has_implicit_field_index(
+        unique, "parent_id", allow_left_prefix=True
+    )
+    assert _has_implicit_field_index(
+        unique,
+        "parent_id",
+        allow_left_prefix=True,
+        declared_unique_indexes={
+            ("composite_idx", ("parent_id", "changed_at"))
+        },
+    )
+
+    single_unique = deepcopy(unique)
+    single_unique["composite_idx"]["columns"] = ["parent_id"]
+    assert not _has_implicit_field_index(
+        single_unique,
+        "parent_id",
+        allow_left_prefix=True,
+        declared_unique_indexes={("composite_idx", ("parent_id",))},
     )
 
 

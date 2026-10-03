@@ -78,6 +78,23 @@ See [bootstrap/docs/README.md](./bootstrap/docs/README.md) for more details on:
 
 API docs: http://localhost:8000/api/docs/
 
+### Interrupted migration retries
+
+Selected historical finance and Platform migrations use fail-closed retry
+operations from `bfg.core.migration_operations`. They support deployments where
+the database created an object but the migration recorder was not updated. An
+existing column, table, index, or constraint is skipped only when the physical
+schema features supported by that database can be proven to match the migration
+state; an incomplete, incompatible, or unverifiable schema stops the migration
+for manual investigation. Django's MySQL backend does not create partial unique
+indexes, so the conditional active-placement rule remains enforced by the
+Platform service on MySQL, matching Django's native migration behaviour.
+
+These retry operations are intentionally irreversible. Do not use `migrate`
+backwards across them: the migration cannot determine whether an existing
+object was created by the interrupted deployment. Back up the database and use
+an explicit, reviewed repair migration when rollback is required.
+
 ---
 
 ## Environment Variables
@@ -309,3 +326,18 @@ Deployment credentials and business seed files belong to the extension/project.
 Configuration exports use `bfg-workspace-v1`; legacy `idlevo-workspace-v1`
 imports remain supported. External site seed JSON remains accepted via
 `manage.py init --site-config /absolute/path/to/site-config.json`.
+
+## Bundled reusable extensions
+
+`extensions/branding` and `extensions/geo` are maintained in this repository.
+Each source root owns its server, optional client, tests, and documentation.
+The stable Django entrypoints are `apps.brand_portal` and `apps.geo`; the relative
+links in `apps/` work in an independent checkout. Automatic local-app discovery
+loads them when `LOCAL_APPS` is unset; an explicit list must select them.
+Workspace activation and authorization still apply.
+
+Branding's administrative frontend plugin is at
+`extensions/branding/client/plugins/brand_portal`. Frontend hosts link or
+materialize that source and supply their own dependencies. Generated frontend
+output, infrastructure addresses, customer assets, and business plugin defaults
+are host-owned and must not be added to this repository.

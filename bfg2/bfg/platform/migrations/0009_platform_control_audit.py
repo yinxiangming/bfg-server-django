@@ -6,6 +6,8 @@ import uuid
 from django.conf import settings
 from django.db import migrations, models
 
+from bfg.core.migration_operations import CreateModelIfCompatible
+
 
 class Migration(migrations.Migration):
 
@@ -15,7 +17,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name="PlatformAuditEvent",
             fields=[
                 ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
@@ -40,7 +42,7 @@ class Migration(migrations.Migration):
                 ],
             },
         ),
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name="PlatformControlActionRequest",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),

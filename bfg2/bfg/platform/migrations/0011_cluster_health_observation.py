@@ -5,6 +5,8 @@ from django.db import migrations, models
 import django.db.models.deletion
 import django.utils.timezone
 
+from bfg.core.migration_operations import AddIndexIfCompatible, CreateModelIfCompatible
+
 
 class Migration(migrations.Migration):
 
@@ -14,7 +16,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name="ClusterHealthObservation",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
@@ -27,7 +29,7 @@ class Migration(migrations.Migration):
             ],
             options={"ordering": ["-observed_at", "-id"]},
         ),
-        migrations.AddIndex(
+        AddIndexIfCompatible(
             model_name="clusterhealthobservation",
             index=models.Index(fields=["cluster", "-observed_at"], name="plat_cluster_health_obs_idx"),
         ),

@@ -145,3 +145,39 @@ def test_ensure_system_default_workspace_domain_replaces_stale_entry(db):
     refreshed = ensure_system_default_workspace_domain(workspace)
     assert refreshed.hostname == "acme-five.shops.example.test"
     assert workspace.domains.filter(kind=WorkspaceDomain.KIND_SYSTEM_DEFAULT).count() == 1
+
+
+@pytest.mark.parametrize("debug,opt_in,base,expected", [
+    (True, True, "http://nexus.localhost:3012", "http://local-http.nexus.localhost:3012"),
+    (True, False, "http://nexus.localhost:3012", "https://local-http.nexus.localhost"),
+    (False, True, "http://nexus.localhost:3012", "https://local-http.nexus.localhost"),
+    (True, True, "http://shops.example.test:3012", "https://local-http.shops.example.test"),
+])
+def test_local_http_frontend_requires_development_opt_in(db, settings, debug, opt_in, base, expected):
+    from django.core.cache import cache
+    cache.clear()
+    settings.DEBUG = debug
+    settings.BFG_LOCAL_HTTP_FRONTEND = opt_in
+    user = User.objects.create_user(username="local-http-owner", password="x")
+    cluster = Cluster.objects.create(id="local-http", name="Local HTTP", region="apac",
+                                     api_base_url="http://127.0.0.1:8013", frontend_base_url=base)
+    workspace = WorkspaceService().create_workspace(name="Local HTTP", slug="local-http",
+                                                    owner_user=user, cluster=cluster)
+    assert resolve_workspace_public_frontend_base_url(workspace) == expected
+
+
+def test_local_http_resolver_does_not_reuse_urls_across_modes(db, settings):
+    from django.core.cache import cache
+    cache.clear()
+    settings.DEBUG = True
+    settings.BFG_LOCAL_HTTP_FRONTEND = False
+    user = User.objects.create_user(username="http-cache-owner", password="x")
+    cluster = Cluster.objects.create(id="http-cache", name="HTTP Cache", region="apac",
+        api_base_url="http://127.0.0.1:8013", frontend_base_url="http://nexus.localhost:3012")
+    workspace = WorkspaceService().create_workspace(name="HTTP Cache", slug="http-cache",
+                                                    owner_user=user, cluster=cluster)
+    assert resolve_workspace_public_frontend_base_url(workspace) == "https://http-cache.nexus.localhost"
+    settings.BFG_LOCAL_HTTP_FRONTEND = True
+    assert resolve_workspace_public_frontend_base_url(workspace) == "http://http-cache.nexus.localhost:3012"
+    settings.BFG_LOCAL_HTTP_FRONTEND = False
+    assert resolve_workspace_public_frontend_base_url(workspace) == "https://http-cache.nexus.localhost"

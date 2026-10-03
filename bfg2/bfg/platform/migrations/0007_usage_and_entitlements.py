@@ -8,6 +8,8 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import migrations, models
 
+from bfg.core.migration_operations import AddFieldIfCompatible, CreateModelIfCompatible
+
 
 class Migration(migrations.Migration):
 
@@ -19,12 +21,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
+        AddFieldIfCompatible(
             model_name='workspaceplatformprofile',
             name='monthly_usage_cap_points',
             field=models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True, verbose_name='Monthly Usage Cap (points)'),
         ),
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name='MeterPrice',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -43,7 +45,7 @@ class Migration(migrations.Migration):
                 'constraints': [models.CheckConstraint(condition=models.Q(('unit_size__gt', 0)), name='platform_meter_price_unit_size_positive')],
             },
         ),
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name='PlatformVariable',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -58,7 +60,7 @@ class Migration(migrations.Migration):
                 'ordering': ['key'],
             },
         ),
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name='PlatformVariableChange',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -76,7 +78,7 @@ class Migration(migrations.Migration):
                 'indexes': [models.Index(fields=['variable', '-changed_at'], name='platform_pl_variabl_b6c786_idx')],
             },
         ),
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name='UsageRecord',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
@@ -102,7 +104,7 @@ class Migration(migrations.Migration):
                 ('all_objects', django.db.models.manager.Manager()),
             ],
         ),
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name='WorkspaceEntitlement',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),

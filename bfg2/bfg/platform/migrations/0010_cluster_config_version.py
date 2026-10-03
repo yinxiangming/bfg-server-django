@@ -2,6 +2,8 @@
 
 from django.db import migrations, models
 
+from bfg.core.migration_operations import AddFieldIfCompatible
+
 
 class Migration(migrations.Migration):
 
@@ -10,7 +12,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
+        AddFieldIfCompatible(
             model_name="cluster",
             name="config_version",
             field=models.PositiveIntegerField(default=1, verbose_name="Configuration Version"),

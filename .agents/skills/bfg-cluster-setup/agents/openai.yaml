@@ -1,5 +1,5 @@
 interface:
   display_name: "BFG Cluster Setup"
-  short_description: "Configure BFG clusters and Workspace routing safely"
-  default_prompt: "Use $bfg-cluster-setup to plan and validate a new BFG cluster safely."
+  short_description: "Configure clusters, tenant routing and Brand Portal registration"
+  default_prompt: "Use $bfg-cluster-setup to audit Cluster routing and plan a verified branded tenant registration flow."
 

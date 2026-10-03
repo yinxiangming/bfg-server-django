@@ -1,0 +1,41 @@
+{
+  "admin": {
+    "brandPortal": {
+      "title": "Brand portal",
+      "subtitle": "Configure registration defaults and review provisioning activity for this brand workspace.",
+      "loading": "Loading brand portal",
+      "retry": "Retry",
+      "inactive": "Activate the private Brand Portal extension before configuring this workspace.",
+      "suspended": "This workspace is suspended and its portal configuration is read-only.",
+      "workspaceInactive": "This workspace is inactive and its portal configuration is read-only.",
+      "saved": "Brand portal settings saved.",
+      "save": "Save settings",
+      "saving": "Saving…",
+      "fields": {
+        "registrationEnabled": "Accept registrations",
+        "extensions": "Extensions installed for new workspaces",
+        "default_country": "Default country",
+        "default_currency": "Default currency",
+        "default_language": "Default language",
+        "default_theme": "Default theme",
+        "default_plan": "Default plan"
+      },
+      "domains": {
+        "title": "Verified portal domains",
+        "none": "No verified domain is attached to this workspace."
+      },
+      "audit": {
+        "title": "Recent registrations",
+        "workspace": "Created workspace",
+        "status": "Status",
+        "created": "Started",
+        "error": "Error code",
+        "none": "No registration has provisioned a workspace yet."
+      },
+      "errors": {
+        "load": "Could not load the brand portal configuration.",
+        "save": "Could not save the brand portal configuration."
+      }
+    }
+  }
+}

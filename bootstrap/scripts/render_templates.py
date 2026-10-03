@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
@@ -34,14 +33,15 @@ def main() -> int:
         print(f"Missing template dir: {args.src}", file=sys.stderr)
         return 1
 
-    if args.dst.exists():
-        shutil.rmtree(args.dst)
+    if args.dst.exists() or args.dst.is_symlink():
+        print(f"Refusing to overwrite existing destination: {args.dst}", file=sys.stderr)
+        return 1
     args.dst.mkdir(parents=True, exist_ok=True)
 
     for path in args.src.rglob("*"):
-        if path.is_dir():
-            continue
         rel = path.relative_to(args.src)
+        if path.is_dir() or "__pycache__" in rel.parts or path.suffix in {".pyc", ".pyo"}:
+            continue
         out = args.dst / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         data = path.read_text(encoding="utf-8")

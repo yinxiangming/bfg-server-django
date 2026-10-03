@@ -1,4 +1,4 @@
-.PHONY: help test-bfg2-e2e test-bfg2-all test-bfg install-bfg2 install reset-migrations db-create init
+.PHONY: help test-bfg2-e2e test-bfg2-all test-bfg test-bundled-extensions install-bfg2 install reset-migrations db-create init
 
 help:
 	@echo "Available commands:"
@@ -6,6 +6,7 @@ help:
 	@echo "  make test-bfg2-e2e     - Run BFG2 end-to-end tests"
 	@echo "  make test-bfg2-all     - Run all BFG2 tests"
 	@echo "  make test-bfg          - Run BFG tests"
+	@echo "  make test-bundled-extensions - Run isolated Branding and Geo tests"
 	@echo "  make install-bfg2      - Install BFG2 dependencies"
 	@echo "  make install           - Install all project dependencies"
 	@echo "  make reset-migrations  - Remove bfg migrations, reset DB, makemigrations, migrate"
@@ -55,3 +56,7 @@ reset-migrations:
 	@echo "Running migrate..."
 	python manage.py migrate
 	@echo "Done. Run 'make init' to create workspace, admin and seed data."
+
+# Bundled reusable extensions; use an activated server Python environment.
+test-bundled-extensions:
+	ENV=test DJANGO_SETTINGS_MODULE=config.test LOCAL_APPS=brand_portal,geo python manage.py test apps.brand_portal apps.geo --noinput

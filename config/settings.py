@@ -1,7 +1,8 @@
 """
 Django settings for BFG Framework (open-source core).
 
-Core-only build: no apps.* (business modules). Use this for the public repo.
+Reusable core with optional bundled Branding and Geo extensions.
+Project-specific modules and deployment configuration belong to the host.
 """
 
 import json

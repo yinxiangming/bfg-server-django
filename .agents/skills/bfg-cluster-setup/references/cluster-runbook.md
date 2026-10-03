@@ -15,11 +15,11 @@ mode in `SKILL.md`.
 | `db_host`, `db_port` | Infrastructure metadata | A Cluster row does not create or select a database connection automatically. Never embed a password. |
 | `redis_url` | Infrastructure metadata | Do not commit or print credentials. Confirm how the target project uses this field. |
 | `s3_bucket` | Infrastructure metadata | Record the bucket name, not an access key. |
-| `max_workspaces` | Capacity policy | Operational metadata in the current core implementation. |
-| `current_workspaces` | Observed usage | Read-only in Django admin; reconcile it before relying on capacity reporting. |
-| `is_accepting_new` | Admission intent | Do not assume it blocks every custom provisioning path. |
+| `max_workspaces` | Admission limit | Explicit Cluster assignment locks the Cluster and counts actual bound profiles; zero admits no new profiles. |
+| `current_workspaces` | Legacy counter | Not maintained by core creation. Control API reports `workspace_count` from actual profile relationships. |
+| `is_accepting_new` | Admission policy | Enforced by `WorkspaceService._available_cluster` when a Cluster is explicitly passed; direct profile writes bypass it. |
 | `is_active` | Operator status | Do not assume it tears down or disables infrastructure. |
-| `health_status` | Operator status | Requires an external or project-specific health updater. |
+| `health_status` | Recorded probe status | Use the protected health-check action and stored observations; see health restrictions below. |
 
 ## Read-only preflight
 
@@ -76,16 +76,17 @@ Workspace domain suffixes.
 
 ### Brand Portal binding
 
-- Activate the private Brand Portal extension on the management Workspace.
-- Assign the management Workspace's `WorkspacePlatformProfile.cluster` to the
+- Load and activate the Brand Portal extension on the intended Brand Workspace.
+  This can be separate from the global Platform management Workspace.
+- Assign the Brand Workspace's `WorkspacePlatformProfile.cluster` to the
   new Cluster.
 - Configure registration, default country, currency, language, theme, plan, and
   provisioning extensions in the Brand Portal profile.
 - Use the generic workspace create/provision ``skin`` field for an explicit core
   skin, or Brand Portal ``default_theme`` for brand-wide provisioning. An
   extension skin must be declared in the deployed server manifest and the same
-  extension must appear in ``provisioning_extensions``. A blank value safely
-  falls back to the core ``store`` skin.
+  extension must appear in ``provisioning_extensions``. A blank explicit theme allows an activated extension to supply its default;
+  inspect that extension rather than promising a particular theme.
 - Create a dedicated Workspace-scoped API key for the brand BFF.
 - Configure the BFF API origin, key, secret, and exact callback origin as
   server-only values.
@@ -114,6 +115,10 @@ single canary Workspace provisioning before broader use.
 
 ## Assignment behavior and migration safety
 
+The following is an internal service pattern or authorized repair example, not
+an unaudited production configuration shortcut. Snapshot affected domain rows
+and check capacity; use a maintained assignment service when the host supplies one.
+
 Ordinary assignment should save the profile so BFG's signal materializes the
 system domain:
 
@@ -128,7 +133,7 @@ list of every bound Workspace and its current system domain. Saving the Cluster
 causes all of those system domains to be regenerated. Plan redirects and cache
 invalidation before changing a live domain root.
 
-Moving only a Brand Portal management Workspace changes the Cluster inherited
+Moving only a Brand Workspace changes the Cluster inherited
 by future provisionings. Existing customer Workspaces retain their own profile
 assignment until explicitly migrated.
 
@@ -178,16 +183,91 @@ For a logical routing change:
 Do not delete the new Cluster, DNS record, or certificate until no Workspace,
 provisioning attempt, or rollback plan depends on it.
 
-## Current core limitations
+## Control-plane API contract
 
-Verify these against the pinned BFG revision before relying on them:
+Inspect `bfg2/bfg/platform/urls.py`, `permissions.py`,
+`views/control_views.py` and `services/control_actions.py` in the pinned revision.
 
-- `Cluster.has_capacity` is a model property; core Workspace creation and
-  custom Brand Portal provisioning may not enforce it.
-- `current_workspaces` is not automatically maintained by the core paths.
-- health fields require an external or project-specific updater.
-- infrastructure metadata does not provision or dynamically select database,
-  Redis, storage, or frontend resources.
+| Operation | Endpoint | Required inputs |
+| --- | --- | --- |
+| Capability check | `GET /api/v1/platform/control/status/` | Authenticated Django superuser |
+| Inventory | `GET /api/v1/platform/control/clusters/` | Same; response is an array |
+| Create | `POST /api/v1/platform/control/clusters/` | Cluster fields, `confirm: true`, reason >= 3 characters, `X-Idempotency-Key` (8-128 characters) |
+| Update | `PATCH /api/v1/platform/control/clusters/<id>/` | Same guard fields and `expected_version` from `config_version` |
+| Health summary/history | `GET .../clusters/health-summary/`, `GET .../clusters/<id>/health-observations/` | Protected reads; no remote probe |
+| Probe | `POST .../clusters/<id>/health-check/` | Confirmation, reason and control idempotency header; outbound request and stored audit/observation |
 
-Treat admission control, health, and capacity as operator gates unless the
-target project adds explicit enforcement.
+The control permission is Django `is_superuser`, not merely `is_staff`, a
+Workspace admin role, or a historical embedded management membership. Inspect
+host middleware for any required Workspace header; it is context, not a grant.
+Cluster create requires non-empty `id`, `name`, `region`, `api_base_url`,
+`db_host`, `redis_url` and `s3_bucket` in the current API. A tenant registration
+also needs a usable `frontend_base_url`, even though Cluster create permits it
+blank. Use real local resource settings when a field is required; do not invent
+production resources or imply a required metadata field provisions them.
+
+Updates also refuse a capacity below the existing profile count, and an inactive
+Cluster cannot accept new tenants. Successful configuration changes increment `config_version`.
+Updates use optimistic configuration versions. On a conflict, re-read and review
+the change. Completed identical requests replay with the same idempotency key.
+An incomplete request returns `409 idempotency_request_incomplete`: inspect the
+audit log and actual state first, then retry with a new key as the API requires.
+Do not retry uncertain side effects blindly. Preserve the audit trail by
+using this API instead of ordinary direct ORM writes for Cluster mutations.
+
+## Health probes and local development
+
+`services/cluster_health.py` permits only operator-allowlisted HTTPS hostnames
+at port 443 and the fixed `/api/v1/health/` path. Configure
+`CLUSTER_HEALTH_ALLOWED_HOSTS` for the actual deployment. IP literals, loopback
+HTTP URLs, credentials, redirects, query strings and custom ports are refused.
+Do not weaken these restrictions to make a localhost probe turn green.
+A stored or summary health read is not a new outbound probe; freshness is based
+on observations from the last 24 hours.
+
+Domain derivation discards the port and stores a hostname. The public frontend
+resolver returns HTTPS. Therefore `http://localhost:3012` does not produce a
+usable tenant URL by itself. For end-to-end local registration use a controlled
+tenant domain, local host routing and trusted TLS, or report that domain/SSO
+validation remains incomplete. Keep self-signed-warning handling with the user.
+
+## Current implementation boundaries
+
+Re-check these statements against the pinned revision:
+
+- Passing a Cluster into `WorkspaceService.create_workspace` locks the row and
+  rejects inactive, closed or full targets. Admission uses actual profile counts,
+  not `Cluster.has_capacity`'s legacy counter. Direct assignment is not a capacity
+  reservation; review capacity before changing existing profiles.
+- Brand Portal provisioning inherits its Brand Workspace's Cluster. It does not
+  select a fallback Cluster by region or create a Cluster on demand.
+- Generic `/auth/register/`, `/auth/finalize-onboarding/` and Platform workspace
+  creation are distinct paths. A region/default trial-domain setting is not
+  Cluster assignment. Inspect those callers before promising parity.
+- Current Brand Portal creation uses the same database. Standalone provisioning
+  records local profiles/keys/operations; metadata is not a remote infrastructure
+  or database provisioner. The placement queue is not a completed cutover engine.
+- `current_workspaces` is a legacy counter. Control API inventory calculates
+  actual bound profiles. Probe observations implement health tracking, but do not
+  prove registration, tenant isolation or application readiness.
+- MySQL does not create conditional unique constraints such as the one-active
+  placement-reservation constraint. Review row-lock/fence service protections;
+  a successful migration alone does not establish database-level enforcement.
+- Domain regeneration may replace old system-domain rows. Back up mappings and
+  honor the task's authorization for removals before bulk changes.
+
+## Focused verification sources
+
+Core tests live in `bfg2/tests/services/platform/test_platform_control_views.py`,
+`test_platform_control_audit.py`, `test_workspace_creation.py`, and
+`bfg2/tests/services/common/test_platform_workspace_provisioning.py`.
+The hosting extension may supply `tests/test_provisioning.py` for Brand Portal
+inheritance, missing-domain rollback, extension defaults and idempotent retries.
+Run them with their declared test settings and an isolated test database. Never
+point a test runner at the operator's imported production copy.
+
+A successful probe establishes only the expected liveness response. The host
+health endpoint may be static. Independently verify the intended database
+host/database identity, migration state, authorized read/write canary and backup
+restore before accepting an independent deployment. Never infer database health
+or physical isolation from a green Cluster probe.

@@ -2,12 +2,13 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import requests
+import pytest
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from bfg.common.models import Workspace, WorkspaceDomain
+from bfg.common.models import StaffMember, Workspace, WorkspaceDomain
 from bfg.platform.models import Cluster, PlatformMembership, PlatformSSOCode, WorkspacePlatformProfile
 
 
@@ -68,6 +69,8 @@ def test_sso_exchange_atomically_consumes_code_once(db, settings):
         slug="exchange-workspace",
         is_active=True,
     )
+    role = workspace.staff_roles.create(code="admin", name="Admin")
+    StaffMember.all_objects.create(workspace=workspace, user=user, role=role, is_active=True)
     sso_code = PlatformSSOCode.objects.create(
         workspace=workspace,
         user=user,
@@ -151,3 +154,42 @@ def test_standalone_sso_exchange_releases_code_after_remote_failure(mock_post, d
     assert "private.cluster.test" not in str(response.data)
     sso_code.refresh_from_db()
     assert sso_code.used_at is None
+
+
+@pytest.mark.parametrize("revocation", ["staff", "user", "workspace", "suspended"])
+def test_sso_exchange_rechecks_access_after_code_issue(db, settings, revocation):
+    settings.PLATFORM_EMBEDDED = True
+    user = User.objects.create_user(username="revoked-member", password="secret")
+    workspace = Workspace.objects.create(name="Revoked", slug="revoked", is_active=True)
+    profile = WorkspacePlatformProfile.objects.create(workspace=workspace)
+    role = workspace.staff_roles.create(code="admin", name="Admin")
+    staff = StaffMember.all_objects.create(workspace=workspace, user=user, role=role, is_active=True)
+    code = PlatformSSOCode.objects.create(workspace=workspace, user=user)
+    target = {"staff": staff, "user": user, "workspace": workspace, "suspended": profile}[revocation]
+    field = "suspended_at" if revocation == "suspended" else "is_active"
+    setattr(target, field, timezone.now() if field == "suspended_at" else False)
+    target.save(update_fields=[field])
+    client = APIClient()
+    denied = client.post("/api/v1/platform/auth/sso/exchange/", {"code": code.code}, format="json")
+    assert denied.status_code == 403
+    assert denied.data == {"error": "No access to this workspace"}
+    assert "access" not in denied.data
+    code.refresh_from_db()
+    assert code.used_at is not None
+    replayed = client.post("/api/v1/platform/auth/sso/exchange/", {"code": code.code}, format="json")
+    assert replayed.status_code == 400
+
+
+def test_standalone_sso_exchange_rejects_revoked_membership(db, settings):
+    settings.PLATFORM_EMBEDDED = False
+    user = User.objects.create_user(username="revoked-standalone", password="secret")
+    workspace = Workspace.objects.create(name="Revoked standalone", slug="revoked-standalone", is_active=True)
+    profile = WorkspacePlatformProfile.objects.create(workspace=workspace)
+    membership = PlatformMembership.objects.create(user=user, profile=profile, role="owner", is_active=True)
+    code = PlatformSSOCode.objects.create(workspace=workspace, user=user)
+    membership.is_active = False
+    membership.save(update_fields=["is_active"])
+    with patch("bfg.platform.views.auth_views.http_requests.post") as remote:
+        response = APIClient().post("/api/v1/platform/auth/sso/exchange/", {"code": code.code}, format="json")
+    assert response.status_code == 403
+    remote.assert_not_called()

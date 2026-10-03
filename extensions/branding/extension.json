@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "brand_portal",
+  "name": "Branding",
+  "entrypoints": {
+    "server": "server",
+    "client": "client/plugins/brand_portal"
+  }
+}

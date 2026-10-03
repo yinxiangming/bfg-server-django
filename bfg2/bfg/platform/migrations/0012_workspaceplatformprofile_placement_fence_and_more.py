@@ -7,6 +7,13 @@ from django.db import migrations, models
 import django.db.models.deletion
 import django.utils.timezone
 
+from bfg.core.migration_operations import (
+    AddConstraintIfCompatible,
+    AddFieldIfCompatible,
+    AddIndexIfCompatible,
+    CreateModelIfCompatible,
+)
+
 
 class Migration(migrations.Migration):
 
@@ -16,12 +23,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
+        AddFieldIfCompatible(
             model_name="workspaceplatformprofile",
             name="placement_fence",
             field=models.PositiveIntegerField(default=0, verbose_name="Placement Fence"),
         ),
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name="WorkspacePlacementRequest",
             fields=[
                 ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
@@ -38,7 +45,7 @@ class Migration(migrations.Migration):
             ],
             options={"ordering": ["-created_at", "-id"]},
         ),
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name="WorkspacePlacementEvent",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
@@ -50,19 +57,19 @@ class Migration(migrations.Migration):
             ],
             options={"ordering": ["sequence", "id"]},
         ),
-        migrations.AddIndex(
+        AddIndexIfCompatible(
             model_name="workspaceplacementrequest",
             index=models.Index(fields=["target_cluster", "status", "reservation_expires_at"], name="plat_place_target_idx"),
         ),
-        migrations.AddIndex(
+        AddIndexIfCompatible(
             model_name="workspaceplacementrequest",
             index=models.Index(fields=["workspace", "status", "-created_at"], name="plat_place_workspace_idx"),
         ),
-        migrations.AddConstraint(
+        AddConstraintIfCompatible(
             model_name="workspaceplacementrequest",
             constraint=models.UniqueConstraint(condition=models.Q(("status", "reserved")), fields=("workspace",), name="plat_place_one_active_per_workspace"),
         ),
-        migrations.AddConstraint(
+        AddConstraintIfCompatible(
             model_name="workspaceplacementevent",
             constraint=models.UniqueConstraint(fields=("request", "sequence"), name="plat_place_event_sequence"),
         ),

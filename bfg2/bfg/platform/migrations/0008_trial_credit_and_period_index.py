@@ -2,6 +2,8 @@
 
 from django.db import migrations, models
 
+from bfg.core.migration_operations import AddFieldIfCompatible, AddIndexIfCompatible
+
 
 class Migration(migrations.Migration):
 
@@ -12,12 +14,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
+        AddFieldIfCompatible(
             model_name='workspaceplatformprofile',
             name='trial_points_used_at',
             field=models.DateTimeField(blank=True, null=True, verbose_name='Trial Credit Used At'),
         ),
-        migrations.AddIndex(
+        AddIndexIfCompatible(
             model_name='workspaceentitlement',
             index=models.Index(fields=['current_period_end'], name='platform_wo_current_ae7a4a_idx'),
         ),

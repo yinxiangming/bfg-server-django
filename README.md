@@ -78,6 +78,23 @@ See [bootstrap/docs/README.md](./bootstrap/docs/README.md) for more details on:
 
 API docs: http://localhost:8000/api/docs/
 
+### Interrupted migration retries
+
+Selected historical finance and Platform migrations use fail-closed retry
+operations from `bfg.core.migration_operations`. They support deployments where
+the database created an object but the migration recorder was not updated. An
+existing column, table, index, or constraint is skipped only when the physical
+schema features supported by that database can be proven to match the migration
+state; an incomplete, incompatible, or unverifiable schema stops the migration
+for manual investigation. Django's MySQL backend does not create partial unique
+indexes, so the conditional active-placement rule remains enforced by the
+Platform service on MySQL, matching Django's native migration behaviour.
+
+These retry operations are intentionally irreversible. Do not use `migrate`
+backwards across them: the migration cannot determine whether an existing
+object was created by the interrupted deployment. Back up the database and use
+an explicit, reviewed repair migration when rollback is required.
+
 ---
 
 ## Environment Variables

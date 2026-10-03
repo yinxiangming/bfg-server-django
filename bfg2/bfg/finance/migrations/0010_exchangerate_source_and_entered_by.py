@@ -4,6 +4,8 @@ import django.db.models.deletion
 from django.conf import settings
 from django.db import migrations, models
 
+from bfg.core.migration_operations import AddFieldIfCompatible
+
 
 class Migration(migrations.Migration):
 
@@ -13,12 +15,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
+        AddFieldIfCompatible(
             model_name='exchangerate',
             name='entered_by',
             field=models.ForeignKey(blank=True, help_text='Who entered the rate, for one that was not read from the feed.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL, verbose_name='Entered By'),
         ),
-        migrations.AddField(
+        AddFieldIfCompatible(
             model_name='exchangerate',
             name='source',
             field=models.CharField(choices=[('feed', 'Reference Feed'), ('manual', 'Entered By Hand')], default='feed', max_length=16, verbose_name='Source'),

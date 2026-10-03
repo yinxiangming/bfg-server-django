@@ -4,6 +4,8 @@ import django.db.models.deletion
 import django.utils.timezone
 import uuid
 
+from bfg.core.migration_operations import AddIndexIfCompatible, CreateModelIfCompatible
+
 
 class Migration(migrations.Migration):
 
@@ -14,7 +16,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
+        CreateModelIfCompatible(
             name="WorkspaceDataSnapshot",
             fields=[
                 ("id", models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
@@ -37,11 +39,11 @@ class Migration(migrations.Migration):
             ],
             options={"ordering": ["-created_at"]},
         ),
-        migrations.AddIndex(
+        AddIndexIfCompatible(
             model_name="workspacedatasnapshot",
             index=models.Index(fields=["workspace", "-created_at"], name="plat_snapshot_ws_time_idx"),
         ),
-        migrations.AddIndex(
+        AddIndexIfCompatible(
             model_name="workspacedatasnapshot",
             index=models.Index(fields=["status", "-created_at"], name="plat_snapshot_status_idx"),
         ),

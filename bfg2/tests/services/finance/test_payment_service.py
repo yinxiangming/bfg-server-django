@@ -1,9 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-from django.db import OperationalError
-
 from bfg.finance.services.payment_service import PaymentService
 
 
@@ -36,74 +33,52 @@ def _consignment(pk):
 
 
 def _invoice_with(*consignments):
+    queryset = SimpleNamespace(
+        filter=lambda **_kwargs: list(consignments),
+    )
     return SimpleNamespace(
         order=SimpleNamespace(
-            consignments=SimpleNamespace(all=lambda: list(consignments)),
+            consignments=queryset,
         ),
     )
 
 
-def test_consignment_status_supports_legacy_wms_without_mobile_task():
+def test_consignment_status_updates_workspace_candidates_without_receivers():
     workspace = SimpleNamespace(pk=7)
     service = PaymentService(workspace=workspace, user=None)
     ordinary = _consignment(11)
     status = SimpleNamespace(code='PAID')
 
-    with patch('django.apps.apps.is_installed', return_value=True), \
-            patch('django.apps.apps.get_model', side_effect=LookupError('MobileTask')), \
-            patch('bfg.delivery.models.FreightStatus.objects.get', return_value=status):
+    with patch('bfg.delivery.models.FreightStatus.objects.get', return_value=status):
         service._update_consignment_status(_invoice_with(ordinary), 'PAID')
 
     assert ordinary.status is status
     assert ordinary.state == 'PAID'
 
 
-def test_consignment_status_excludes_mobile_managed_delivery_tasks():
+def test_consignment_status_uses_generic_exclusion_protocol():
     workspace = SimpleNamespace(pk=7)
     service = PaymentService(workspace=workspace, user=None)
     ordinary = _consignment(11)
-    mobile_managed = _consignment(12)
+    managed = _consignment(12)
     status = SimpleNamespace(code='PAID')
 
-    filter_calls = []
-    task_query = SimpleNamespace(values_list=lambda *_args, **_kwargs: [12])
-    mobile_tasks = SimpleNamespace(
-        all_objects=SimpleNamespace(
-            filter=lambda **kwargs: filter_calls.append(kwargs) or task_query,
-        ),
-    )
-    with patch('django.apps.apps.is_installed', return_value=True), \
-            patch('django.apps.apps.get_model', return_value=mobile_tasks), \
+    with patch(
+            'bfg.delivery.extension_signals.excluded_consignment_ids',
+            return_value={12},
+        ) as exclusions, \
             patch('bfg.delivery.models.FreightStatus.objects.get', return_value=status):
         service._update_consignment_status(
-            _invoice_with(ordinary, mobile_managed),
+            _invoice_with(ordinary, managed),
             'PAID',
         )
 
     assert ordinary.status is status
     assert ordinary.state == 'PAID'
-    assert mobile_managed.status is None
-    assert mobile_managed.state == 'PENDING'
-    assert filter_calls == [{
-        'workspace': workspace,
-        'consignment_id__in': [11, 12],
-        'kind': 'delivery',
-    }]
-
-
-def test_consignment_status_fails_closed_when_mobile_task_table_is_missing():
-    workspace = SimpleNamespace(pk=7)
-    service = PaymentService(workspace=workspace, user=None)
-    ordinary = _consignment(11)
-
-    def missing_table(**_kwargs):
-        raise OperationalError('missing mobile task table')
-
-    mobile_tasks = SimpleNamespace(
-        all_objects=SimpleNamespace(filter=missing_table),
+    assert managed.status is None
+    assert managed.state == 'PENDING'
+    exclusions.assert_called_once_with(
+        workspace=workspace,
+        candidate_ids=(11, 12),
+        new_state='PAID',
     )
-
-    with patch('django.apps.apps.is_installed', return_value=True), \
-            patch('django.apps.apps.get_model', return_value=mobile_tasks):
-        with pytest.raises(OperationalError, match='missing mobile task table'):
-            service._update_consignment_status(_invoice_with(ordinary), 'PAID')

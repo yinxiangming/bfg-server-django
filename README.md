@@ -78,12 +78,6 @@ See [bootstrap/docs/README.md](./bootstrap/docs/README.md) for more details on:
 
 API docs: http://localhost:8000/api/docs/
 
-Deploy migrations before sending traffic to a release that adds optional app
-models. The core remains compatible with an older WMS app that has no
-`MobileTask` model, but once that model is registered its database table is a
-required capability. A missing table therefore fails closed with the database
-error instead of silently bypassing mobile-task ownership boundaries.
-
 ### Interrupted migration retries
 
 Selected historical finance and Platform migrations use fail-closed retry
@@ -324,11 +318,19 @@ MIT
 ### Local app host settings
 
 An installed `apps.<name>` may provide a model-free `host_settings.py` with a
-`SETTINGS` dict of new uppercase keys and optional `PUBLIC_PATHS` tuple. Public
+`SETTINGS` dict of new uppercase keys, optional `PUBLIC_PATHS` tuple, and an
+optional `MIDDLEWARE` tuple. Middleware entries must name classes inside that
+app's Python namespace and are inserted after workspace resolution. Public
 paths must stay under `/api/v1/<name>/`; host keys and duplicate extension keys
 cannot be replaced. Only discovered/configured local apps are loaded, after
 host settings have been defined. Do not import Django models in this module.
 Deployment credentials and business seed files belong to the extension/project.
+
+Extensions can coordinate transactional finance and delivery policies through
+the synchronous signals in `bfg.finance.operation_contexts` and
+`bfg.delivery.extension_signals`. Finance receivers return lazy synchronous
+context managers; delivery receivers return only candidate consignment IDs to
+exclude. Receiver errors abort the host operation.
 Configuration exports use `bfg-workspace-v1`; legacy `idlevo-workspace-v1`
 imports remain supported. External site seed JSON remains accepted via
 `manage.py init --site-config /absolute/path/to/site-config.json`.

@@ -78,6 +78,12 @@ See [bootstrap/docs/README.md](./bootstrap/docs/README.md) for more details on:
 
 API docs: http://localhost:8000/api/docs/
 
+Deploy migrations before sending traffic to a release that adds optional app
+models. The core remains compatible with an older WMS app that has no
+`MobileTask` model, but once that model is registered its database table is a
+required capability. A missing table therefore fails closed with the database
+error instead of silently bypassing mobile-task ownership boundaries.
+
 ### Interrupted migration retries
 
 Selected historical finance and Platform migrations use fail-closed retry

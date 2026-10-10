@@ -67,6 +67,30 @@ def get_local_app_dotted_names():
     return [f'apps.{name}' for name in get_local_apps()]
 
 
+def _module_exists(module_name: str) -> bool:
+    """Return whether an optional module is importable without hiding import bugs."""
+    from importlib.util import find_spec
+
+    try:
+        return find_spec(module_name) is not None
+    except ModuleNotFoundError as exc:
+        parents = {
+            '.'.join(module_name.split('.')[:index])
+            for index in range(1, len(module_name.split('.')) + 1)
+        }
+        if exc.name in parents:
+            return False
+        raise
+
+
+def get_local_app_middleware(app_names):
+    """Return middleware supplied by optional capabilities of local apps."""
+    inventory_guard = 'apps.wms.mobile.guards.InventoryBoundaryMiddleware'
+    if 'apps.wms' in app_names and _module_exists('apps.wms.mobile.guards'):
+        return [inventory_guard]
+    return []
+
+
 def apply_local_app_settings(namespace, app_names):
     """Load optional model-free host_settings contributions from installed local apps.
 

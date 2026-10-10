@@ -6,6 +6,7 @@ Payment processing service
 
 from typing import Any, Optional, Dict
 from decimal import Decimal
+from functools import wraps
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -14,10 +15,20 @@ from bfg.finance.exceptions import PaymentFailed, InsufficientFunds
 from bfg.finance.models import (
     Payment, PaymentGateway, PaymentMethod, Refund, Transaction, Currency
 )
-from bfg.common.models import Customer
+from bfg.common.models import Customer, Workspace
 from bfg.common.services import AuditService
 from bfg.shop.models import Order
 from bfg.delivery.models import FreightState
+
+
+def settlement_lock(method):
+    """Serialize settlement changes before domain locks or release decisions."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with transaction.atomic():
+            Workspace.objects.select_for_update().get(pk=self.workspace.pk)
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 class PaymentService(BaseService):
@@ -296,6 +307,7 @@ class PaymentService(BaseService):
             'succeeded', 'completed', 'paid',
         }
 
+    @settlement_lock
     @transaction.atomic
     def _finalize_confirmed_payment(self, payment_id: int, old_status: str) -> Payment:
         payment = Payment.all_objects.select_for_update().select_related(
@@ -434,6 +446,19 @@ class PaymentService(BaseService):
         
         if invoice.order:
             consignments = list(invoice.order.consignments.all())
+        from django.apps import apps
+        if apps.is_installed('apps.wms'):
+            try:
+                mobile_tasks = apps.get_model('wms', 'MobileTask')
+            except LookupError:
+                mobile_tasks = None
+            if mobile_tasks is not None:
+                managed_ids = set(mobile_tasks.all_objects.filter(
+                    workspace=self.workspace,
+                    consignment_id__in=[item.pk for item in consignments],
+                    kind='delivery',
+                ).values_list('consignment_id', flat=True))
+                consignments = [item for item in consignments if item.pk not in managed_ids]
         
         if not consignments:
             return
@@ -488,6 +513,7 @@ class PaymentService(BaseService):
             raise ValidationError(_("A valid Idempotency-Key is required for refunds."))
 
         with transaction.atomic():
+            Workspace.objects.select_for_update().get(pk=self.workspace.pk)
             payment = Payment.all_objects.select_for_update().select_related('gateway').get(
                 pk=payment.pk,
                 workspace=self.workspace,
@@ -603,6 +629,7 @@ class PaymentService(BaseService):
             or _("Payment gateway did not confirm the refund."),
         )
 
+    @settlement_lock
     @transaction.atomic
     def _finalize_confirmed_refund(self, refund_id: int, gateway_refund_id: str) -> Refund:
         from django.db import models

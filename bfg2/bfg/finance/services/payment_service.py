@@ -448,11 +448,17 @@ class PaymentService(BaseService):
             consignments = list(invoice.order.consignments.all())
         from django.apps import apps
         if apps.is_installed('apps.wms'):
-            mobile_tasks = apps.get_model('wms', 'MobileTask')
-            managed_ids = set(mobile_tasks.all_objects.filter(workspace=self.workspace,
-                consignment_id__in=[item.pk for item in consignments], kind='delivery')
-                .values_list('consignment_id', flat=True))
-            consignments = [item for item in consignments if item.pk not in managed_ids]
+            try:
+                mobile_tasks = apps.get_model('wms', 'MobileTask')
+            except LookupError:
+                mobile_tasks = None
+            if mobile_tasks is not None:
+                managed_ids = set(mobile_tasks.all_objects.filter(
+                    workspace=self.workspace,
+                    consignment_id__in=[item.pk for item in consignments],
+                    kind='delivery',
+                ).values_list('consignment_id', flat=True))
+                consignments = [item for item in consignments if item.pk not in managed_ids]
         
         if not consignments:
             return

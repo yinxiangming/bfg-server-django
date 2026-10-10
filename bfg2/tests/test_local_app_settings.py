@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from config.local_apps import apply_local_app_settings
+from config.local_apps import apply_local_app_settings, get_local_app_middleware
 
 
 def contribute(namespace, modules):
@@ -38,3 +38,23 @@ def test_duplicate_extension_settings_fail_atomically():
     with pytest.raises(ImproperlyConfigured):
         contribute(target, modules)
     assert target == {'BFG_EXTRA_PUBLIC_PATHS': ()}
+
+
+def test_legacy_wms_without_mobile_guards_registers_no_middleware():
+    missing_parent = ModuleNotFoundError("No module named 'apps.wms.mobile'")
+    missing_parent.name = 'apps.wms.mobile'
+    with patch('importlib.util.find_spec', side_effect=missing_parent):
+        assert get_local_app_middleware(['apps.wms']) == []
+
+
+def test_wms_mobile_guard_is_registered_when_module_exists():
+    with patch('importlib.util.find_spec', return_value=object()):
+        assert get_local_app_middleware(['apps.wms']) == [
+            'apps.wms.mobile.guards.InventoryBoundaryMiddleware',
+        ]
+
+
+def test_wms_mobile_guard_discovery_does_not_hide_internal_import_errors():
+    with patch('importlib.util.find_spec', side_effect=ImportError('broken dependency')):
+        with pytest.raises(ImportError, match='broken dependency'):
+            get_local_app_middleware(['apps.wms'])

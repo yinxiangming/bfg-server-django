@@ -12,7 +12,11 @@ from datetime import timedelta
 from dotenv import load_dotenv
 import dj_database_url
 
-from config.local_apps import get_local_app_dotted_names, apply_local_app_settings
+from config.local_apps import (
+    apply_local_app_settings,
+    get_local_app_dotted_names,
+    get_local_app_middleware,
+)
 
 # Project root (src/server): must be defined before load_dotenv so .env is found regardless of cwd.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -120,6 +124,7 @@ except (ValueError, TypeError) as exc:
     GA4_MP_API_SECRETS = {}
 
 # Application definition (BFG core only; no apps.* business modules)
+LOCAL_APP_DOTTED_NAMES = get_local_app_dotted_names()
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -156,7 +161,7 @@ INSTALLED_APPS = [
     'bfg.inbox',
     'bfg.platform',
     # Local apps (from env LOCAL_APPS or auto-discovered from apps dir)
-    *get_local_app_dotted_names(),
+    *LOCAL_APP_DOTTED_NAMES,
     # Project hooks (startup logging, etc.); must be last so ready() sees all apps
     'config.apps.Config',
 ]
@@ -175,8 +180,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'allauth.account.middleware.AccountMiddleware',
     'bfg.common.middleware.WorkspaceMiddleware',
-    *(['apps.wms.mobile.guards.InventoryBoundaryMiddleware']
-      if 'apps.wms' in get_local_app_dotted_names() else []),
+    *get_local_app_middleware(LOCAL_APP_DOTTED_NAMES),
     # Needs request.workspace, so it follows the middleware that binds it.
     # Does nothing unless BFG_READ_ONLY_WHEN_UNENTITLED is on.
     'bfg.platform.middleware.ReadOnlyWorkspaceMiddleware',

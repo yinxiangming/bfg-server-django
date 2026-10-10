@@ -175,6 +175,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'allauth.account.middleware.AccountMiddleware',
     'bfg.common.middleware.WorkspaceMiddleware',
+    *(['apps.wms.mobile.guards.InventoryBoundaryMiddleware']
+      if 'apps.wms' in get_local_app_dotted_names() else []),
     # Needs request.workspace, so it follows the middleware that binds it.
     # Does nothing unless BFG_READ_ONLY_WHEN_UNENTITLED is on.
     'bfg.platform.middleware.ReadOnlyWorkspaceMiddleware',

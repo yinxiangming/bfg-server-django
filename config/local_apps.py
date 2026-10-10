@@ -84,11 +84,32 @@ def _module_exists(module_name: str) -> bool:
 
 
 def get_local_app_middleware(app_names):
-    """Return middleware supplied by optional capabilities of local apps."""
-    inventory_guard = 'apps.wms.mobile.guards.InventoryBoundaryMiddleware'
-    if 'apps.wms' in app_names and _module_exists('apps.wms.mobile.guards'):
-        return [inventory_guard]
-    return []
+    """Return validated middleware declared by installed local apps."""
+    from importlib import import_module
+
+    middleware = []
+    for app_name in app_names:
+        module_name = f'{app_name}.host_settings'
+        if not _module_exists(module_name):
+            continue
+        contribution = import_module(module_name)
+        declared = getattr(contribution, 'MIDDLEWARE', ())
+        if not isinstance(declared, (tuple, list)):
+            raise ImproperlyConfigured(f'{module_name}.MIDDLEWARE must be a tuple or list')
+        prefix = f'{app_name}.'
+        if any(
+            not isinstance(path, str)
+            or not path.startswith(prefix)
+            or any(not part or not part.isidentifier() for part in path.split('.'))
+            for path in declared
+        ):
+            raise ImproperlyConfigured(
+                f'{module_name}.MIDDLEWARE entries must stay within {prefix}'
+            )
+        if len(set(declared)) != len(declared):
+            raise ImproperlyConfigured(f'{module_name}.MIDDLEWARE contains duplicate entries')
+        middleware.extend(declared)
+    return middleware
 
 
 def apply_local_app_settings(namespace, app_names):

@@ -6,7 +6,6 @@ Payment processing service
 
 from typing import Any, Optional, Dict
 from decimal import Decimal
-from functools import wraps
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -15,20 +14,11 @@ from bfg.finance.exceptions import PaymentFailed, InsufficientFunds
 from bfg.finance.models import (
     Payment, PaymentGateway, PaymentMethod, Refund, Transaction, Currency
 )
-from bfg.common.models import Customer, Workspace
+from bfg.common.models import Customer
 from bfg.common.services import AuditService
 from bfg.shop.models import Order
 from bfg.delivery.models import FreightState
-
-
-def settlement_lock(method):
-    """Serialize settlement changes before domain locks or release decisions."""
-    @wraps(method)
-    def wrapped(self, *args, **kwargs):
-        with transaction.atomic():
-            Workspace.objects.select_for_update().get(pk=self.workspace.pk)
-            return method(self, *args, **kwargs)
-    return wrapped
+from bfg.finance.operation_contexts import finance_operation_context
 
 
 class PaymentService(BaseService):
@@ -207,9 +197,9 @@ class PaymentService(BaseService):
         payment_details = payment_details or {}
 
         with transaction.atomic():
-            payment = Payment.all_objects.select_for_update().select_related(
-                'gateway', 'order', 'invoice', 'currency', 'payment_method',
-            ).get(pk=payment.pk, workspace=self.workspace)
+            payment = Payment.all_objects.select_for_update().get(
+                pk=payment.pk, workspace=self.workspace,
+            )
             if payment.status == 'completed':
                 return payment
             if self._gateway_response_succeeded(payment.gateway_response):
@@ -307,12 +297,16 @@ class PaymentService(BaseService):
             'succeeded', 'completed', 'paid',
         }
 
-    @settlement_lock
-    @transaction.atomic
     def _finalize_confirmed_payment(self, payment_id: int, old_status: str) -> Payment:
-        payment = Payment.all_objects.select_for_update().select_related(
-            'gateway', 'order', 'invoice', 'currency', 'payment_method',
-        ).get(pk=payment_id, workspace=self.workspace)
+        with transaction.atomic(), finance_operation_context(
+            self.workspace, 'payment.finalize',
+        ):
+            payment = Payment.all_objects.select_for_update().get(
+                pk=payment_id, workspace=self.workspace,
+            )
+            return self._complete_confirmed_payment(payment, old_status)
+
+    def _complete_confirmed_payment(self, payment: Payment, old_status: str) -> Payment:
         if payment.status == 'completed':
             return payment
         if not self._gateway_response_succeeded(payment.gateway_response):
@@ -438,27 +432,20 @@ class PaymentService(BaseService):
             invoice: Invoice instance
             new_state: New state code (PAID, PROCESSING, READY, etc.)
         """
-        from bfg.delivery.models import Consignment, FreightStatus
+        from bfg.delivery.models import FreightStatus
         
-        # Find consignments linked to this invoice via Order
-        # Invoice -> Order -> Consignments (ManyToMany)
+        from bfg.delivery.extension_signals import excluded_consignment_ids
+
         consignments = []
-        
         if invoice.order:
-            consignments = list(invoice.order.consignments.all())
-        from django.apps import apps
-        if apps.is_installed('apps.wms'):
-            try:
-                mobile_tasks = apps.get_model('wms', 'MobileTask')
-            except LookupError:
-                mobile_tasks = None
-            if mobile_tasks is not None:
-                managed_ids = set(mobile_tasks.all_objects.filter(
-                    workspace=self.workspace,
-                    consignment_id__in=[item.pk for item in consignments],
-                    kind='delivery',
-                ).values_list('consignment_id', flat=True))
-                consignments = [item for item in consignments if item.pk not in managed_ids]
+            consignments = list(invoice.order.consignments.filter(workspace=self.workspace))
+        candidate_ids = tuple(item.pk for item in consignments)
+        excluded_ids = excluded_consignment_ids(
+            workspace=self.workspace,
+            candidate_ids=candidate_ids,
+            new_state=new_state,
+        )
+        consignments = [item for item in consignments if item.pk not in excluded_ids]
         
         if not consignments:
             return
@@ -512,11 +499,11 @@ class PaymentService(BaseService):
         if not idempotency_key or len(idempotency_key) > 255:
             raise ValidationError(_("A valid Idempotency-Key is required for refunds."))
 
-        with transaction.atomic():
-            Workspace.objects.select_for_update().get(pk=self.workspace.pk)
-            payment = Payment.all_objects.select_for_update().select_related('gateway').get(
-                pk=payment.pk,
-                workspace=self.workspace,
+        with transaction.atomic(), finance_operation_context(
+            self.workspace, 'refund.prepare',
+        ):
+            payment = Payment.all_objects.select_for_update().get(
+                pk=payment.pk, workspace=self.workspace,
             )
             existing_attempt = payment.refunds.select_for_update().filter(
                 idempotency_key=idempotency_key,
@@ -629,18 +616,29 @@ class PaymentService(BaseService):
             or _("Payment gateway did not confirm the refund."),
         )
 
-    @settlement_lock
-    @transaction.atomic
     def _finalize_confirmed_refund(self, refund_id: int, gateway_refund_id: str) -> Refund:
         from django.db import models
 
-        refund = Refund.objects.select_for_update().select_related(
-            'payment__currency', 'payment__customer', 'payment__invoice',
-        ).get(pk=refund_id, payment__workspace=self.workspace)
+        with transaction.atomic(), finance_operation_context(
+            self.workspace, 'refund.finalize',
+        ):
+            payment_id = Refund.objects.filter(
+                pk=refund_id, payment__workspace=self.workspace,
+            ).values_list('payment_id', flat=True).get()
+            payment = Payment.all_objects.select_for_update().get(
+                pk=payment_id, workspace=self.workspace,
+            )
+            refund = Refund.objects.select_for_update().get(
+                pk=refund_id, payment_id=payment.pk,
+            )
+            return self._complete_confirmed_refund(
+                payment, refund, gateway_refund_id, models,
+            )
+
+    def _complete_confirmed_refund(self, payment, refund, gateway_refund_id, models):
         if refund.status == 'completed':
             return refund
 
-        payment = Payment.all_objects.select_for_update().get(pk=refund.payment_id)
         refund.gateway_refund_id = gateway_refund_id
         refund.status = 'completed'
         refund.completed_at = timezone.now()

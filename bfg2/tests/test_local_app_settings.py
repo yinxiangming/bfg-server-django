@@ -40,21 +40,40 @@ def test_duplicate_extension_settings_fail_atomically():
     assert target == {'BFG_EXTRA_PUBLIC_PATHS': ()}
 
 
-def test_legacy_wms_without_mobile_guards_registers_no_middleware():
-    missing_parent = ModuleNotFoundError("No module named 'apps.wms.mobile'")
-    missing_parent.name = 'apps.wms.mobile'
-    with patch('importlib.util.find_spec', side_effect=missing_parent):
-        assert get_local_app_middleware(['apps.wms']) == []
+def test_app_without_host_settings_registers_no_middleware():
+    with patch('importlib.util.find_spec', return_value=None):
+        assert get_local_app_middleware(['apps.alpha']) == []
 
 
-def test_wms_mobile_guard_is_registered_when_module_exists():
-    with patch('importlib.util.find_spec', return_value=object()):
-        assert get_local_app_middleware(['apps.wms']) == [
-            'apps.wms.mobile.guards.InventoryBoundaryMiddleware',
+def test_app_owned_middleware_is_registered_in_declared_order():
+    module = SimpleNamespace(MIDDLEWARE=[
+        'apps.alpha.middleware.First',
+        'apps.alpha.middleware.Second',
+    ])
+    with patch('importlib.util.find_spec', return_value=object()), \
+            patch('importlib.import_module', return_value=module):
+        assert get_local_app_middleware(['apps.alpha']) == [
+            'apps.alpha.middleware.First',
+            'apps.alpha.middleware.Second',
         ]
 
 
-def test_wms_mobile_guard_discovery_does_not_hide_internal_import_errors():
+def test_middleware_discovery_does_not_hide_internal_import_errors():
     with patch('importlib.util.find_spec', side_effect=ImportError('broken dependency')):
         with pytest.raises(ImportError, match='broken dependency'):
-            get_local_app_middleware(['apps.wms'])
+            get_local_app_middleware(['apps.alpha'])
+
+
+@pytest.mark.parametrize('declared', [
+    'apps.alpha.middleware.Guard',
+    ('apps.beta.middleware.Guard',),
+    (object(),),
+    ('apps.alpha..Guard',),
+    ('apps.alpha.middleware.Guard', 'apps.alpha.middleware.Guard'),
+])
+def test_invalid_app_middleware_is_rejected(declared):
+    module = SimpleNamespace(MIDDLEWARE=declared)
+    with patch('importlib.util.find_spec', return_value=object()), \
+            patch('importlib.import_module', return_value=module), \
+            pytest.raises(ImproperlyConfigured):
+        get_local_app_middleware(['apps.alpha'])

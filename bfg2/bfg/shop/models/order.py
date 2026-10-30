@@ -105,6 +105,8 @@ class Order(TenantScopedModel):
     )
     stock_deduction_event = models.CharField(max_length=24, choices=STOCK_DEDUCTION_EVENTS, default='payment_confirmed')
     stock_deducted_at = models.DateTimeField(null=True, blank=True)
+    stock_error = models.CharField(max_length=255, blank=True)
+    stock_reservations_managed = models.BooleanField(default=True)
 
     # Amounts
     subtotal = models.DecimalField(_("Subtotal"), max_digits=10, decimal_places=2)

@@ -6,6 +6,7 @@ from .product_price_history import ProductPriceHistory
 from .store import Store
 from .cart import Cart, CartItem
 from .order import Order, OrderItem
+from .stock_reservation import OrderItemStockReservation
 from .subscription import Subscription, SubscriptionPlan
 from .review import ProductReview
 from .sales_channel import SalesChannel, ProductChannelListing, ChannelCollection

@@ -65,6 +65,7 @@ class InventoryService(BaseService):
             VariantInventory: Updated inventory record
         """
         inventory = self.get_variant_inventory(variant, warehouse)
+        inventory = VariantInventory.objects.select_for_update().get(pk=inventory.pk)
         
         # Update quantity
         inventory.quantity = F('quantity') + quantity_change
@@ -105,6 +106,7 @@ class InventoryService(BaseService):
             InsufficientStock: If not enough available stock
         """
         inventory = self.get_variant_inventory(variant, warehouse)
+        inventory = VariantInventory.objects.select_for_update().get(pk=inventory.pk)
         
         # Check available quantity
         if inventory.available < quantity:
@@ -138,6 +140,7 @@ class InventoryService(BaseService):
             VariantInventory: Updated inventory record
         """
         inventory = self.get_variant_inventory(variant, warehouse)
+        inventory = VariantInventory.objects.select_for_update().get(pk=inventory.pk)
         
         # Release reservation
         new_reserved = max(0, inventory.reserved - quantity)
@@ -165,6 +168,7 @@ class InventoryService(BaseService):
             VariantInventory: Updated inventory record
         """
         inventory = self.get_variant_inventory(variant, warehouse)
+        inventory = VariantInventory.objects.select_for_update().get(pk=inventory.pk)
         
         # Deduct from both quantity and reserved
         inventory.quantity = F('quantity') - quantity

@@ -974,9 +974,51 @@ class OrderService(BaseService):
         return order
     
     @transaction.atomic
-    def mark_as_paid(self, order: Order) -> Order:
+    def deduct_stock(self, order: Order) -> Order:
+        """Deduct once independently of payment; roll back all items on failure."""
+        self.validate_workspace_access(order)
+        order = Order.all_objects.select_for_update().get(pk=order.pk, workspace=self.workspace)
+        if order.stock_deducted_at:
+            return order
+        if order.status in ('cancelled', 'refunded') or order.payment_status == 'refunded':
+            raise ValueError('Order was cancelled or refunded; reconcile it manually.')
+        from bfg.delivery.models import Warehouse
+        from bfg.shop.models import Product, ProductVariant, VariantInventory
+        from bfg.shop.services.inventory_service import InventoryService
+        from bfg.core.events import after_commit
+        warehouse = Warehouse.all_objects.filter(workspace=self.workspace, is_active=True).order_by('-is_default', 'name').first()
+        inventory_service = InventoryService(self.workspace, self.user)
+        for item in order.items.select_related('product', 'variant').order_by('product_id', 'pk'):
+            product = Product.all_objects.select_for_update().get(pk=item.product_id, workspace=self.workspace)
+            if not product.track_inventory:
+                continue
+            if warehouse is None:
+                raise ValueError('Configure an active warehouse before deducting stock.')
+            if item.variant_id:
+                variant = ProductVariant.objects.select_for_update().get(pk=item.variant_id, product=product)
+                inventory = VariantInventory.objects.select_for_update().filter(variant=variant, warehouse=warehouse).first()
+                if not inventory or inventory.reserved < item.quantity:
+                    raise ValueError('Variant stock reservation is missing; reconcile the order.')
+                if inventory.quantity < item.quantity:
+                    raise ValueError('Insufficient variant stock; reconcile the order.')
+                before = variant.stock_quantity
+                inventory_service.fulfill_reservation(variant, warehouse, item.quantity)
+                variant.refresh_from_db()
+                if variant.stock_quantity != before - item.quantity:
+                    raise ValueError('Existing order inventory update did not complete.')
+            else:
+                if product.stock_quantity < item.quantity:
+                    raise ValueError('Insufficient stock; reconcile this marketplace order.')
+                Product.all_objects.filter(pk=product.pk, workspace=self.workspace).update(stock_quantity=F('stock_quantity') - item.quantity)
+        order.stock_deducted_at = timezone.now()
+        order.save(update_fields=['stock_deducted_at', 'updated_at'])
+        after_commit(self.emit_event, 'order.stock_deducted', {'order': order})
+        return order
+
+    @transaction.atomic
+    def mark_as_paid(self, order: Order, *, update_inventory: bool = True) -> Order:
         """
-        Mark order as paid and fulfill inventory reservations
+        Mark payment confirmed, applying the order stock policy when requested
         
         Args:
             order: Order instance
@@ -997,49 +1039,14 @@ class OrderService(BaseService):
         order.paid_at = timezone.now()
         order.save()
         
-        # Fulfill inventory reservations (deduct stock)
-        from bfg.delivery.models import Warehouse
-        from bfg.shop.services.inventory_service import InventoryService
-        
-        default_warehouse = Warehouse.objects.filter(
-            workspace=self.workspace,
-            is_active=True
-        ).order_by('-is_default', 'name').first()
-        
-        if default_warehouse:
-            inventory_service = InventoryService(
-                workspace=self.workspace,
-                user=self.user
-            )
-            
-            # Process each order item
-            for order_item in order.items.select_related('product', 'variant').all():
-                if order_item.product.track_inventory:
-                    try:
-                        if order_item.variant:
-                            # Product with variant: fulfill reservation (deduct from quantity and reserved)
-                            inventory_service.fulfill_reservation(
-                                variant=order_item.variant,
-                                warehouse=default_warehouse,
-                                quantity=order_item.quantity
-                            )
-                        else:
-                            # Product without variant: directly deduct from Product.stock_quantity
-                            from django.db.models import F
-                            from bfg.shop.models import Product
-                            Product.objects.filter(id=order_item.product.id).update(
-                                stock_quantity=F('stock_quantity') - order_item.quantity
-                            )
-                    except Exception as e:
-                        # Log error but don't fail payment marking
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.warning(
-                            f"Failed to fulfill inventory reservation for product {order_item.product.id} "
-                            f"(variant: {order_item.variant.id if order_item.variant else 'None'}) "
-                            f"in order {order.order_number}: {e}"
-                        )
-        
+        # Channel imports can settle payment separately after applying their snapshotted stock policy.
+        if update_inventory and order.stock_deduction_event == 'payment_confirmed':
+            try:
+                order = self.deduct_stock(order)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning('Inventory deduction failed for order %s: %s', order.pk, exc)
+
         # Log payment status change
         audit = AuditService(workspace=self.workspace, user=self.user)
         audit.log_update(

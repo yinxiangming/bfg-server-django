@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from .category import ProductCategory
+from .content import ProductContentPolicy
 from .product import Product, ProductTag, ProductVariant, VariantInventory
 from .product_price_history import ProductPriceHistory
 from .store import Store

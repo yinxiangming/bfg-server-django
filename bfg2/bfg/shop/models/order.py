@@ -99,6 +99,15 @@ class Order(TenantScopedModel):
     status = models.CharField(_("Status"), max_length=20, choices=STATUS_CHOICES, default='pending')
     payment_status = models.CharField(_("Payment Status"), max_length=20, choices=PAYMENT_STATUS_CHOICES, default='pending')
     
+    STOCK_DEDUCTION_EVENTS = (
+        ('order_created', _('Order created')),
+        ('payment_confirmed', _('Payment confirmed')),
+    )
+    stock_deduction_event = models.CharField(max_length=24, choices=STOCK_DEDUCTION_EVENTS, default='payment_confirmed')
+    stock_deducted_at = models.DateTimeField(null=True, blank=True)
+    stock_error = models.CharField(max_length=255, blank=True)
+    stock_reservations_managed = models.BooleanField(default=True)
+
     # Amounts
     subtotal = models.DecimalField(_("Subtotal"), max_digits=10, decimal_places=2)
     shipping_cost = models.DecimalField(_("Shipping Cost"), max_digits=10, decimal_places=2, default=Decimal('0'))

@@ -536,6 +536,8 @@ def test_cancel_order_normal(monkeypatch):
         admin_note="",
         save=lambda: saved.update({"status": order.status}),
     )
+    released = []
+    monkeypatch.setattr(service, "release_stock_reservations", lambda obj: (released.append(obj), obj)[1])
     monkeypatch.setattr(service, "emit_event", lambda name, data: events.update({"name": name}))
 
     class _FakeAudit:
@@ -549,6 +551,7 @@ def test_cancel_order_normal(monkeypatch):
 
     result = service.cancel_order(order, reason="Customer request")
 
+    assert released == [order]
     assert result.status == "cancelled"
     assert saved["status"] == "cancelled"
     assert events["name"] == "order.cancelled"

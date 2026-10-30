@@ -549,57 +549,22 @@ class OrderService(BaseService):
             freight_service=freight_service,
         )
         
-        # Get default warehouse for inventory operations
-        from bfg.delivery.models import Warehouse
-        default_warehouse = Warehouse.objects.filter(
-            workspace=self.workspace,
-            is_active=True
-        ).order_by('-is_default', 'name').first()
-        
-        # Create order items from cart items and handle inventory
-        from bfg.shop.services.inventory_service import InventoryService
-        inventory_service = InventoryService(
-            workspace=self.workspace,
-            user=self.user
-        )
-        
+        # Create all item snapshots before reserving so ownership is durable and complete.
         for cart_item in cart_items:
             OrderItem.objects.create(
-                order=order,
-                product=cart_item.product,
-                variant=cart_item.variant,
+                order=order, product=cart_item.product, variant=cart_item.variant,
                 product_name=cart_item.product.name,
                 variant_name=cart_item.variant.name if cart_item.variant else '',
                 sku=cart_item.variant.sku if cart_item.variant else cart_item.product.sku,
-                quantity=cart_item.quantity,
-                price=cart_item.price,
-                subtotal=cart_item.subtotal,
+                quantity=cart_item.quantity, price=cart_item.price, subtotal=cart_item.subtotal,
             )
-            
-            # Reserve stock if inventory tracking is enabled
-            # Note: For products with variants, we reserve stock (will be fulfilled on payment)
-            # For products without variants, we check stock availability but don't reserve
-            # (will be deducted directly on payment completion)
-            if cart_item.product.track_inventory and default_warehouse:
-                try:
-                    if cart_item.variant:
-                        # Product with variant: reserve stock using VariantInventory
-                        inventory_service.reserve_stock(
-                            variant=cart_item.variant,
-                            warehouse=default_warehouse,
-                            quantity=cart_item.quantity
-                        )
-                    # For products without variants, stock will be deducted on payment completion
-                except Exception as e:
-                    # Log error but don't fail order creation
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.warning(
-                        f"Failed to reserve stock for product {cart_item.product.id} "
-                        f"(variant: {cart_item.variant.id if cart_item.variant else 'None'}) "
-                        f"in order {order.order_number}: {e}"
-                    )
-        
+        try:
+            order = self.reserve_stock_for_order(order)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning('Stock reservation failed for order %s: %s', order.pk, exc)
+            order.refresh_from_db(fields=['stock_error'])
+
         # Clear cart after order creation
         cart.items.all().delete()
 
@@ -928,6 +893,8 @@ class OrderService(BaseService):
         """
         self.validate_workspace_access(order)
         
+        if new_status == 'cancelled':
+            order = self.release_stock_reservations(order)
         old_status = order.status
         order.status = new_status
         
@@ -973,10 +940,138 @@ class OrderService(BaseService):
         
         return order
     
+    def _record_stock_error(self, order, exc):
+        detail = str(exc)[:255] if isinstance(exc, ValueError) else 'Stock update failed; reconcile inventory.'
+        Order.all_objects.filter(pk=order.pk, workspace=self.workspace).update(stock_error=detail)
+
+    def reserve_stock_for_order(self, order: Order) -> Order:
+        """Create reservations owned by each item; keep errors outside the rolled-back savepoint."""
+        try:
+            return self._reserve_stock_for_order(order)
+        except Exception as exc:
+            self._record_stock_error(order, exc)
+            raise
+
     @transaction.atomic
-    def mark_as_paid(self, order: Order) -> Order:
+    def _reserve_stock_for_order(self, order: Order) -> Order:
+        from bfg.delivery.models import Warehouse
+        from bfg.shop.models import Product, ProductVariant, VariantInventory, OrderItemStockReservation
+        from bfg.shop.services.inventory_service import InventoryService
+        self.validate_workspace_access(order)
+        order = Order.all_objects.select_for_update().get(pk=order.pk, workspace=self.workspace)
+        if order.stock_deducted_at:
+            return order
+        if order.status in ('cancelled', 'refunded') or order.payment_status == 'refunded':
+            raise ValueError('Order was cancelled or refunded; reconcile it manually.')
+        items = list(order.items.select_related('product', 'variant').order_by('product_id', 'pk'))
+        if not order.stock_reservations_managed and any(item.variant_id and item.product.track_inventory for item in items):
+            raise ValueError('Legacy stock reservation has no recorded warehouse; reconcile this order manually.')
+        warehouse = None
+        inventory_service = InventoryService(self.workspace, self.user)
+        for item in items:
+            product = Product.all_objects.select_for_update().get(pk=item.product_id, workspace=self.workspace)
+            if not product.track_inventory or not item.variant_id:
+                continue
+            variant = ProductVariant.objects.select_for_update().get(pk=item.variant_id, product=product)
+            reservation = OrderItemStockReservation.objects.select_for_update().filter(item=item).first()
+            if reservation:
+                if (reservation.quantity != item.quantity or reservation.inventory.variant_id != variant.pk or
+                        reservation.inventory.warehouse.workspace_id != self.workspace.pk):
+                    raise ValueError('Order stock reservation no longer matches its item; reconcile manually.')
+                if reservation.state != 'reserved':
+                    raise ValueError('Order stock reservation was already consumed or released; reconcile manually.')
+                continue
+            if warehouse is None:
+                warehouse = Warehouse.all_objects.filter(workspace=self.workspace, is_active=True).order_by('-is_default', 'name').first()
+            if warehouse is None:
+                raise ValueError('Configure an active warehouse before reserving stock.')
+            inventory = inventory_service.get_variant_inventory(variant, warehouse)
+            inventory = VariantInventory.objects.select_for_update().get(pk=inventory.pk)
+            inventory_service.reserve_stock(variant, warehouse, item.quantity)
+            OrderItemStockReservation.objects.create(item=item, inventory=inventory, quantity=item.quantity)
+        order.stock_reservations_managed = True
+        order.stock_error = ''
+        order.save(update_fields=['stock_reservations_managed', 'stock_error', 'updated_at'])
+        return order
+
+    def deduct_stock(self, order: Order) -> Order:
+        """Deduct once independently of payment, consuming only this order's reservations."""
+        try:
+            return self._deduct_stock(order)
+        except Exception as exc:
+            self._record_stock_error(order, exc)
+            raise
+
+    @transaction.atomic
+    def _deduct_stock(self, order: Order) -> Order:
+        self.validate_workspace_access(order)
+        order = Order.all_objects.select_for_update().get(pk=order.pk, workspace=self.workspace)
+        if order.stock_deducted_at:
+            return order
+        order = self._reserve_stock_for_order(order)
+        from bfg.delivery.models import Warehouse
+        from bfg.shop.models import Product, ProductVariant, VariantInventory, OrderItemStockReservation
+        from bfg.shop.services.inventory_service import InventoryService
+        from bfg.core.events import after_commit
+        inventory_service = InventoryService(self.workspace, self.user)
+        for item in order.items.select_related('product', 'variant').order_by('product_id', 'pk'):
+            product = Product.all_objects.select_for_update().get(pk=item.product_id, workspace=self.workspace)
+            if not product.track_inventory:
+                continue
+            if item.variant_id:
+                variant = ProductVariant.objects.select_for_update().get(pk=item.variant_id, product=product)
+                reservation = OrderItemStockReservation.objects.select_for_update().select_related('inventory__warehouse').get(item=item)
+                inventory = VariantInventory.objects.select_for_update().get(pk=reservation.inventory_id)
+                if reservation.state != 'reserved' or reservation.quantity != item.quantity or inventory.reserved < item.quantity:
+                    raise ValueError('Owned stock reservation is inconsistent; reconcile the order.')
+                if inventory.quantity < item.quantity:
+                    raise ValueError('Insufficient variant stock; reconcile the order.')
+                before = variant.stock_quantity
+                inventory_service.fulfill_reservation(variant, reservation.inventory.warehouse, item.quantity)
+                variant.refresh_from_db()
+                if variant.stock_quantity != before - item.quantity:
+                    raise ValueError('Existing order inventory update did not complete.')
+                reservation.state = 'consumed'
+                reservation.consumed_at = timezone.now()
+                reservation.save(update_fields=['state', 'consumed_at'])
+            else:
+                if not Warehouse.all_objects.filter(workspace=self.workspace, is_active=True).exists():
+                    raise ValueError('Configure an active warehouse before deducting stock.')
+                if product.stock_quantity < item.quantity:
+                    raise ValueError('Insufficient stock; reconcile this order.')
+                Product.all_objects.filter(pk=product.pk, workspace=self.workspace).update(stock_quantity=F('stock_quantity') - item.quantity)
+        order.stock_deducted_at = timezone.now()
+        order.stock_error = ''
+        order.save(update_fields=['stock_deducted_at', 'stock_error', 'updated_at'])
+        after_commit(self.emit_event, 'order.stock_deducted', {'order': order})
+        return order
+
+    @transaction.atomic
+    def release_stock_reservations(self, order: Order) -> Order:
+        """Release owned, unconsumed reservations; never put deducted goods back into stock."""
+        from bfg.shop.models import OrderItemStockReservation, VariantInventory
+        from bfg.shop.services.inventory_service import InventoryService
+        self.validate_workspace_access(order)
+        order = Order.all_objects.select_for_update().get(pk=order.pk, workspace=self.workspace)
+        inventory_service = InventoryService(self.workspace, self.user)
+        reservations = OrderItemStockReservation.objects.select_for_update().filter(item__order=order, state='reserved').select_related('inventory__warehouse')
+        for reservation in reservations:
+            inventory = VariantInventory.objects.select_for_update().get(pk=reservation.inventory_id)
+            if inventory.warehouse.workspace_id != self.workspace.pk or inventory.reserved < reservation.quantity:
+                raise ValueError('Owned stock reservation is inconsistent; reconcile the order.')
+            inventory_service.release_reservation(inventory.variant, inventory.warehouse, reservation.quantity)
+            reservation.state = 'released'
+            reservation.released_at = timezone.now()
+            reservation.save(update_fields=['state', 'released_at'])
+        if not order.stock_reservations_managed and order.items.filter(variant__isnull=False, product__track_inventory=True).exists():
+            order.stock_error = 'Legacy stock reservation has no recorded warehouse; release it manually after reconciliation.'
+            order.save(update_fields=['stock_error', 'updated_at'])
+        return order
+
+    @transaction.atomic
+    def mark_as_paid(self, order: Order, *, update_inventory: bool = True) -> Order:
         """
-        Mark order as paid and fulfill inventory reservations
+        Mark payment confirmed, applying the order stock policy when requested
         
         Args:
             order: Order instance
@@ -997,49 +1092,15 @@ class OrderService(BaseService):
         order.paid_at = timezone.now()
         order.save()
         
-        # Fulfill inventory reservations (deduct stock)
-        from bfg.delivery.models import Warehouse
-        from bfg.shop.services.inventory_service import InventoryService
-        
-        default_warehouse = Warehouse.objects.filter(
-            workspace=self.workspace,
-            is_active=True
-        ).order_by('-is_default', 'name').first()
-        
-        if default_warehouse:
-            inventory_service = InventoryService(
-                workspace=self.workspace,
-                user=self.user
-            )
-            
-            # Process each order item
-            for order_item in order.items.select_related('product', 'variant').all():
-                if order_item.product.track_inventory:
-                    try:
-                        if order_item.variant:
-                            # Product with variant: fulfill reservation (deduct from quantity and reserved)
-                            inventory_service.fulfill_reservation(
-                                variant=order_item.variant,
-                                warehouse=default_warehouse,
-                                quantity=order_item.quantity
-                            )
-                        else:
-                            # Product without variant: directly deduct from Product.stock_quantity
-                            from django.db.models import F
-                            from bfg.shop.models import Product
-                            Product.objects.filter(id=order_item.product.id).update(
-                                stock_quantity=F('stock_quantity') - order_item.quantity
-                            )
-                    except Exception as e:
-                        # Log error but don't fail payment marking
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.warning(
-                            f"Failed to fulfill inventory reservation for product {order_item.product.id} "
-                            f"(variant: {order_item.variant.id if order_item.variant else 'None'}) "
-                            f"in order {order.order_number}: {e}"
-                        )
-        
+        # Channel imports can settle payment separately after applying their snapshotted stock policy.
+        if update_inventory and order.stock_deduction_event == 'payment_confirmed':
+            try:
+                order = self.deduct_stock(order)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning('Inventory deduction failed for order %s: %s', order.pk, exc)
+                order.refresh_from_db(fields=['stock_error'])
+
         # Log payment status change
         audit = AuditService(workspace=self.workspace, user=self.user)
         audit.log_update(
@@ -1053,6 +1114,7 @@ class OrderService(BaseService):
         
         return order
     
+    @transaction.atomic
     def cancel_order(self, order: Order, reason: str = '') -> Order:
         """
         Cancel order
@@ -1076,6 +1138,7 @@ class OrderService(BaseService):
                 f"Order in '{order.status}' status cannot be cancelled"
             )
         
+        order = self.release_stock_reservations(order)
         old_status = order.status
         order.status = 'cancelled'
         if reason:

@@ -3,4 +3,5 @@
 debugpy==1.5.1
 pytest==9.0.3
 pytest-django>=4.11,<5
+responses>=0.25,<1
 dj-rest-auth>=7.0,<8

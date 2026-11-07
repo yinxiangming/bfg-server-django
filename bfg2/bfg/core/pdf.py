@@ -277,8 +277,10 @@ class InvoicePDFGenerator(PDFGenerator):
     def _tax_percent(subtotal, tax):
         if Decimal(str(subtotal)) == 0:
             return None
-        rate = Decimal(str(tax)) / Decimal(str(subtotal)) * 100
-        return format(rate.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP).normalize(), 'f')
+        rate = (Decimal(str(tax)) / Decimal(str(subtotal)) * 100).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        if rate == 0:
+            return '0'
+        return format(rate.normalize(), 'f')
 
     def _generate_invoice_with_reportlab(self, invoice) -> bytes:
         """

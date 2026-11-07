@@ -23,14 +23,16 @@ def document(workspace, subtotal='100', tax='7.50'):
 
 @pytest.mark.parametrize(('subtotal', 'tax', 'expected'), [
     ('100', '7.50', '7.5'), ('100', '0', '0'), ('-100', '-15', '15'),
-    ('100', '19.99', '19.99'), ('0', '0', None), ('0', '1', None),
+    ('100', '19.99', '19.99'), ('-100', '0', '0'), ('0', '0', None), ('0', '1', None),
 ])
 def test_effective_tax_percentage_preserves_fractional_zero_and_signed_amounts(subtotal, tax, expected):
     assert InvoicePDFGenerator._tax_percent(subtotal, tax) == expected
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(('subtotal', 'tax', 'expected'), [('100', '7.50', '7.5%'), ('100', '0', '0%'), ('-100', '-15', '15%')])
+@pytest.mark.parametrize(('subtotal', 'tax', 'expected'), [
+    ('100', '7.50', '7.5%'), ('100', '0', '0%'), ('-100', '-15', '15%'), ('-100', '0', '0%'),
+])
 def test_html_invoice_uses_effective_line_tax_without_fixed_rate_fallback(subtotal, tax, expected):
     workspace = Workspace.objects.create(name='PDF workspace', slug='pdf-tax-workspace')
     invoice = document(workspace, subtotal, tax)

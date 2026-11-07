@@ -3,11 +3,11 @@
 SMTP email backend using smtplib.
 """
 import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from email.message import EmailMessage
 from typing import List, Optional
 
 from .base import BaseEmailBackend, schema_field
+from .attachments import validate_attachments
 
 
 class SMTPBackend(BaseEmailBackend):
@@ -33,6 +33,8 @@ class SMTPBackend(BaseEmailBackend):
         body_html: Optional[str] = None,
         from_email: Optional[str] = None,
         config: Optional[dict] = None,
+        attachments=None,
+        message_id: Optional[str] = None,
     ) -> None:
         if not config:
             raise ValueError("SMTP backend requires config")
@@ -49,21 +51,27 @@ class SMTPBackend(BaseEmailBackend):
         user = config.get('user')
         password = config.get('password')
 
+        msg = EmailMessage()
+        msg.set_content(body_plain)
         if body_html:
-            msg = MIMEMultipart('alternative')
-            msg.attach(MIMEText(body_plain, 'plain'))
-            msg.attach(MIMEText(body_html, 'html'))
-        else:
-            msg = MIMEText(body_plain, 'plain')
+            msg.add_alternative(body_html, subtype='html')
+        for attachment in validate_attachments(attachments):
+            maintype, subtype = attachment.content_type.split('/', 1)
+            msg.add_attachment(
+                attachment.content, maintype=maintype, subtype=subtype,
+                filename=attachment.filename,
+            )
 
         msg['Subject'] = subject
         msg['From'] = from_addr
         msg['To'] = ', '.join(to_list)
+        if message_id:
+            msg['Message-ID'] = message_id
 
         if use_ssl:
-            server = smtplib.SMTP_SSL(host, int(port))
+            server = smtplib.SMTP_SSL(host, int(port), timeout=30)
         else:
-            server = smtplib.SMTP(host, int(port))
+            server = smtplib.SMTP(host, int(port), timeout=30)
         try:
             if use_tls and not use_ssl:
                 server.starttls()
@@ -71,4 +79,7 @@ class SMTPBackend(BaseEmailBackend):
                 server.login(user, password)
             server.sendmail(from_addr, to_list, msg.as_string())
         finally:
-            server.quit()
+            try:
+                server.quit()
+            except (smtplib.SMTPException, OSError):
+                server.close()

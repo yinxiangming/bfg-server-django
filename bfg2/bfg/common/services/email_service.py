@@ -37,6 +37,8 @@ class EmailService:
         body_html: Optional[str] = None,
         from_email: Optional[str] = None,
         config: Optional[EmailConfig] = None,
+        attachments=None,
+        message_id: Optional[str] = None,
     ) -> None:
         """
         Send email using workspace's active EmailConfig, or the given config.
@@ -63,8 +65,16 @@ class EmailService:
                 f"No active email config for workspace {workspace.id}. "
                 "Set an EmailConfig as default in Admin > Settings > General > Email."
             )
+        if config.workspace_id != workspace.id:
+            raise ValueError('Email configuration belongs to another workspace.')
         backend_class = get_backend(config.backend_type)
         backend = backend_class()
+        extra = {}
+        if attachments:
+            from bfg.common.email_backends.attachments import validate_attachments
+            extra['attachments'] = validate_attachments(attachments)
+        if message_id:
+            extra['message_id'] = message_id
         backend.send(
             to_list=to_list,
             subject=subject,
@@ -72,4 +82,15 @@ class EmailService:
             body_html=body_html,
             from_email=from_email,
             config=config.config,
+            **extra,
+        )
+
+    @staticmethod
+    def enqueue_email(workspace, to_list, subject, body_plain, body_html=None,
+                      from_email=None, attachments=None, dedupe_key=None):
+        """Persist a single-recipient send intent before notifying workers."""
+        from bfg.common.services.email_outbox import enqueue_email
+        return enqueue_email(
+            workspace, to_list, subject, body_plain, body_html,
+            from_email, attachments, dedupe_key,
         )

@@ -1,0 +1,36 @@
+{
+  "status": "complete",
+  "server_baseline": "577b90631b5fe78dc8c0a68950b6b265ad4815bb",
+  "contract_version": "1.0.0",
+  "contract": "bfg2/bfg/docs/reference-options-v1.md",
+  "resulting_worktree": "codex/shared-reference-options-20261107",
+  "host_owned_files": [
+    "bfg2/bfg/common/reference_data.py",
+    "bfg2/bfg/common/options.py",
+    "bfg2/bfg/common/data/iso4217-current.json",
+    "bfg2/setup.py"
+  ],
+  "reason": "Shared form reference catalogs for every installed application",
+  "migrations": [],
+  "routes": "Existing authenticated options endpoint",
+  "verification": {
+    "tests_passed": 78,
+    "wheel_build": "passed",
+    "reference_json_in_wheel": true,
+    "currency_codes": 178,
+    "catalog_publication": "2026-09-17"
+  },
+  "test_environment": {
+    "database": "Retained isolated SQLite",
+    "optional_unavailable_apps_omitted": [
+      "dj_rest_auth",
+      "dj_rest_auth.registration"
+    ],
+    "dependencies": "Repository development test constraints"
+  },
+  "compatibility": [
+    "Read-only option discovery",
+    "Existing configured currency metadata and active flags preserved",
+    "Saved legacy currency codes retained"
+  ]
+}

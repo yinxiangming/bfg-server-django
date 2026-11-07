@@ -1,0 +1,31 @@
+{
+  "status": "complete",
+  "extension_id": "geo",
+  "contract_version": "1.0.0",
+  "server_baseline": "4969c4b5351eea598fc0c9cf96bcd6faeab15665",
+  "contract": "extensions/geo/server/docs/country-overrides-v1.md",
+  "resulting_worktree": "codex/staff-address-country-20261107",
+  "extension_owned_files": [
+    "extensions/geo/server/views.py",
+    "extensions/geo/server/services/google_maps.py",
+    "extensions/geo/server/tests/test_country_overrides.py",
+    "extensions/geo/server/docs/"
+  ],
+  "host_owned_files": [],
+  "migrations": [],
+  "api_routes": [
+    "Existing address suggest, resolve and reverse endpoints accept optional country_code"
+  ],
+  "verification": {
+    "tests_passed": 86,
+    "migration_drift": "none",
+    "django_check": "passed"
+  },
+  "compatibility": [
+    "Omitted and matching country retain existing market behavior",
+    "Overrides require active user, membership and role in the resolved workspace",
+    "Activation, caps, throttles and session billing remain in effect",
+    "No workspace defaults or server credentials are exposed or changed"
+  ],
+  "provider_testing": "Synthetic responses; no production requests"
+}

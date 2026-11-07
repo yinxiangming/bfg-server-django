@@ -391,17 +391,7 @@
                     <td>{{ item.quantity|floatformat:2 }}</td>
                     <td>{{ invoice.currency.symbol }}{{ item.unit_price|floatformat:2 }}</td>
                     <td>
-                        {% if item.tax_type == 'default' %}
-                            {% if item.tax > 0 and item.subtotal > 0 %}
-                                {% widthratio item.tax item.subtotal 100 %}%
-                            {% elif invoice.tax > 0 and invoice.subtotal > 0 %}
-                                {% widthratio invoice.tax invoice.subtotal 100 %}%
-                            {% else %}
-                                15%
-                            {% endif %}
-                        {% else %}
-                            0%
-                        {% endif %}
+                        {{ item.pdf_tax_percent|default_if_none:"—" }}{% if item.pdf_tax_percent != None %}%{% endif %}
                     </td>
                     <td>{{ invoice.currency.symbol }}{{ item.subtotal|floatformat:2 }}</td>
                 </tr>
@@ -428,15 +418,10 @@
                     {% endif %}
                 {% endif %}
                 
-                {% if invoice.tax > 0 %}
+                {% if invoice.tax != 0 %}
                 <tr class="summary-row">
                     <td colspan="4" class="text-right">
-                        TOTAL GST 
-                        {% if invoice.subtotal > 0 %}
-                            {% widthratio invoice.tax invoice.subtotal 100 %}
-                        {% else %}
-                            15
-                        {% endif %}%
+                        TOTAL GST{% if invoice_tax_percent != None %} {{ invoice_tax_percent }}%{% endif %}
                     </td>
                     <td class="text-right">{{ invoice.currency.symbol }}{{ invoice.tax|floatformat:2 }}</td>
                 </tr>

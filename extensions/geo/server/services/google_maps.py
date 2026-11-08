@@ -301,7 +301,7 @@ def resolve(place_id: str, config: AddressLookupConfig, session_token: str = '')
     workspace happened to look up. The answer is still written to the cache for the
     callers that have no session to end.
     """
-    cache_key = f'geo:place:{config.language}:{place_id}'
+    cache_key = f'geo:place:{config.language}:{config.country_code}:{place_id}'
     cached = cache.get(cache_key) if not session_token else None
     if cached is not None:
         resolved = ResolvedAddress(**cached)
@@ -343,7 +343,7 @@ def reverse(latitude: float, longitude: float, config: AddressLookupConfig) -> O
     """Name the place a GPS fix landed on, or ``None`` if it is out of market."""
     lat = round(latitude, REVERSE_CACHE_PRECISION)
     lng = round(longitude, REVERSE_CACHE_PRECISION)
-    cache_key = f'geo:reverse:{config.language}:{lat},{lng}'
+    cache_key = f'geo:reverse:{config.language}:{config.country_code}:{lat},{lng}'
 
     cached = cache.get(cache_key)
     if cached is not None:

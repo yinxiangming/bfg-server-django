@@ -58,19 +58,22 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import replace
 
 from django.conf import settings as django_settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 from apps.geo.extension import METER_AUTOCOMPLETE, METER_GEOCODE, METER_PLACE_DETAILS
 from apps.geo.services import billing
-from apps.geo.services.config import get_address_lookup_config
+from apps.geo.services.config import get_address_lookup_config, normalise_country_code
 from apps.geo.services.google_maps import GeoProviderError, resolve, reverse, suggest
 from bfg.common.middleware import MISSING_WORKSPACE_RESPONSE
+from bfg.common.models import StaffMember
 from bfg.platform import metering
 
 logger = logging.getLogger(__name__)
@@ -267,6 +270,25 @@ def _disabled_response():
     return Response({'detail': 'address lookup is not enabled for this workspace'}, status=status.HTTP_404_NOT_FOUND)
 
 
+def _lookup_config(request, workspace):
+    """Permit temporary market changes only for the resolved workspace's staff."""
+    config = get_address_lookup_config(workspace)
+    raw_country = request.query_params.get('country_code')
+    if raw_country is None:
+        return config
+    country = normalise_country_code(raw_country)
+    if not country:
+        raise ValidationError({'country_code': 'Provide a two-letter country code.'})
+    if country == config.country_code or not config.usable:
+        return config
+    user = request.user
+    if not user.is_authenticated or not user.is_active or not StaffMember.all_objects.filter(
+        workspace=workspace, user=user, is_active=True, role__is_active=True, role__workspace=workspace,
+    ).exists():
+        raise PermissionDenied('Active workspace staff membership is required to select another country.')
+    return replace(config, country_code=country)
+
+
 def _usage_cap_response() -> Response:
     """Refuse a call the workspace has no budget left for this month.
 
@@ -349,7 +371,7 @@ def address_suggest(request):
     if workspace is None:
         return _no_workspace_response()
 
-    config = get_address_lookup_config(workspace)
+    config = _lookup_config(request, workspace)
     if not config.usable:
         return _disabled_response()
 
@@ -392,7 +414,7 @@ def address_resolve(request):
     if workspace is None:
         return _no_workspace_response()
 
-    config = get_address_lookup_config(workspace)
+    config = _lookup_config(request, workspace)
     if not config.usable:
         return _disabled_response()
 
@@ -436,7 +458,7 @@ def address_reverse(request):
     if workspace is None:
         return _no_workspace_response()
 
-    config = get_address_lookup_config(workspace)
+    config = _lookup_config(request, workspace)
     if not config.usable:
         return _disabled_response()
 

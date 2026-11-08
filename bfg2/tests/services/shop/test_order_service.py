@@ -1,6 +1,7 @@
 from datetime import datetime, timezone as dt_timezone
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from django.db import IntegrityError, transaction
@@ -126,6 +127,125 @@ def test_generated_number_skips_one_taken_in_its_own_workspace(monkeypatch):
     _draw(monkeypatch, "11111", "22222")
 
     assert service._generate_order_number() == "ORD-20260911-22222"
+
+
+@pytest.mark.django_db
+def test_checkout_retries_a_number_taken_after_generation(monkeypatch):
+    shop = _shop("retry-order")
+    existing = _order(shop, "ORD-20260911-11111")
+    service = OrderService(workspace=shop.workspace, user=None)
+    generate = Mock(side_effect=[existing.order_number, "ORD-20260911-22222"])
+    monkeypatch.setattr(service, "_generate_order_number", generate)
+
+    with transaction.atomic():
+        order = service.create_order(
+            shop.customer, shop.store, fulfillment_method="pickup", subtotal=Decimal("10.00")
+        )
+        assert Order.all_objects.filter(workspace=shop.workspace).count() == 2
+
+    assert order.order_number == "ORD-20260911-22222"
+    assert generate.call_count == 2
+
+
+@pytest.mark.django_db
+def test_checkout_stops_after_number_collision_retry_limit(monkeypatch):
+    shop = _shop("exhausted-order")
+    existing = _order(shop, "ORD-20260911-11111")
+    service = OrderService(workspace=shop.workspace, user=None)
+    generate = Mock(return_value=existing.order_number)
+    monkeypatch.setattr(service, "_generate_order_number", generate)
+
+    with transaction.atomic():
+        with pytest.raises(IntegrityError):
+            service.create_order(
+                shop.customer, shop.store, fulfillment_method="pickup", subtotal=Decimal("10.00")
+            )
+        assert Order.all_objects.filter(workspace=shop.workspace).count() == 1
+
+    assert generate.call_count == 5
+
+
+@pytest.mark.django_db
+def test_checkout_propagates_unrelated_integrity_error_without_retry(monkeypatch):
+    shop = _shop("invalid-order")
+    existing = _order(shop, "ORD-20260911-11111")
+    service = OrderService(workspace=shop.workspace, user=None)
+    generate = Mock(return_value=existing.order_number)
+    monkeypatch.setattr(service, "_generate_order_number", generate)
+    manager = Order.objects
+    original_create = manager.create
+
+    def insert_invalid_total(**fields):
+        fields["total"] = None
+        return original_create(**fields)
+
+    monkeypatch.setattr(manager, "create", insert_invalid_total)
+    with transaction.atomic():
+        with pytest.raises(IntegrityError, match="total"):
+            service.create_order(
+                shop.customer, shop.store, fulfillment_method="pickup", subtotal=Decimal("10.00")
+            )
+        assert Order.all_objects.filter(workspace=shop.workspace).count() == 1
+
+    assert generate.call_count == 1
+
+
+@pytest.mark.django_db
+def test_cart_checkout_retries_number_collision_and_finishes_once(monkeypatch):
+    from bfg.shop.models import Cart, CartItem, Product
+
+    shop = _shop("cart-order-retry")
+    existing = _order(shop, "ORD-20260911-11111")
+    product = Product.objects.create(
+        workspace=shop.workspace, name="Item", slug="item", price=Decimal("10.00"),
+        track_inventory=False,
+    )
+    cart = Cart.objects.create(workspace=shop.workspace, customer=shop.customer)
+    CartItem.objects.create(cart=cart, product=product, quantity=1, price=Decimal("10.00"))
+    service = OrderService(workspace=shop.workspace, user=shop.customer.user)
+    generate = Mock(side_effect=[existing.order_number, "ORD-20260911-22222"])
+    monkeypatch.setattr(service, "_generate_order_number", generate)
+
+    order = service.create_order_from_cart(cart, shop.store, fulfillment_method="pickup")
+
+    assert order.order_number == "ORD-20260911-22222"
+    assert generate.call_count == 2
+    assert order.items.count() == 1
+    assert not cart.items.exists()
+    assert Order.all_objects.filter(workspace=shop.workspace).count() == 2
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "message",
+    [
+        'duplicate key value violates unique constraint "shop_order_workspace_order_number_uniq"',
+        "Duplicate entry '1-ORD-20260911-11111' for key 'shop_order.shop_order_workspace_order_number_uniq'",
+    ],
+)
+def test_checkout_retries_named_order_number_constraint(monkeypatch, message):
+    shop = _shop("named-number-retry")
+    service = OrderService(workspace=shop.workspace, user=None)
+    generate = Mock(side_effect=["ORD-20260911-11111", "ORD-20260911-22222"])
+    monkeypatch.setattr(service, "_generate_order_number", generate)
+    manager = Order.objects
+    original_create = manager.create
+
+    def insert(**fields):
+        if create.call_count == 1:
+            raise IntegrityError(message)
+        return original_create(**fields)
+
+    create = Mock(side_effect=insert)
+    monkeypatch.setattr(manager, "create", create)
+
+    order = service.create_order(
+        shop.customer, shop.store, fulfillment_method="pickup", subtotal=Decimal("10.00")
+    )
+
+    assert order.order_number == "ORD-20260911-22222"
+    assert generate.call_count == 2
+    assert create.call_count == 2
 
 
 # ---------------------------------------------------------------------------

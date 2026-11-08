@@ -4,10 +4,11 @@ BFG Shop Module Services
 Order management service
 """
 
+import re
 from typing import Any, Optional, Dict
 from decimal import Decimal
 from datetime import datetime
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils import timezone
 from bfg.core.services import BaseService
@@ -31,6 +32,8 @@ class OrderService(BaseService):
     
     Handles order creation, status updates, and order lifecycle
     """
+
+    ORDER_NUMBER_ATTEMPTS = 5
     
     def calculate_order_totals(
         self,
@@ -522,15 +525,11 @@ class OrderService(BaseService):
             except FreightService.DoesNotExist:
                 pass  # Keep as None if not found
         
-        # Generate order number
-        order_number = self._generate_order_number()
-        
         # Create order
-        order = Order.objects.create(
+        order = self._insert_order(
             workspace=self.workspace,
             customer=cart.customer,
             store=store,
-            order_number=order_number,
             status='pending',
             payment_status='pending',
             fulfillment_method=fulfillment_method,
@@ -697,15 +696,11 @@ class OrderService(BaseService):
         status = 'pending'
         payment_status = 'pending'
         
-        # Generate order number
-        order_number = self._generate_order_number()
-        
         # Create order
-        order = Order.objects.create(
+        order = self._insert_order(
             workspace=self.workspace,
             customer=customer,
             store=store,
-            order_number=order_number,
             status=status,
             payment_status=payment_status,
             fulfillment_method=fulfillment_method,
@@ -764,6 +759,27 @@ class OrderService(BaseService):
             order_number = f"ORD-{date_str}-{random_str}"
         
         return order_number
+
+    def _insert_order(self, **fields: Any) -> Order:
+        """Retry a generated number taken between its lookup and INSERT."""
+        for attempt in range(self.ORDER_NUMBER_ATTEMPTS):
+            order_number = self._generate_order_number()
+            try:
+                # Recover the failed INSERT without poisoning checkout's transaction.
+                with transaction.atomic():
+                    return Order.objects.create(order_number=order_number, **fields)
+            except IntegrityError as exc:
+                message = str(exc)
+                # PostgreSQL/MySQL name the constraint, while SQLite reports columns.
+                number_collision = (
+                    re.search(r'\bshop_order_workspace_order_number_uniq\b', message) is not None
+                    or message == (
+                        'UNIQUE constraint failed: shop_order.workspace_id, shop_order.order_number'
+                    )
+                )
+                if not number_collision or attempt == self.ORDER_NUMBER_ATTEMPTS - 1:
+                    raise
+        raise AssertionError('Order number retry limit must be positive')
     
     def _create_invoice_for_order(self, order: Order) -> Optional['Invoice']:
         """

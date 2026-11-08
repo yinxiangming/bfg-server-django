@@ -28,7 +28,7 @@ setup(
         'Django>=5.0,<6.0',
         'djangorestframework>=3.14',
         'django-allauth>=0.57',
-        'Pillow>=10.0',
+        'Pillow>=13.0.0',
         'django-cors-headers>=4.3',
         'celery>=5.3',
         'redis>=5.0',

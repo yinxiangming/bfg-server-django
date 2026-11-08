@@ -585,6 +585,10 @@ CELERY_TIMEZONE = TIME_ZONE
 # a bill converts at the rate on file and a refresh that failed leaves yesterday's.
 # Everything here is safe to run twice.
 CELERY_BEAT_SCHEDULE = {
+    'process-email-outbox': {
+        'task': 'bfg.common.tasks.process_email_outbox',
+        'schedule': 60.0,
+    },
     'close-entitlement-periods': {
         'task': 'bfg.platform.tasks.close_entitlement_periods',
         'schedule': crontab(hour=1, minute=10),

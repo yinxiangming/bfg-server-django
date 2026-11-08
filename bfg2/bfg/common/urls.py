@@ -1,5 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from .email_outbox_api import EmailOutboxViewSet
 from .onboarding.api import (
     OnboardingApplyView,
     OnboardingDismissView,
@@ -31,6 +32,7 @@ router.register(r'customers', CustomerViewSet, basename='customer')
 router.register(r'addresses', AddressViewSet, basename='address')
 router.register(r'settings', SettingsViewSet, basename='settings')
 router.register(r'email-configs', EmailConfigViewSet, basename='email-config')
+router.register(r'email-outbox', EmailOutboxViewSet, basename='email-outbox')
 router.register(r'social-auth-configs', SocialAuthConfigViewSet, basename='social-auth-config')
 router.register(r'users', UserViewSet, basename='user')
 # New model ViewSets

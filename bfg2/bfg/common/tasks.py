@@ -15,6 +15,13 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 
+@shared_task(ignore_result=True)
+def process_email_outbox(limit=100):
+    """Drain persisted due messages independently of broker retry state."""
+    from bfg.common.services.email_outbox import process_due
+    return process_due(limit=limit)
+
+
 @shared_task
 def archive_unused_extensions(limit=None):
     """Archive the extensions that have been switched off for long enough.

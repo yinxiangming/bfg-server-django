@@ -1,0 +1,62 @@
+{
+  "status": "complete",
+  "server_baseline": "544d4fffa844eafb0c6cb38ca5ba5d68d36dd763",
+  "contract_version": "1.0.0",
+  "contract": "bfg2/bfg/docs/email-outbox-v1.md",
+  "resulting_worktree": "codex/durable-email-outbox-20261107",
+  "host_owned_files": [
+    "bfg2/bfg/common/email_backends/",
+    "bfg2/bfg/common/email_outbox_api.py",
+    "bfg2/bfg/common/models/email_outbox.py",
+    "bfg2/bfg/common/models/__init__.py",
+    "bfg2/bfg/common/services/email_outbox.py",
+    "bfg2/bfg/common/services/email_service.py",
+    "bfg2/bfg/common/tasks.py",
+    "bfg2/bfg/common/management/commands/process_email_outbox.py",
+    "bfg2/bfg/common/urls.py",
+    "config/settings.py"
+  ],
+  "reason": "Shared workspace email transport reliability",
+  "migrations": [
+    "common.0019_emailoutbox_emailoutboxattachment_emailoutboxattempt_and_more"
+  ],
+  "routes": [
+    "GET /api/v1/email-outbox/",
+    "GET /api/v1/email-outbox/{id}/",
+    "POST /api/v1/email-outbox/{id}/retry/"
+  ],
+  "verification": {
+    "focused_tests": 84,
+    "clean_schema_creation": "passed",
+    "existing_data_forward_upgrade": "passed",
+    "migration_drift": "none",
+    "django_check": "passed",
+    "real_smtp_temporary_failure_and_attachment_recovery": "passed",
+    "concurrent_claim": "passed",
+    "session_authentication_and_workspace_middleware": "passed",
+    "combined_reference_and_email_tests": 88,
+    "inactive_workspace_retention": "passed"
+  },
+  "compatibility": [
+    "Existing synchronous send_email calls retain their execution contract",
+    "Inbox messages and existing configuration are retained",
+    "Existing custom backends retain original synchronous arguments unless attachments or message IDs are supplied",
+    "Queued messages use one recipient and transport acceptance is at-least-once"
+  ],
+  "deployment": [
+    "Run migrations before starting the new worker",
+    "Run a Celery worker and Beat, or schedule process_email_outbox from an external scheduler",
+    "Configure a workspace default email transport"
+  ],
+  "test_environment": {
+    "database": "Retained isolated SQLite databases",
+    "optional_unavailable_apps_omitted": [
+      "dj_rest_auth",
+      "dj_rest_auth.registration"
+    ]
+  },
+  "unperformed_remote_actions": [
+    "No production mail was sent",
+    "No deployments or PR merges"
+  ]
+}

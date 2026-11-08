@@ -43,6 +43,8 @@ class BaseEmailBackend(ABC):
         body_html: Optional[str] = None,
         from_email: Optional[str] = None,
         config: Optional[dict] = None,
+        attachments=None,
+        message_id: Optional[str] = None,
     ) -> None:
         """
         Send email.

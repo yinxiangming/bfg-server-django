@@ -44,5 +44,6 @@ setup(
         ],
     },
     include_package_data=True,
+    package_data={'bfg.common': ['data/*.json']},
     zip_safe=False,
 )

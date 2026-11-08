@@ -6,6 +6,8 @@ PDF generation utilities using WeasyPrint or ReportLab
 
 from typing import Optional, Dict, Any
 from io import BytesIO
+from decimal import Decimal, ROUND_HALF_UP
+from xml.sax.saxutils import escape
 from django.template.loader import render_to_string
 from django.conf import settings
 
@@ -226,9 +228,13 @@ class InvoicePDFGenerator(PDFGenerator):
         from bfg.finance.models import InvoiceSettings
 
         invoice_settings = InvoiceSettings.objects.filter(workspace=invoice.workspace, is_active=True).first()
+        items = list(invoice.items.all())
+        for item in items:
+            item.pdf_tax_percent = self._tax_percent(item.subtotal, item.tax)
         context = {
             'invoice': invoice,
-            'items': invoice.items.all(),
+            'items': items,
+            'invoice_tax_percent': self._tax_percent(invoice.subtotal, invoice.tax),
             'workspace': invoice.workspace,
             'customer': invoice.customer,
             'invoice_footer': invoice_settings.default_footer if invoice_settings else '',
@@ -267,6 +273,15 @@ class InvoicePDFGenerator(PDFGenerator):
             # Use ReportLab directly
             return self._generate_invoice_with_reportlab(invoice)
     
+    @staticmethod
+    def _tax_percent(subtotal, tax):
+        if Decimal(str(subtotal)) == 0:
+            return None
+        rate = (Decimal(str(tax)) / Decimal(str(subtotal)) * 100).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        if rate == 0:
+            return '0'
+        return format(rate.normalize(), 'f')
+
     def _generate_invoice_with_reportlab(self, invoice) -> bytes:
         """
         Generate invoice using ReportLab
@@ -301,7 +316,7 @@ class InvoicePDFGenerator(PDFGenerator):
         if invoice.order and invoice.order.discount and invoice.order.discount > 0:
             table_data.append(['', '', 'Discount:', f"-{invoice.order.discount} {invoice.currency.code}"])
         
-        if invoice.tax > 0:
+        if invoice.tax != 0:
             table_data.append(['', '', 'Tax:', f"{invoice.tax} {invoice.currency.code}"])
         
         table_data.append(['', '', 'Total:', f"{invoice.total} {invoice.currency.code}"])
@@ -316,7 +331,7 @@ class InvoicePDFGenerator(PDFGenerator):
         
         # Build paragraphs
         paragraphs = [
-            f"Customer: {customer_name}",
+            f"Customer: {escape(customer_name)}",
             f"Issue Date: {invoice.issue_date}",
         ]
         
@@ -326,7 +341,7 @@ class InvoicePDFGenerator(PDFGenerator):
         paragraphs.append("")
         
         content = {
-            'title': f"Invoice {invoice.invoice_number}",
+            'title': f"Invoice {escape(invoice.invoice_number)}",
             'paragraphs': paragraphs,
             'table': table_data
         }

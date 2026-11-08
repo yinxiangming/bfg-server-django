@@ -6,6 +6,7 @@ import requests
 from typing import List, Optional
 
 from .base import BaseEmailBackend, schema_field
+from .attachments import validate_attachments
 
 
 class MailgunBackend(BaseEmailBackend):
@@ -28,6 +29,8 @@ class MailgunBackend(BaseEmailBackend):
         body_html: Optional[str] = None,
         from_email: Optional[str] = None,
         config: Optional[dict] = None,
+        attachments=None,
+        message_id: Optional[str] = None,
     ) -> None:
         if not config:
             raise ValueError("Mailgun backend requires config")
@@ -54,11 +57,21 @@ class MailgunBackend(BaseEmailBackend):
         }
         if body_html:
             data['html'] = body_html
+        if message_id:
+            data['h:Message-Id'] = message_id
+        extra = {}
+        values = validate_attachments(attachments)
+        if values:
+            extra['files'] = [
+                ('attachment', (item.filename, item.content, item.content_type))
+                for item in values
+            ]
 
         resp = requests.post(
             url,
             auth=('api', api_key),
             data=data,
             timeout=30,
+            **extra,
         )
         resp.raise_for_status()

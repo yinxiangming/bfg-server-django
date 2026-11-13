@@ -5,7 +5,8 @@ Block validation and data resolution service for Page Builder
 """
 
 from typing import Any, Dict, List, Optional
-from django.db.models import QuerySet
+from django.db.models import Case, When, IntegerField, Q, QuerySet
+from django.utils import timezone
 from bfg.core.services import BaseService
 from bfg.web.models import Post, Category
 
@@ -224,7 +225,7 @@ class BlockService(BaseService):
         
         return {'valid': all_valid, 'errors': block_errors}
     
-    def resolve_block_data(self, block: Dict[str, Any]) -> Dict[str, Any]:
+    def resolve_block_data(self, block: Dict[str, Any], language=None) -> Dict[str, Any]:
         """
         Resolve dynamic data for a block
         
@@ -241,7 +242,7 @@ class BlockService(BaseService):
             children = data.get('children') or []
             block = dict(block)
             block['data'] = dict(data)
-            block['data']['children'] = self.resolve_all_blocks(children)
+            block['data']['children'] = self.resolve_all_blocks(children, language=language)
             return block
 
         if block_type in DYNAMIC_BLOCK_TYPES:
@@ -249,11 +250,11 @@ class BlockService(BaseService):
                 return self._resolve_category_grid(block)
             else:
                 # All post-based blocks use the same resolver
-                return self._resolve_post_list(block)
+                return self._resolve_post_list(block, language=language)
         
         return block
     
-    def resolve_all_blocks(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def resolve_all_blocks(self, blocks: List[Dict[str, Any]], language=None) -> List[Dict[str, Any]]:
         """
         Resolve dynamic data for all blocks in a page
         
@@ -265,22 +266,24 @@ class BlockService(BaseService):
         """
         resolved = []
         for block in blocks:
-            resolved.append(self.resolve_block_data(block))
+            resolved.append(self.resolve_block_data(block, language=language))
         return resolved
     
-    def _resolve_post_list(self, block: Dict[str, Any]) -> Dict[str, Any]:
+    def _resolve_post_list(self, block: Dict[str, Any], language=None) -> Dict[str, Any]:
         """
         Generic resolver for post-based blocks (case_list, project_grid, post_list, faq_list)
         """
-        from bfg.web.serializers import PostListSerializer
+        from bfg.web.serializers import PublishedPostSerializer
         
         data = block.get('data', {})
         source = data.get('source', 'latest')
         
         queryset = Post.objects.filter(
             workspace=self.workspace,
-            status='published'
-        ).select_related('category', 'author')
+            status='published', published_at__lte=timezone.now(),
+        ).filter(Q(category__isnull=True) | Q(category__is_active=True)).select_related('category')
+        if language:
+            queryset = queryset.filter(language=language)
         
         # Filter by content type if specified (not hardcoded - from config)
         content_type = data.get('contentType')
@@ -294,16 +297,29 @@ class BlockService(BaseService):
                 queryset = queryset.filter(category__slug=category_slug)
         elif source == 'manual':
             post_ids = data.get('postIds', [])
+            post_ids = [pk for pk in post_ids if isinstance(pk, int) and not isinstance(pk, bool)]
+            queryset = queryset.filter(id__in=post_ids)
             if post_ids:
-                queryset = queryset.filter(id__in=post_ids)
+                queryset = queryset.annotate(_selection_order=Case(
+                    *[When(pk=pk, then=index) for index, pk in enumerate(post_ids)],
+                    output_field=IntegerField(),
+                ))
         
         # Order and limit
         order_by = data.get('orderBy', '-published_at')
-        limit = data.get('limit', 6)
-        queryset = queryset.order_by(order_by)[:limit]
+        allowed_orders = {'id', '-id', 'title', '-title', 'published_at', '-published_at', 'custom_fields__display_order'}
+        if order_by not in allowed_orders:
+            order_by = '-published_at'
+        if source == 'manual' and post_ids:
+            order_by = '_selection_order'
+        try:
+            limit = max(1, min(int(data.get('limit', 6)), 200))
+        except (TypeError, ValueError):
+            limit = 6
+        queryset = queryset.order_by(order_by, 'id')[:limit]
         
         # Add resolved data to block
-        block['resolvedData'] = PostListSerializer(queryset, many=True).data
+        block['resolvedData'] = PublishedPostSerializer(queryset, many=True).data
         return block
     
     def _resolve_category_grid(self, block: Dict[str, Any]) -> Dict[str, Any]:

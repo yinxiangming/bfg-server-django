@@ -30,6 +30,7 @@ from bfg.web.serializers import (
     PageDetailSerializer,
     PageRenderedSerializer,
     PostListSerializer,
+    PublishedPostSerializer,
     PostDetailSerializer,
     MediaSerializer,
     CategorySerializer,
@@ -59,6 +60,18 @@ def get_workspace(request):
         from rest_framework.exceptions import NotFound
         raise NotFound("No workspace available. Please ensure a workspace exists and is active.")
     return workspace
+
+
+def is_workspace_staff(request, workspace):
+    """DRF authentication may run after the Django membership middleware."""
+    from django.conf import settings
+    from bfg.common.models import StaffMember
+    user = request.user
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser and getattr(settings, 'BFG_SUPERUSER_BYPASS_WORKSPACE_PERMISSIONS', True):
+        return True
+    return StaffMember.all_objects.filter(workspace=workspace, user=user, is_active=True).exists()
 
 
 class SiteViewSet(viewsets.ModelViewSet):
@@ -148,9 +161,7 @@ class PageViewSet(viewsets.ModelViewSet):
 
     def get_serializer_class(self):
         """Return appropriate serializer"""
-        if self.action == 'retrieve':
-            return PageDetailSerializer
-        return PageListSerializer
+        return PageListSerializer if self.action == 'list' else PageDetailSerializer
     
     def get_permissions(self):
         """Set permissions based on action.
@@ -161,9 +172,16 @@ class PageViewSet(viewsets.ModelViewSet):
         admin only; the bare collection exposes draft pages, ``status``,
         ``created_by`` and other admin-internal fields.
         """
-        if self.action == 'rendered':
+        if self.action in ('rendered', 'published'):
             return [AllowAny()]
         return [IsAuthenticated(), IsWorkspaceStaff()]
+
+    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    def published(self, request):
+        pages = Page.objects.filter(workspace=get_workspace(request), status='published',
+                                    language=request.query_params.get('lang', 'en')).order_by('order', 'id')
+        rows = list(pages.values('id', 'slug', 'title', 'updated_at'))
+        return Response({'count': len(rows), 'next': None, 'results': rows})
 
     def get_queryset(self):
         """Get pages based on permissions"""
@@ -173,7 +191,7 @@ class PageViewSet(viewsets.ModelViewSet):
         queryset = Page.objects.filter(workspace=workspace).select_related('parent', 'created_by')
         
         # Non-staff can only see published pages
-        if not getattr(self.request, 'is_staff_member', False):
+        if not is_workspace_staff(self.request, workspace):
             queryset = queryset.filter(status='published')
         
         # Filter by parent if provided
@@ -329,9 +347,26 @@ class PostViewSet(viewsets.ModelViewSet):
         the bare collection exposes draft posts, ``status``, ``author`` and
         other admin-internal fields.
         """
-        if self.action == 'rendered':
+        if self.action in ('rendered', 'published'):
             return [AllowAny()]
         return [IsAuthenticated(), IsWorkspaceStaff()]
+
+    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    def published(self, request):
+        """Paginated public content, scoped by tenant, category and publication time."""
+        from django.utils import timezone
+
+        queryset = Post.objects.filter(
+            workspace=get_workspace(request), status='published',
+            published_at__lte=timezone.now(), category__is_active=True,
+            language=request.query_params.get('lang', 'en'),
+        ).select_related('category').order_by('id')
+        category_slug = request.query_params.get('category_slug')
+        if category_slug:
+            queryset = queryset.filter(category__slug=category_slug)
+        page = self.paginate_queryset(queryset)
+        serializer = PublishedPostSerializer(page if page is not None else queryset, many=True, context={'request': request})
+        return self.get_paginated_response(serializer.data) if page is not None else Response(serializer.data)
 
     def get_queryset(self):
         """Get posts based on permissions"""
@@ -342,7 +377,7 @@ class PostViewSet(viewsets.ModelViewSet):
         ).prefetch_related('tags')
         
         # Non-staff can only see published posts
-        if not getattr(self.request, 'is_staff_member', False):
+        if not is_workspace_staff(self.request, workspace):
             from django.utils import timezone
             queryset = queryset.filter(
                 status='published',
@@ -359,7 +394,7 @@ class PostViewSet(viewsets.ModelViewSet):
         if tag_id:
             queryset = queryset.filter(tags__id=tag_id)
 
-        is_staff = getattr(self.request, 'is_staff_member', False)
+        is_staff = is_workspace_staff(self.request, workspace)
 
         # Filter by language: public list defaults to English; staff sees all languages unless ?lang= is set
         if is_staff:
@@ -636,6 +671,9 @@ class TagViewSet(viewsets.ModelViewSet):
     """Tag management ViewSet"""
     serializer_class = TagSerializer
     permission_classes = [IsAuthenticated, IsWorkspaceStaff]
+
+    def perform_create(self, serializer):
+        serializer.save(workspace=get_workspace(self.request))
     
     def get_queryset(self):
         """Get tags for current workspace"""

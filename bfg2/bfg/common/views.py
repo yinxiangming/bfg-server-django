@@ -765,6 +765,7 @@ class SettingsViewSet(viewsets.ModelViewSet):
         storefront_ui = (settings_obj.custom_settings or {}).get('storefront_ui') or {}
         shop_custom = (settings_obj.custom_settings or {}).get('shop') or {}
         analytics_custom = (settings_obj.custom_settings or {}).get('analytics') or {}
+        web_custom = (settings_obj.custom_settings or {}).get('web') or {}
         default_header_options = {
             'show_search': True,
             'show_cart': True,
@@ -829,9 +830,12 @@ class SettingsViewSet(viewsets.ModelViewSet):
             'workspace_slug': workspace.slug,
             'site_name': settings_obj.site_name or general_custom.get('site_name', '') or '',
             'site_description': settings_obj.site_description or general_custom.get('site_description', '') or '',
+            'seo_default_title': str(web_custom.get('seo_default_title') or ''),
+            'seo_default_description': str(web_custom.get('seo_default_description') or ''),
             'contact_email': settings_obj.contact_email or general_custom.get('contact_email', '') or '',
             'support_email': settings_obj.support_email or '',
             'contact_phone': settings_obj.contact_phone or general_custom.get('contact_phone', '') or '',
+            'contact_address': str(general_custom.get('contact_address') or ''),
             'facebook_url': settings_obj.facebook_url or '',
             'twitter_url': settings_obj.twitter_url or '',
             'instagram_url': settings_obj.instagram_url or '',

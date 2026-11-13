@@ -5,10 +5,11 @@ import json
 import logging
 import uuid
 from datetime import timedelta
+from sqlite3 import SQLITE_BUSY, SQLITE_LOCKED
 
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db import transaction
+from django.db import OperationalError, connection, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
@@ -97,6 +98,18 @@ def _eligible(now):
 
 
 def _claim(message_id, now):
+    try:
+        return _claim_atomic(message_id, now)
+    except OperationalError as exc:
+        code = getattr(exc.__cause__, 'sqlite_errorcode', None)
+        if connection.vendor == 'sqlite' and isinstance(code, int) and code & 0xff in (SQLITE_BUSY, SQLITE_LOCKED):
+            # SQLite can reject a concurrent writer immediately. The atomic
+            # claim has rolled back; leave the intent for the next sweep.
+            return None
+        raise
+
+
+def _claim_atomic(message_id, now):
     token = uuid.uuid4()
     with transaction.atomic():
         updated = EmailOutbox.all_objects.filter(

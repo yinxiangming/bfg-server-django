@@ -64,6 +64,7 @@ class PostService(BaseService):
             meta_title=kwargs.get('meta_title', title),
             meta_description=kwargs.get('meta_description', ''),
             status=kwargs.get('status', 'draft'),
+            published_at=kwargs.get('published_at') or (timezone.now() if kwargs.get('status') == 'published' else None),
             allow_comments=kwargs.get('allow_comments', True),
             language=kwargs.get('language', 'en'),
             author=self.user,
@@ -116,10 +117,17 @@ class PostService(BaseService):
         
         # Handle tags separately
         tags = kwargs.pop('tags', None)
+        clear_image = kwargs.pop('clear_featured_image', False)
+        if clear_image and 'featured_image' not in kwargs:
+            if post.featured_image:
+                post.featured_image.delete(save=False)
+            post.featured_image = None
         
         for key, value in kwargs.items():
             if hasattr(post, key) and key not in ['id', 'workspace', 'author', 'created_at']:
                 setattr(post, key, value)
+        if post.status == 'published' and post.published_at is None:
+            post.published_at = timezone.now()
         
         post.save()
         
@@ -206,7 +214,7 @@ class PostService(BaseService):
                     raise PostNotFound(f"Post with slug '{slug}' not found")
 
         # A slug match that is still draft/scheduled/archived is not publicly reachable.
-        if post.status != 'published' or not post.published_at or post.published_at > timezone.now():
+        if post.status != 'published' or not post.published_at or post.published_at > timezone.now() or (post.category and not post.category.is_active):
             raise PostNotFound(f"Post '{slug}' is not published")
 
         return {
@@ -217,12 +225,14 @@ class PostService(BaseService):
             'excerpt': post.excerpt,
             'featured_image': post.featured_image.url if post.featured_image else '',
             'category_name': post.category.name if post.category else None,
+            'category_slug': post.category.slug if post.category else None,
             'tags': [tag.name for tag in post.tags.all()],
             'custom_fields': post.custom_fields or {},
             'meta_title': post.meta_title or post.title,
             'meta_description': post.meta_description,
             'language': post.language,
             'published_at': post.published_at.isoformat() if post.published_at else None,
+            'updated_at': post.updated_at.isoformat(),
             'author_name': post.author.get_full_name() if post.author else None,
         }
 

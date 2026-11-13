@@ -135,6 +135,7 @@ class PageService(BaseService):
             title=title,
             slug=slug,
             content=content,
+            blocks=kwargs.get('blocks') or [],
             excerpt=kwargs.get('excerpt', ''),
             parent=kwargs.get('parent'),
             template=kwargs.get('template', 'default'),
@@ -142,6 +143,7 @@ class PageService(BaseService):
             meta_description=kwargs.get('meta_description', ''),
             meta_keywords=kwargs.get('meta_keywords', ''),
             status=kwargs.get('status', 'draft'),
+            published_at=kwargs.get('published_at') or (timezone.now() if kwargs.get('status') == 'published' else None),
             is_featured=kwargs.get('is_featured', False),
             allow_comments=kwargs.get('allow_comments', False),
             order=kwargs.get('order', 100),
@@ -316,7 +318,7 @@ class PageService(BaseService):
                     "data": {"content": {"en": page.content}},
                 }
             ]
-        resolved_blocks = block_service.resolve_all_blocks(blocks)
+        resolved_blocks = block_service.resolve_all_blocks(blocks, language=page.language)
 
         # Resolve promo data for home page blocks (source='promo')
         if is_home_slug(slug) and request:

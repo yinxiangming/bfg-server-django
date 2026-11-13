@@ -377,7 +377,7 @@ class AddressSerializer(CoordinateFieldsMixin, serializers.ModelSerializer):
 
 
 class SettingsSerializer(serializers.ModelSerializer):
-    """Settings serializer. On update, syncs custom_settings.general to model fields."""
+    """Settings serializer, including the admin's general settings fields."""
 
     class Meta:
         model = Settings
@@ -395,20 +395,24 @@ class SettingsSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'workspace_id', 'updated_at']
 
-    def update(self, instance, validated_data):
-        custom_settings = validated_data.pop('custom_settings', None)
-        if custom_settings is not None and isinstance(custom_settings, dict):
-            general = custom_settings.get('general') or {}
+    def validate(self, attrs):
+        # SettingsViewSet writes through SettingsService, so normalization must
+        # happen during validation rather than in ModelSerializer.update().
+        custom_settings = attrs.get('custom_settings')
+        if isinstance(custom_settings, dict):
+            general = custom_settings.get('general')
+            if general is not None and not isinstance(general, dict):
+                raise serializers.ValidationError({'custom_settings': 'general must be an object.'})
+            general = general or {}
             sync_keys = [
                 'site_name', 'site_description', 'default_language', 'default_currency',
                 'default_timezone', 'contact_email', 'contact_phone',
                 'facebook_url', 'twitter_url', 'instagram_url',
             ]
             for key in sync_keys:
-                if hasattr(instance, key):
-                    setattr(instance, key, general.get(key, getattr(instance, key, '')) or '')
-            validated_data['custom_settings'] = custom_settings
-        return super().update(instance, validated_data)
+                if key in general and key not in attrs:
+                    attrs[key] = self.fields[key].run_validation(general[key])
+        return super().validate(attrs)
     
     def validate_supported_languages(self, value):
         """Validate supported languages is a list"""

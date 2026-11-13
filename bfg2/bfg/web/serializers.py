@@ -4,6 +4,7 @@ BFG Web Module Serializers
 Serializers for web module models
 """
 
+from django.db import transaction
 from rest_framework import serializers
 from bfg.web.models import (
     Site, Theme, Language, Page, Post, Category, Tag, Menu, MenuItem, Media, Inquiry,
@@ -71,6 +72,22 @@ class LanguageSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'workspace']
 
 
+class WorkspaceSlugValidationMixin:
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get('request')
+        workspace = getattr(request, 'workspace', None)
+        slug = attrs.get('slug', getattr(self.instance, 'slug', None))
+        language = attrs.get('language', getattr(self.instance, 'language', None))
+        if workspace and slug and language:
+            matches = self.Meta.model.objects.filter(workspace=workspace, slug=slug, language=language)
+            if self.instance:
+                matches = matches.exclude(pk=self.instance.pk)
+            if matches.exists():
+                raise serializers.ValidationError({'slug': 'This slug already exists in this workspace and language.'})
+        return attrs
+
+
 class PageListSerializer(serializers.ModelSerializer):
     """Page list serializer (concise)"""
     has_blocks = serializers.SerializerMethodField()
@@ -88,8 +105,20 @@ class PageListSerializer(serializers.ModelSerializer):
         return bool(obj.blocks)
 
 
-class PageDetailSerializer(serializers.ModelSerializer):
+class PageDetailSerializer(WorkspaceSlugValidationMixin, serializers.ModelSerializer):
     """Page detail serializer (full)"""
+    content = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_parent(self, value):
+        if value and value.workspace_id != self.context['request'].workspace.id:
+            raise serializers.ValidationError('Parent must belong to the current workspace.')
+        return value
+
+    def update(self, instance, validated_data):
+        if validated_data.get('status') == 'published' and instance.published_at is None:
+            from django.utils import timezone
+            validated_data['published_at'] = timezone.now()
+        return super().update(instance, validated_data)
     created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
     parent_title = serializers.CharField(source='parent.title', read_only=True, allow_null=True)
     
@@ -118,7 +147,7 @@ class PageRenderedSerializer(serializers.ModelSerializer):
         ]
 
 
-class CategorySerializer(serializers.ModelSerializer):
+class CategorySerializer(WorkspaceSlugValidationMixin, serializers.ModelSerializer):
     """Category serializer"""
     parent_name = serializers.CharField(source='parent.name', read_only=True, allow_null=True)
     fields_count = serializers.SerializerMethodField()
@@ -137,7 +166,7 @@ class CategorySerializer(serializers.ModelSerializer):
         return len(obj.fields_schema) if obj.fields_schema else 0
 
 
-class TagSerializer(serializers.ModelSerializer):
+class TagSerializer(WorkspaceSlugValidationMixin, serializers.ModelSerializer):
     """Tag serializer"""
     
     class Meta:
@@ -171,7 +200,21 @@ class PostListSerializer(serializers.ModelSerializer):
         ]
 
 
-class PostDetailSerializer(serializers.ModelSerializer):
+class PublishedPostSerializer(serializers.ModelSerializer):
+    """Public catalogue fields; drafts, author identities and admin counters stay private."""
+    category_slug = serializers.CharField(source='category.slug', read_only=True, allow_null=True)
+    category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
+
+    class Meta:
+        model = Post
+        fields = [
+            'id', 'title', 'slug', 'excerpt', 'featured_image', 'category_slug', 'category_name',
+            'custom_fields', 'language', 'published_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+
+class PostDetailSerializer(WorkspaceSlugValidationMixin, serializers.ModelSerializer):
     """Post detail serializer (full)"""
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     category_fields_schema = serializers.JSONField(source='category.fields_schema', read_only=True)
@@ -183,6 +226,12 @@ class PostDetailSerializer(serializers.ModelSerializer):
         required=False
     )
     clear_featured_image = serializers.BooleanField(write_only=True, required=False, default=False)
+    published_at = serializers.DateTimeField(required=False, allow_null=True)
+
+    def validate_category(self, value):
+        if value and value.workspace_id != self.context['request'].workspace.id:
+            raise serializers.ValidationError('Category must belong to the current workspace.')
+        return value
 
     def create(self, validated_data):
         validated_data.pop('clear_featured_image', None)
@@ -208,7 +257,7 @@ class PostDetailSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'author', 'author_name',
             'clear_featured_image',
         ]
-        read_only_fields = ['id', 'view_count', 'comment_count', 'created_at', 'updated_at', 'author', 'published_at', 'category_fields_schema']
+        read_only_fields = ['id', 'view_count', 'comment_count', 'created_at', 'updated_at', 'author', 'category_fields_schema']
 
 
 class MenuItemSerializer(serializers.ModelSerializer):
@@ -239,7 +288,7 @@ class MenuItemWriteSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
-class MenuSerializer(serializers.ModelSerializer):
+class MenuSerializer(WorkspaceSlugValidationMixin, serializers.ModelSerializer):
     """Menu serializer with nested items. Accepts items on create/update."""
     items = serializers.ListField(
         child=serializers.DictField(),
@@ -265,12 +314,14 @@ class MenuSerializer(serializers.ModelSerializer):
         data['items'] = data.pop('items_read', [])
         return data
     
+    @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop('items', []) or []
         menu = Menu.objects.create(**validated_data)
         self._sync_items(menu, items_data)
         return menu
     
+    @transaction.atomic
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
         for attr, value in validated_data.items():
@@ -293,10 +344,19 @@ class MenuSerializer(serializers.ModelSerializer):
             open_in_new_tab = raw.get('open_in_new_tab', False)
             is_active = raw.get('is_active', True)
             if item_id:
-                MenuItem.objects.filter(menu=menu, id=item_id).update(
-                    title=title, url=url or '/', order=order,
-                    open_in_new_tab=open_in_new_tab, is_active=is_active
-                )
+                try:
+                    item = MenuItem.objects.get(menu=menu, id=item_id)
+                except MenuItem.DoesNotExist:
+                    raise serializers.ValidationError({'items': 'Menu item does not belong to this menu.'})
+                next_url = url or '/'
+                if next_url != item.url:
+                    # A manually edited link replaces the old CMS association;
+                    # otherwise storefront serialization would ignore this URL.
+                    item.page = None
+                    item.post = None
+                item.title, item.url, item.order = title, next_url, order
+                item.open_in_new_tab, item.is_active = open_in_new_tab, is_active
+                item.save()
                 ids_seen.add(item_id)
             else:
                 item = MenuItem.objects.create(

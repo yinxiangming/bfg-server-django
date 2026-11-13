@@ -196,6 +196,38 @@ def test_atomic_claim_prevents_active_worker_reclaim(workspace):
     assert claimed.attempts.count() == 1
 
 
+@pytest.mark.parametrize('error_code', [5, 6, 262])
+def test_sqlite_busy_claim_rolls_back_and_remains_claimable(workspace, monkeypatch, error_code):
+    from sqlite3 import OperationalError as SQLiteError
+    from django.db import OperationalError
+    from bfg.common.models import EmailOutboxAttempt
+
+    message = enqueue(workspace)
+    cause = SQLiteError('database table is locked')
+    cause.sqlite_errorcode = error_code
+    failure = OperationalError(str(cause))
+    failure.__cause__ = cause
+    with monkeypatch.context() as patch:
+        patch.setattr(EmailOutboxAttempt.objects, 'create', Mock(side_effect=failure))
+        assert email_outbox._claim(message.pk, timezone.now()) is None
+    message.refresh_from_db()
+    assert message.state == EmailOutbox.State.PENDING and message.attempt_count == 0
+    assert message.attempts.count() == 0
+    assert email_outbox._claim(message.pk, timezone.now()) is not None
+
+
+def test_unrelated_claim_database_errors_are_not_suppressed(workspace, monkeypatch):
+    from django.db import OperationalError
+    from bfg.common.models import EmailOutboxAttempt
+
+    message = enqueue(workspace)
+    monkeypatch.setattr(EmailOutboxAttempt.objects, 'create', Mock(side_effect=OperationalError('unavailable table')))
+    with pytest.raises(OperationalError, match='unavailable table'):
+        email_outbox._claim(message.pk, timezone.now())
+    message.refresh_from_db()
+    assert message.state == EmailOutbox.State.PENDING and message.attempt_count == 0
+
+
 @pytest.mark.django_db(transaction=True)
 def test_concurrent_workers_only_obtain_one_lease(workspace):
     from concurrent.futures import ThreadPoolExecutor

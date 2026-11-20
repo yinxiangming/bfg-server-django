@@ -392,10 +392,11 @@ class AuthViewSet(viewsets.ViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Issue JWT — reuse the same logic as token_exchange
+        # Embedded requests must carry the workspace validated by the SSO code.
         if is_embedded_mode():
             from rest_framework_simplejwt.tokens import RefreshToken
             refresh = RefreshToken.for_user(user)
+            refresh['workspace_id'] = workspace.id
 
             return Response({
                 'access': str(refresh.access_token),

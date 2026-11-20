@@ -7,6 +7,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
 from bfg.common.models import StaffMember, Workspace, WorkspaceDomain
 from bfg.platform.models import Cluster, PlatformMembership, PlatformSSOCode, WorkspacePlatformProfile
@@ -92,6 +93,8 @@ def test_sso_exchange_atomically_consumes_code_once(db, settings):
 
     assert accepted.status_code == 200
     assert accepted.data["workspace"]["id"] == workspace.id
+    assert AccessToken(accepted.data["access"])["workspace_id"] == workspace.id
+    assert RefreshToken(accepted.data["refresh"])["workspace_id"] == workspace.id
     assert replayed.status_code == 400
     assert replayed.data == {"error": "SSO code has already been used"}
     sso_code.refresh_from_db()
